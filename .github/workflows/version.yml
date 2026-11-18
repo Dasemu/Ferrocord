@@ -1,0 +1,74 @@
+name: Version
+
+# Version policy (the version lives in Cargo.toml):
+# - push to `development`                       -> bump PATCH
+# - merged `development` -> `main` pull request -> bump MINOR, reset PATCH
+# - any other (direct) push to `main`           -> bump PATCH
+#
+# Loop protection: pushes made with GITHUB_TOKEN do not trigger workflows, and
+# the job is skipped when the head commit message starts with `chore(release)`.
+
+on:
+  push:
+    branches: [main, development]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: version-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release)') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide bump kind
+        id: kind
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          kind=patch
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            head_ref=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].head.ref // ""' || true)
+            if [ "${head_ref}" = "development" ]; then
+              kind=minor
+            fi
+          fi
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
+          echo "Bump kind: ${kind}"
+
+      - name: Bump version in Cargo.toml
+        id: bump
+        run: |
+          current=$(grep -m1 -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          IFS=. read -r major minor patch <<< "${current}"
+          if [ "${{ steps.kind.outputs.kind }}" = "minor" ]; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          next="${major}.${minor}.${patch}"
+          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"${next}\"/" Cargo.toml
+          if [ -f Cargo.lock ]; then
+            awk -v nv="${next}" '
+              /^name = "ferrocord"$/ { print; getline; if ($0 ~ /^version = /) { print "version = \"" nv "\""; next } }
+              { print }' Cargo.lock > Cargo.lock.new && mv Cargo.lock.new Cargo.lock
+          fi
+          echo "from=${current}" >> "$GITHUB_OUTPUT"
+          echo "to=${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock 2>/dev/null || git add Cargo.toml
+          git commit -m "chore(release): v${{ steps.bump.outputs.to }}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
