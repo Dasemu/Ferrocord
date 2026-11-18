@@ -33,7 +33,7 @@ pub fn view(app: &App) -> El<'_> {
 fn empty(app: &App) -> El<'_> {
     let p = app.theme.palette;
     let msg = match app.view {
-        View::Home(_) => "No one's around to play with Wumpus… pick a conversation on the left.",
+        View::Home(_) => "Pick a conversation on the left to start chatting.",
         View::Guild { .. } => "This server has no text channels you can see.",
     };
     container(
