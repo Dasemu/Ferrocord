@@ -1,0 +1,1122 @@
+//! Pure state types and reducers. Unit-tested without iced.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use crate::net::Event;
+use crate::net::model::*;
+
+/// Messages kept in memory for the open conversation.
+pub const MESSAGE_WINDOW: usize = 200;
+/// Hard cap while the user scrolls back through history.
+pub const MESSAGE_WINDOW_MAX: usize = 600;
+/// A typing indicator disappears after this long without a refresh.
+pub const TYPING_TTL_MS: u64 = 10_000;
+/// Consecutive messages by the same author within this window are grouped.
+pub const GROUP_WINDOW_MS: u64 = 7 * 60 * 1000;
+
+#[derive(Debug, Clone, Default)]
+pub struct MessageWindow {
+    /// Oldest first.
+    pub messages: VecDeque<Message>,
+    /// Older messages exist on the server (or in SQLite).
+    pub reached_start: bool,
+    pub loading: bool,
+    /// History was fetched from the network since connect.
+    pub synced: bool,
+}
+
+impl MessageWindow {
+    pub fn oldest(&self) -> Option<MessageId> {
+        self.messages.iter().find(|m| !m.pending).map(|m| m.id)
+    }
+
+    pub fn newest(&self) -> Option<MessageId> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| !m.pending)
+            .map(|m| m.id)
+    }
+
+    /// Inserts or replaces one message, keeping id order. A server message
+    /// whose nonce matches a pending local message replaces it.
+    pub fn upsert(&mut self, msg: Message) {
+        if let Some(n) = &msg.nonce {
+            if let Some(pos) = self
+                .messages
+                .iter()
+                .position(|m| m.pending && m.nonce.as_ref() == Some(n))
+            {
+                self.messages.remove(pos);
+            }
+        }
+        if let Some(existing) = self.messages.iter_mut().find(|m| m.id == msg.id) {
+            *existing = msg;
+            return;
+        }
+        // Pending messages stay at the end; real ones are ordered by id.
+        let pos = self
+            .messages
+            .iter()
+            .rposition(|m| !m.pending && m.id < msg.id)
+            .map_or(0, |p| p + 1);
+        let pos = if msg.pending {
+            self.messages.len()
+        } else {
+            pos
+        };
+        self.messages.insert(pos, msg);
+    }
+
+    fn trim_front(&mut self, max: usize) {
+        while self.messages.len() > max {
+            self.messages.pop_front();
+            self.reached_start = false;
+        }
+    }
+
+    fn trim_back(&mut self, max: usize) {
+        while self.messages.len() > max {
+            self.messages.pop_back();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Typing {
+    pub user_id: UserId,
+    pub until_ms: u64,
+}
+
+/// Indicator shown on a guild icon / DM button.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Badge {
+    pub unread: bool,
+    pub mentions: u32,
+}
+
+/// A desktop notification to show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Notification {
+    pub title: String,
+    pub body: String,
+    pub channel_id: ChannelId,
+    pub guild_id: Option<GuildId>,
+}
+
+/// Side effects requested by the reducer; executed by `app::update`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    Notify(Notification),
+    /// Mark the channel read on the server up to this message.
+    Ack(ChannelId, MessageId),
+}
+
+/// Context the reducer needs from the UI.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ctx {
+    pub now_ms: u64,
+    /// Channel currently open in the main pane.
+    pub open_channel: Option<ChannelId>,
+    /// Whether the window has keyboard focus.
+    pub window_focused: bool,
+    /// Include message text in notifications.
+    pub notification_preview: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatState {
+    pub me: Option<User>,
+    /// In display order.
+    pub guilds: Vec<Guild>,
+    pub channels: HashMap<ChannelId, Channel>,
+    pub users: HashMap<UserId, User>,
+    pub messages: HashMap<ChannelId, MessageWindow>,
+    pub read_states: HashMap<ChannelId, ReadState>,
+    pub typing: HashMap<ChannelId, Vec<Typing>>,
+    pub my_roles: HashMap<GuildId, Vec<RoleId>>,
+    pub member_roles: HashMap<(GuildId, UserId), Vec<RoleId>>,
+    pub muted_guilds: HashSet<GuildId>,
+    pub muted_channels: HashSet<ChannelId>,
+}
+
+impl ChatState {
+    pub fn me_id(&self) -> Option<UserId> {
+        self.me.as_ref().map(|u| u.id)
+    }
+
+    pub fn user_name(&self, id: UserId) -> Option<&str> {
+        self.users.get(&id).map(User::display_name)
+    }
+
+    pub fn guild(&self, id: GuildId) -> Option<&Guild> {
+        self.guilds.iter().find(|g| g.id == id)
+    }
+
+    /// Loads READY (or the boot snapshot) wholesale.
+    pub fn load_ready(&mut self, r: &ReadyData) {
+        self.me = r.me.clone();
+        let mut guilds = r.guilds.clone();
+        if !r.guild_order.is_empty() {
+            guilds.sort_by_key(|g| {
+                r.guild_order
+                    .iter()
+                    .position(|x| *x == g.id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        self.guilds = guilds;
+        self.channels = r.channels.iter().map(|c| (c.id, c.clone())).collect();
+        for u in r.users.iter().chain(r.me.iter()) {
+            self.users.insert(u.id, u.clone());
+        }
+        self.read_states = r.read_states.iter().copied().collect();
+        self.my_roles = r.my_roles.iter().cloned().collect();
+        self.muted_guilds = r.muted_guilds.iter().copied().collect();
+        self.muted_channels = r.muted_channels.iter().copied().collect();
+        // Cached windows stay, but must be re-synced from the network.
+        for w in self.messages.values_mut() {
+            w.synced = false;
+        }
+        self.messages.retain(|c, _| self.channels.contains_key(c));
+    }
+
+    /// Applies one gateway event. Returns effects for the app to run.
+    pub fn apply_event(&mut self, ev: &Event, ctx: &Ctx) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        match ev {
+            Event::Ready(r) => self.load_ready(r),
+            Event::MemberRoles(list) => {
+                let me = self.me_id();
+                for (g, u, roles) in list {
+                    if Some(*u) == me {
+                        self.my_roles.insert(*g, roles.clone());
+                    }
+                    self.member_roles.insert((*g, *u), roles.clone());
+                }
+            }
+            Event::MessageCreate(m) => self.on_message_create(m, ctx, &mut fx),
+            Event::MessageUpdate(p) => {
+                if let Some(w) = self.messages.get_mut(&p.channel_id) {
+                    if let Some(m) = w.messages.iter_mut().find(|m| m.id == p.id) {
+                        m.apply_patch(p);
+                    }
+                }
+            }
+            Event::MessageDelete { channel_id, id } => {
+                if let Some(w) = self.messages.get_mut(channel_id) {
+                    w.messages.retain(|m| m.id != *id);
+                }
+            }
+            Event::MessageDeleteBulk { channel_id, ids } => {
+                if let Some(w) = self.messages.get_mut(channel_id) {
+                    w.messages.retain(|m| !ids.contains(&m.id));
+                }
+            }
+            Event::TypingStart {
+                channel_id,
+                user_id,
+                user,
+                ..
+            } => {
+                if Some(*user_id) != self.me_id() {
+                    if let Some(u) = user {
+                        self.users.entry(u.id).or_insert_with(|| u.clone());
+                    }
+                    let list = self.typing.entry(*channel_id).or_default();
+                    let until_ms = ctx.now_ms + TYPING_TTL_MS;
+                    match list.iter_mut().find(|t| t.user_id == *user_id) {
+                        Some(t) => t.until_ms = until_ms,
+                        None => list.push(Typing {
+                            user_id: *user_id,
+                            until_ms,
+                        }),
+                    }
+                }
+            }
+            Event::MessageAck {
+                channel_id,
+                message_id,
+                mention_count,
+            } => {
+                let rs = self.read_states.entry(*channel_id).or_default();
+                if rs.last_read.is_none_or(|l| *message_id >= l) {
+                    rs.last_read = Some(*message_id);
+                    rs.mention_count = *mention_count;
+                }
+            }
+            Event::ChannelUpsert(c, users) => {
+                for u in users {
+                    self.users.insert(u.id, u.clone());
+                }
+                self.channels.insert(c.id, (**c).clone());
+            }
+            Event::ChannelDelete(id) => {
+                self.channels.remove(id);
+                self.messages.remove(id);
+                self.read_states.remove(id);
+            }
+            Event::GuildUpsert {
+                guild,
+                channels,
+                partial,
+            } => {
+                if !partial {
+                    self.channels.retain(|_, c| c.guild_id != Some(guild.id));
+                }
+                for c in channels {
+                    self.channels.insert(c.id, c.clone());
+                }
+                match self.guilds.iter_mut().find(|g| g.id == guild.id) {
+                    Some(g) => *g = (**guild).clone(),
+                    None => self.guilds.push((**guild).clone()),
+                }
+            }
+            Event::GuildDelete(id) => {
+                self.guilds.retain(|g| g.id != *id);
+                let gone: Vec<ChannelId> = self
+                    .channels
+                    .values()
+                    .filter(|c| c.guild_id == Some(*id))
+                    .map(|c| c.id)
+                    .collect();
+                for c in gone {
+                    self.channels.remove(&c);
+                    self.messages.remove(&c);
+                }
+            }
+            Event::Connection(_) | Event::Resumed | Event::AuthFailed | Event::Fatal(_) => {}
+        }
+        fx
+    }
+
+    fn on_message_create(&mut self, m: &Message, ctx: &Ctx, fx: &mut Vec<Effect>) {
+        let me = self.me_id();
+        self.users
+            .entry(m.author.id)
+            .and_modify(|u| *u = m.author.clone())
+            .or_insert_with(|| m.author.clone());
+        if let Some(g) = m.guild_id {
+            if !m.author_roles.is_empty() {
+                self.member_roles
+                    .insert((g, m.author.id), m.author_roles.clone());
+            }
+        }
+        if let Some(c) = self.channels.get_mut(&m.channel_id) {
+            if c.last_message_id.is_none_or(|l| m.id > l) {
+                c.last_message_id = Some(m.id);
+            }
+        }
+        if let Some(list) = self.typing.get_mut(&m.channel_id) {
+            list.retain(|t| t.user_id != m.author.id);
+        }
+        // Only keep a window for channels that already have one (opened
+        // before); others are fetched when opened.
+        if let Some(w) = self.messages.get_mut(&m.channel_id) {
+            w.upsert(m.clone());
+            w.trim_front(MESSAGE_WINDOW_MAX);
+        }
+
+        let own = Some(m.author.id) == me;
+        let viewing = ctx.open_channel == Some(m.channel_id) && ctx.window_focused;
+        if own || viewing {
+            let rs = self.read_states.entry(m.channel_id).or_default();
+            rs.last_read = Some(m.id);
+            rs.mention_count = 0;
+            if viewing && !own {
+                fx.push(Effect::Ack(m.channel_id, m.id));
+            }
+            return;
+        }
+        let mentioned = self.mentions_me(m);
+        if mentioned {
+            self.read_states
+                .entry(m.channel_id)
+                .or_default()
+                .mention_count += 1;
+        }
+        let muted = self.muted_channels.contains(&m.channel_id)
+            || m.guild_id.is_some_and(|g| self.muted_guilds.contains(&g));
+        if mentioned && (!muted || self.is_private(m.channel_id)) {
+            fx.push(Effect::Notify(self.notification_for(m, ctx)));
+        }
+    }
+
+    fn is_private(&self, c: ChannelId) -> bool {
+        self.channels.get(&c).is_some_and(|c| c.kind.is_private())
+    }
+
+    /// Whether `m` should ping the current user: direct mention, role
+    /// mention, @everyone/@here, or any message in a DM.
+    pub fn mentions_me(&self, m: &Message) -> bool {
+        let Some(me) = self.me_id() else { return false };
+        if m.author.id == me {
+            return false;
+        }
+        if self.is_private(m.channel_id)
+            || m.guild_id.is_none() && !self.channels.contains_key(&m.channel_id)
+        {
+            return true;
+        }
+        if m.mentions.contains(&me) || m.mention_everyone {
+            return true;
+        }
+        if let Some(g) = m.guild_id {
+            if let Some(roles) = self.my_roles.get(&g) {
+                return m.mention_roles.iter().any(|r| roles.contains(r));
+            }
+        }
+        false
+    }
+
+    fn notification_for(&self, m: &Message, ctx: &Ctx) -> Notification {
+        let author = m.author.display_name().to_owned();
+        let title = match self.channels.get(&m.channel_id) {
+            Some(c) if c.kind.is_private() => author.clone(),
+            Some(c) => {
+                let guild = m
+                    .guild_id
+                    .and_then(|g| self.guild(g))
+                    .map(|g| g.name.as_str())
+                    .unwrap_or("");
+                format!(
+                    "{author} (#{}, {guild})",
+                    c.name.as_deref().unwrap_or("channel")
+                )
+            }
+            None => author.clone(),
+        };
+        let body = if ctx.notification_preview {
+            let blocks = super::markdown::parse(&m.content);
+            let mut text = super::markdown::to_plain(&blocks, &|i| self.resolve_mention(i));
+            if text.is_empty() && !m.attachments.is_empty() {
+                text = "Sent an attachment".into();
+            }
+            if text.chars().count() > 200 {
+                text = text.chars().take(200).collect::<String>() + "…";
+            }
+            text
+        } else {
+            "New message".into()
+        };
+        Notification {
+            title,
+            body,
+            channel_id: m.channel_id,
+            guild_id: m.guild_id,
+        }
+    }
+
+    /// Text for mention nodes (`@name`, `#channel`, `@role`).
+    pub fn resolve_mention(&self, i: &super::markdown::Inline) -> Option<String> {
+        use super::markdown::Inline;
+        match i {
+            Inline::UserMention(id) => Some(format!(
+                "@{}",
+                self.user_name(*id).unwrap_or("unknown-user")
+            )),
+            Inline::ChannelMention(id) => Some(format!(
+                "#{}",
+                self.channels
+                    .get(id)
+                    .and_then(|c| c.name.as_deref())
+                    .unwrap_or("unknown-channel")
+            )),
+            Inline::RoleMention(id) => Some(format!(
+                "@{}",
+                self.guilds
+                    .iter()
+                    .flat_map(|g| g.roles.iter())
+                    .find(|r| r.id == *id)
+                    .map(|r| r.name.as_str())
+                    .unwrap_or("unknown-role")
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn role(&self, id: RoleId) -> Option<&Role> {
+        self.guilds
+            .iter()
+            .flat_map(|g| g.roles.iter())
+            .find(|r| r.id == id)
+    }
+
+    // -- read state queries ----------------------------------------------------
+
+    pub fn is_unread(&self, c: ChannelId) -> bool {
+        let Some(ch) = self.channels.get(&c) else {
+            return false;
+        };
+        let Some(last) = ch.last_message_id else {
+            return false;
+        };
+        match self.read_states.get(&c).and_then(|r| r.last_read) {
+            Some(read) => last > read,
+            // No read state: Discord treats DMs without one as read only if
+            // they have no messages; guild channels without one are unread.
+            None => true,
+        }
+    }
+
+    pub fn mention_count(&self, c: ChannelId) -> u32 {
+        self.read_states.get(&c).map_or(0, |r| r.mention_count)
+    }
+
+    pub fn guild_badge(&self, g: GuildId) -> Badge {
+        let muted_guild = self.muted_guilds.contains(&g);
+        let mut b = Badge::default();
+        for c in self.channels.values().filter(|c| c.guild_id == Some(g)) {
+            if !c.kind.is_textual() {
+                continue;
+            }
+            b.mentions += self.mention_count(c.id);
+            if !muted_guild && !self.muted_channels.contains(&c.id) && self.is_unread(c.id) {
+                b.unread = true;
+            }
+        }
+        b
+    }
+
+    /// Unread DMs, newest first (shown as avatars under the Home button).
+    pub fn unread_dms(&self) -> Vec<(&Channel, u32)> {
+        self.dm_list()
+            .into_iter()
+            .filter_map(|c| {
+                let n = self.mention_count(c.id);
+                (n > 0).then_some((c, n))
+            })
+            .collect()
+    }
+
+    pub fn dm_badge(&self) -> Badge {
+        let mentions = self.unread_dms().iter().map(|(_, n)| n).sum();
+        Badge {
+            unread: mentions > 0,
+            mentions,
+        }
+    }
+
+    /// Marks `c` read locally. Returns the message id to ACK on the server,
+    /// if anything changed.
+    pub fn mark_read(&mut self, c: ChannelId) -> Option<MessageId> {
+        let last = self.channels.get(&c)?.last_message_id?;
+        let rs = self.read_states.entry(c).or_default();
+        if rs.last_read == Some(last) && rs.mention_count == 0 {
+            return None;
+        }
+        rs.last_read = Some(last);
+        rs.mention_count = 0;
+        Some(last)
+    }
+
+    // -- lists -------------------------------------------------------------
+
+    /// DMs and group DMs, most recent activity first.
+    pub fn dm_list(&self) -> Vec<&Channel> {
+        let mut v: Vec<&Channel> = self
+            .channels
+            .values()
+            .filter(|c| c.kind.is_private())
+            .collect();
+        v.sort_by(|a, b| {
+            b.last_message_id
+                .unwrap_or(b.id)
+                .cmp(&a.last_message_id.unwrap_or(a.id))
+        });
+        v
+    }
+
+    /// Channel list of a guild: uncategorised channels first, then each
+    /// category with its children, all sorted like the official client
+    /// (text before voice, then position, then id).
+    pub fn channel_tree(&self, g: GuildId) -> Vec<(Option<&Channel>, Vec<&Channel>)> {
+        let in_guild: Vec<&Channel> = self
+            .channels
+            .values()
+            .filter(|c| c.guild_id == Some(g) && c.kind != ChannelKind::Thread)
+            .collect();
+        let sort_key = |c: &&Channel| {
+            let voice = matches!(c.kind, ChannelKind::Voice | ChannelKind::Stage);
+            (voice, c.position, c.id)
+        };
+        let mut cats: Vec<&Channel> = in_guild
+            .iter()
+            .copied()
+            .filter(|c| c.kind == ChannelKind::Category)
+            .collect();
+        cats.sort_by_key(|c| (c.position, c.id));
+        let mut top: Vec<&Channel> = in_guild
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.kind != ChannelKind::Category
+                    && c.parent_id.is_none_or(|p| !cats.iter().any(|k| k.id == p))
+            })
+            .collect();
+        top.sort_by_key(sort_key);
+        let mut out = vec![(None, top)];
+        for cat in cats {
+            let mut kids: Vec<&Channel> = in_guild
+                .iter()
+                .copied()
+                .filter(|c| c.parent_id == Some(cat.id) && c.kind != ChannelKind::Category)
+                .collect();
+            kids.sort_by_key(sort_key);
+            out.push((Some(cat), kids));
+        }
+        out
+    }
+
+    /// First text channel of a guild (default selection).
+    pub fn default_channel(&self, g: GuildId) -> Option<ChannelId> {
+        self.channel_tree(g)
+            .into_iter()
+            .flat_map(|(_, kids)| kids)
+            .find(|c| c.kind.is_textual())
+            .map(|c| c.id)
+    }
+
+    /// Author name colour: colour of the highest role that has one.
+    pub fn author_color(&self, guild: Option<GuildId>, m: &Message) -> Option<u32> {
+        let g = self.guild(guild?)?;
+        let roles = if m.author_roles.is_empty() {
+            self.member_roles.get(&(g.id, m.author.id))?
+        } else {
+            &m.author_roles
+        };
+        g.roles
+            .iter()
+            .filter(|r| r.color != 0 && roles.contains(&r.id))
+            .max_by_key(|r| r.position)
+            .map(|r| r.color)
+    }
+
+    /// Names of users currently typing in `c`.
+    pub fn typing_names(&self, c: ChannelId, now_ms: u64) -> Vec<String> {
+        self.typing
+            .get(&c)
+            .map(|list| {
+                list.iter()
+                    .filter(|t| t.until_ms > now_ms)
+                    .map(|t| self.user_name(t.user_id).unwrap_or("Someone").to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Drops expired typing entries. Returns true if anything is left.
+    pub fn prune_typing(&mut self, now_ms: u64) -> bool {
+        self.typing.retain(|_, list| {
+            list.retain(|t| t.until_ms > now_ms);
+            !list.is_empty()
+        });
+        !self.typing.is_empty()
+    }
+
+    // -- history -----------------------------------------------------------
+
+    /// Merges a page of history. `older_page` means it was loaded by
+    /// scrolling up (`before` = oldest known); `full` that the server
+    /// returned a full page (so older messages may exist).
+    pub fn insert_history(
+        &mut self,
+        c: ChannelId,
+        msgs: Vec<Message>,
+        older_page: bool,
+        full: bool,
+    ) {
+        for m in &msgs {
+            self.users
+                .entry(m.author.id)
+                .or_insert_with(|| m.author.clone());
+        }
+        let w = self.messages.entry(c).or_default();
+        w.loading = false;
+        if older_page {
+            if !full {
+                w.reached_start = true;
+            }
+        } else if !full && w.messages.is_empty() {
+            w.reached_start = true;
+        }
+        for m in msgs {
+            w.upsert(m);
+        }
+        if older_page {
+            w.trim_back(MESSAGE_WINDOW_MAX);
+        } else {
+            w.trim_front(MESSAGE_WINDOW_MAX);
+        }
+    }
+
+    /// Shrinks a window that is no longer visible back to its newest
+    /// `MESSAGE_WINDOW` messages.
+    pub fn trim_inactive(&mut self, c: ChannelId) {
+        if let Some(w) = self.messages.get_mut(&c) {
+            w.trim_front(MESSAGE_WINDOW);
+        }
+    }
+
+    /// Adds an optimistic local message.
+    pub fn push_pending(
+        &mut self,
+        c: ChannelId,
+        content: String,
+        nonce: String,
+        now_ms: u64,
+    ) -> Option<Message> {
+        let me = self.me.clone()?;
+        let guild_id = self.channels.get(&c).and_then(|c| c.guild_id);
+        let author_roles = guild_id
+            .and_then(|g| self.my_roles.get(&g).cloned())
+            .unwrap_or_default();
+        let m = Message {
+            id: Snowflake::from_timestamp_ms(now_ms, fastrand::u64(0..4096)),
+            channel_id: c,
+            guild_id,
+            author: me,
+            content,
+            edited: false,
+            attachments: vec![],
+            embeds: vec![],
+            mentions: vec![],
+            mention_roles: vec![],
+            mention_everyone: false,
+            author_roles,
+            reply_to: None,
+            nonce: Some(nonce),
+            kind: 0,
+            pending: true,
+            failed: false,
+        };
+        self.messages.entry(c).or_default().upsert(m.clone());
+        Some(m)
+    }
+
+    pub fn mark_failed(&mut self, c: ChannelId, nonce: &str) {
+        if let Some(w) = self.messages.get_mut(&c) {
+            for m in w.messages.iter_mut() {
+                if m.nonce.as_deref() == Some(nonce) && m.pending {
+                    m.pending = false;
+                    m.failed = true;
+                }
+            }
+        }
+    }
+}
+
+/// Whether message `b` continues the group started by `a` (same author,
+/// within 7 minutes, no reply/system message).
+pub fn continues_group(a: &Message, b: &Message) -> bool {
+    a.author.id == b.author.id
+        && b.reply_to.is_none()
+        && matches!(b.kind, 0 | 19)
+        && matches!(a.kind, 0 | 19)
+        && b.timestamp_ms().saturating_sub(a.timestamp_ms()) < GROUP_WINDOW_MS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock;
+
+    fn ctx() -> Ctx {
+        Ctx {
+            now_ms: 1_700_000_000_000,
+            open_channel: None,
+            window_focused: true,
+            notification_preview: true,
+        }
+    }
+
+    fn loaded() -> ChatState {
+        let mut s = ChatState::default();
+        s.load_ready(&mock::ready());
+        s
+    }
+
+    fn msg_in(s: &ChatState, ch: ChannelId, author: User, content: &str) -> Message {
+        let mut m = mock::text_message(
+            ch,
+            Snowflake::from_timestamp_ms(1_800_000_000_000, 1),
+            author,
+            content,
+        );
+        m.guild_id = s.channels.get(&ch).and_then(|c| c.guild_id);
+        m
+    }
+
+    #[test]
+    fn ready_orders_guilds_by_settings() {
+        let s = loaded();
+        let r = mock::ready();
+        assert_eq!(s.guilds.first().unwrap().id, r.guild_order[0]);
+        assert_eq!(s.guilds.len(), r.guilds.len());
+    }
+
+    #[test]
+    fn new_message_in_other_channel_marks_unread() {
+        let mut s = loaded();
+        let ch = mock::CH_RANDOM;
+        s.mark_read(ch);
+        assert!(!s.is_unread(ch));
+        let m = msg_in(&s, ch, mock::user(2), "hello");
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert!(fx.is_empty(), "plain message: no notification");
+        assert!(s.is_unread(ch));
+        assert_eq!(s.mention_count(ch), 0);
+        assert!(s.guild_badge(mock::GUILD_RUST).unread);
+    }
+
+    #[test]
+    fn mention_increments_and_notifies() {
+        let mut s = loaded();
+        let ch = mock::CH_RANDOM;
+        s.mark_read(ch);
+        let mut m = msg_in(&s, ch, mock::user(2), "hey <@1>");
+        m.mentions = vec![mock::ME];
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert_eq!(s.mention_count(ch), 1);
+        assert!(matches!(&fx[0], Effect::Notify(n) if n.body.contains("hey @")));
+        assert!(s.guild_badge(mock::GUILD_RUST).mentions >= 1);
+    }
+
+    #[test]
+    fn role_and_everyone_mentions() {
+        let mut s = loaded();
+        let ch = mock::CH_RANDOM;
+        let mut m = msg_in(&s, ch, mock::user(2), "@everyone");
+        m.mention_everyone = true;
+        assert!(s.mentions_me(&m));
+        let mut m = msg_in(&s, ch, mock::user(2), "<@&900>");
+        m.mention_roles = vec![mock::ROLE_MOD];
+        s.my_roles.insert(mock::GUILD_RUST, vec![mock::ROLE_MOD]);
+        assert!(s.mentions_me(&m));
+        s.my_roles.insert(mock::GUILD_RUST, vec![]);
+        assert!(!s.mentions_me(&m));
+    }
+
+    #[test]
+    fn dm_always_counts_as_mention() {
+        let mut s = loaded();
+        let dm = mock::DM_ALICE;
+        s.mark_read(dm);
+        let m = msg_in(&s, dm, mock::user(2), "psst");
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert_eq!(s.mention_count(dm), 1);
+        assert!(s.dm_badge().mentions >= 1);
+        assert!(matches!(&fx[0], Effect::Notify(n) if n.body == "psst"));
+    }
+
+    #[test]
+    fn notification_preview_can_be_disabled() {
+        let mut s = loaded();
+        let m = msg_in(&s, mock::DM_ALICE, mock::user(2), "secret");
+        let mut c = ctx();
+        c.notification_preview = false;
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &c);
+        assert!(matches!(&fx[0], Effect::Notify(n) if n.body == "New message"));
+    }
+
+    #[test]
+    fn viewing_channel_acks_instead_of_counting() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        s.messages.entry(ch).or_default();
+        let mut m = msg_in(&s, ch, mock::user(2), "<@1>");
+        m.mentions = vec![mock::ME];
+        let id = m.id;
+        let mut c = ctx();
+        c.open_channel = Some(ch);
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &c);
+        assert_eq!(fx, vec![Effect::Ack(ch, id)]);
+        assert!(!s.is_unread(ch));
+        assert_eq!(s.mention_count(ch), 0);
+        assert_eq!(s.messages[&ch].messages.back().unwrap().id, id);
+    }
+
+    #[test]
+    fn unfocused_window_still_notifies() {
+        let mut s = loaded();
+        let m = msg_in(&s, mock::DM_ALICE, mock::user(2), "hi");
+        let mut c = ctx();
+        c.open_channel = Some(mock::DM_ALICE);
+        c.window_focused = false;
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &c);
+        assert!(matches!(fx[0], Effect::Notify(_)));
+    }
+
+    #[test]
+    fn muted_guild_does_not_notify_or_show_unread() {
+        let mut s = loaded();
+        s.muted_guilds.insert(mock::GUILD_RUST);
+        let mut m = msg_in(&s, mock::CH_RANDOM, mock::user(2), "@everyone");
+        m.mention_everyone = true;
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert!(fx.is_empty());
+        assert!(!s.guild_badge(mock::GUILD_RUST).unread);
+        // ...but mentions are still counted, like the official client.
+        assert!(s.guild_badge(mock::GUILD_RUST).mentions > 0);
+    }
+
+    #[test]
+    fn own_message_marks_read() {
+        let mut s = loaded();
+        let ch = mock::CH_RANDOM;
+        let m = msg_in(&s, ch, s.me.clone().unwrap(), "mine");
+        s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert!(!s.is_unread(ch));
+    }
+
+    #[test]
+    fn ack_event_updates_read_state() {
+        let mut s = loaded();
+        let ch = mock::CH_RANDOM;
+        let last = s.channels[&ch].last_message_id.unwrap();
+        s.apply_event(
+            &Event::MessageAck {
+                channel_id: ch,
+                message_id: last,
+                mention_count: 0,
+            },
+            &ctx(),
+        );
+        assert!(!s.is_unread(ch));
+        // An older ACK does not move the marker back.
+        s.apply_event(
+            &Event::MessageAck {
+                channel_id: ch,
+                message_id: Snowflake(1),
+                mention_count: 5,
+            },
+            &ctx(),
+        );
+        assert!(!s.is_unread(ch));
+        assert_eq!(s.mention_count(ch), 0);
+    }
+
+    #[test]
+    fn mark_read_returns_ack_target_once() {
+        let mut s = loaded();
+        let ch = mock::CH_ANNOUNCEMENTS;
+        assert!(s.is_unread(ch));
+        let id = s.mark_read(ch);
+        assert_eq!(id, s.channels[&ch].last_message_id);
+        assert_eq!(s.mark_read(ch), None);
+    }
+
+    #[test]
+    fn typing_expires_and_is_cleared_by_message() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        let c = ctx();
+        s.apply_event(
+            &Event::TypingStart {
+                channel_id: ch,
+                guild_id: None,
+                user_id: mock::user(2).id,
+                timestamp_s: 0,
+                user: None,
+            },
+            &c,
+        );
+        assert_eq!(s.typing_names(ch, c.now_ms).len(), 1);
+        assert!(s.typing_names(ch, c.now_ms + TYPING_TTL_MS + 1).is_empty());
+        let m = msg_in(&s, ch, mock::user(2), "done typing");
+        s.apply_event(&Event::MessageCreate(Box::new(m)), &c);
+        assert!(s.typing_names(ch, c.now_ms).is_empty());
+        assert!(!s.prune_typing(c.now_ms));
+    }
+
+    #[test]
+    fn own_typing_is_ignored() {
+        let mut s = loaded();
+        s.apply_event(
+            &Event::TypingStart {
+                channel_id: mock::CH_GENERAL,
+                guild_id: None,
+                user_id: mock::ME,
+                timestamp_s: 0,
+                user: None,
+            },
+            &ctx(),
+        );
+        assert!(s.typing.is_empty());
+    }
+
+    #[test]
+    fn pending_message_replaced_by_server_echo() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        let p = s
+            .push_pending(ch, "hi".into(), "n1".into(), ctx().now_ms)
+            .unwrap();
+        assert!(s.messages[&ch].messages.back().unwrap().pending);
+        let mut echo = msg_in(&s, ch, s.me.clone().unwrap(), "hi");
+        echo.nonce = Some("n1".into());
+        s.apply_event(&Event::MessageCreate(Box::new(echo.clone())), &ctx());
+        let w = &s.messages[&ch];
+        assert!(w.messages.iter().all(|m| m.id != p.id));
+        assert_eq!(w.messages.iter().filter(|m| m.id == echo.id).count(), 1);
+    }
+
+    #[test]
+    fn failed_send_is_marked() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        s.push_pending(ch, "x".into(), "n2".into(), 0);
+        s.mark_failed(ch, "n2");
+        assert!(s.messages[&ch].messages.back().unwrap().failed);
+    }
+
+    #[test]
+    fn update_and_delete() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        s.insert_history(ch, mock::history(ch), false, true);
+        let target = s.messages[&ch].messages[0].id;
+        s.apply_event(
+            &Event::MessageUpdate(Box::new(MessagePatch {
+                id: target,
+                channel_id: ch,
+                content: Some("edited!".into()),
+                edited: true,
+                ..Default::default()
+            })),
+            &ctx(),
+        );
+        let m = &s.messages[&ch].messages[0];
+        assert_eq!(m.content, "edited!");
+        assert!(m.edited);
+        s.apply_event(
+            &Event::MessageDelete {
+                channel_id: ch,
+                id: target,
+            },
+            &ctx(),
+        );
+        assert!(s.messages[&ch].messages.iter().all(|m| m.id != target));
+    }
+
+    #[test]
+    fn window_is_bounded() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        let author = mock::user(2);
+        let page: Vec<Message> = (0..MESSAGE_WINDOW_MAX as u64 + 50)
+            .map(|i| mock::text_message(ch, Snowflake(10_000 + i), author.clone(), "x"))
+            .collect();
+        s.insert_history(ch, page, false, true);
+        assert_eq!(s.messages[&ch].messages.len(), MESSAGE_WINDOW_MAX);
+        s.trim_inactive(ch);
+        assert_eq!(s.messages[&ch].messages.len(), MESSAGE_WINDOW);
+        // The newest are kept.
+        assert_eq!(
+            s.messages[&ch].newest(),
+            Some(Snowflake(10_000 + MESSAGE_WINDOW_MAX as u64 + 49))
+        );
+    }
+
+    #[test]
+    fn older_page_partial_reaches_start() {
+        let mut s = loaded();
+        let ch = mock::CH_GENERAL;
+        s.insert_history(ch, mock::history(ch), false, true);
+        assert!(!s.messages[&ch].reached_start);
+        s.insert_history(ch, vec![], true, false);
+        assert!(s.messages[&ch].reached_start);
+    }
+
+    #[test]
+    fn channel_tree_groups_by_category() {
+        let s = loaded();
+        let tree = s.channel_tree(mock::GUILD_RUST);
+        // Uncategorised group first, then categories by position.
+        assert!(tree[0].0.is_none());
+        assert_eq!(tree[1].0.unwrap().name.as_deref(), Some("Information"));
+        for (_, kids) in &tree {
+            let voice_pos = kids.iter().position(|c| c.kind == ChannelKind::Voice);
+            if let Some(v) = voice_pos {
+                assert!(kids[v..].iter().all(|c| c.kind == ChannelKind::Voice));
+            }
+        }
+        assert!(s.default_channel(mock::GUILD_RUST).is_some());
+    }
+
+    #[test]
+    fn author_color_uses_highest_coloured_role() {
+        let s = loaded();
+        let mut m = mock::text_message(mock::CH_GENERAL, Snowflake(5), mock::user(3), "x");
+        m.author_roles = vec![mock::ROLE_MEMBER, mock::ROLE_MOD];
+        assert_eq!(
+            s.author_color(Some(mock::GUILD_RUST), &m),
+            Some(mock::MOD_COLOR)
+        );
+        m.author_roles = vec![];
+        assert_eq!(s.author_color(Some(mock::GUILD_RUST), &m), None);
+    }
+
+    #[test]
+    fn grouping() {
+        let a = mock::text_message(
+            Snowflake(1),
+            Snowflake::from_timestamp_ms(1_700_000_000_000, 0),
+            mock::user(2),
+            "a",
+        );
+        let mut b = mock::text_message(
+            Snowflake(1),
+            Snowflake::from_timestamp_ms(1_700_000_060_000, 0),
+            mock::user(2),
+            "b",
+        );
+        assert!(continues_group(&a, &b));
+        b.id = Snowflake::from_timestamp_ms(1_700_000_000_000 + GROUP_WINDOW_MS + 1, 0);
+        assert!(!continues_group(&a, &b));
+        let c = mock::text_message(
+            Snowflake(1),
+            Snowflake::from_timestamp_ms(1_700_000_010_000, 0),
+            mock::user(3),
+            "c",
+        );
+        assert!(!continues_group(&a, &c));
+    }
+
+    #[test]
+    fn guild_and_channel_lifecycle() {
+        let mut s = loaded();
+        let g = Guild {
+            id: Snowflake(777),
+            name: "New".into(),
+            icon: None,
+            roles: vec![],
+            owner_id: None,
+        };
+        let ch = Channel {
+            id: Snowflake(778),
+            kind: ChannelKind::Text,
+            guild_id: Some(g.id),
+            name: Some("hello".into()),
+            topic: None,
+            position: 0,
+            parent_id: None,
+            last_message_id: None,
+            recipients: vec![],
+            nsfw: false,
+        };
+        s.apply_event(
+            &Event::GuildUpsert {
+                guild: Box::new(g.clone()),
+                channels: vec![ch.clone()],
+                partial: false,
+            },
+            &ctx(),
+        );
+        assert!(s.guild(g.id).is_some());
+        assert!(s.channels.contains_key(&ch.id));
+        s.apply_event(&Event::GuildDelete(g.id), &ctx());
+        assert!(s.guild(g.id).is_none());
+        assert!(!s.channels.contains_key(&ch.id));
+    }
+}
