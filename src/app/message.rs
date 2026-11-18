@@ -30,6 +30,7 @@ pub enum Ui {
     OpenUrl(String),
     Logout,
     WindowFocus(bool),
+    WindowOpened,
     Tick,
 }
 

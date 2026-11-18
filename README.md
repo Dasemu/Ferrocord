@@ -57,6 +57,7 @@ Useful environment variables:
 | `FERROCORD_NOTIFY_PREVIEW=0` | Notifications show only the sender. |
 | `FERROCORD_ZLIB=0` | Disable gateway transport compression. |
 | `FERRO_TRACE_STARTUP=1` | Log `first_frame_ms`. |
+| `ICED_BACKEND=wgpu` | Use the GPU renderer (default is the `tiny-skia` CPU renderer, which keeps idle memory around 50 MB). |
 
 Screenshots of every main screen with mock data:
 

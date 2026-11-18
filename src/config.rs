@@ -1,6 +1,11 @@
 //! Paths, feature flags and environment overrides.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Instant;
+
+/// Set by `main` as early as possible; used for `first_frame_ms`.
+pub static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 /// Stable application id: keyring service name, Wayland `app_id`,
 /// notification app name.

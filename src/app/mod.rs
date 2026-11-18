@@ -80,6 +80,7 @@ pub struct App {
     boot_at: Instant,
     first_frame_logged: bool,
     fonts_ready: bool,
+    window_opened: bool,
 }
 
 pub fn now_ms() -> u64 {
@@ -88,7 +89,10 @@ pub fn now_ms() -> u64 {
 
 impl App {
     pub fn boot(cfg: Config) -> (Self, Task<Message>) {
-        let boot_at = Instant::now();
+        let boot_at = crate::config::PROCESS_START
+            .get()
+            .copied()
+            .unwrap_or_else(Instant::now);
         let theme = FerroTheme::new(cfg.theme);
         let secrets: Arc<dyn SecretStore> = if cfg.mock {
             Arc::new(MemoryStore::new())
@@ -138,6 +142,7 @@ impl App {
             boot_at,
             first_frame_logged: false,
             fonts_ready: false,
+            window_opened: false,
             cfg,
         };
 
@@ -309,18 +314,23 @@ impl App {
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
-        if !self.first_frame_logged && self.cfg.trace_startup && self.fonts_ready {
+        let task = match msg {
+            Message::Ui(u) => self.update_ui(u),
+            Message::Net(ev) => self.on_net(ev),
+            Message::Done(d) => self.on_done(d),
+        };
+        if !self.first_frame_logged
+            && self.cfg.trace_startup
+            && self.fonts_ready
+            && self.window_opened
+        {
             self.first_frame_logged = true;
             tracing::info!(
                 first_frame_ms = self.boot_at.elapsed().as_millis() as u64,
                 "startup"
             );
         }
-        match msg {
-            Message::Ui(u) => self.update_ui(u),
-            Message::Net(ev) => self.on_net(ev),
-            Message::Done(d) => self.on_done(d),
-        }
+        task
     }
 
     // -- UI -------------------------------------------------------------------
@@ -445,6 +455,10 @@ impl App {
                 if f && let Some(c) = self.open_channel() {
                     return self.mark_read(c);
                 }
+                Task::none()
+            }
+            Ui::WindowOpened => {
+                self.window_opened = true;
                 Task::none()
             }
             Ui::Tick => {
@@ -1122,6 +1136,9 @@ impl App {
         let mut subs = vec![iced::event::listen_with(|e, _, _| match e {
             iced::Event::Window(iced::window::Event::Focused) => {
                 Some(Message::Ui(Ui::WindowFocus(true)))
+            }
+            iced::Event::Window(iced::window::Event::Opened { .. }) => {
+                Some(Message::Ui(Ui::WindowOpened))
             }
             iced::Event::Window(iced::window::Event::Unfocused) => {
                 Some(Message::Ui(Ui::WindowFocus(false)))

@@ -10,6 +10,16 @@ use ferrocord::error::log_sink::LogSink;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> iced::Result {
+    let _ = ferrocord::config::PROCESS_START.set(std::time::Instant::now());
+    // Default to the CPU renderer: it keeps idle RSS around 50 MB, while
+    // wgpu costs 100-200 MB (driver dependent) for no visible gain in a
+    // chat UI. `ICED_BACKEND=wgpu` opts back in.
+    if std::env::var_os("ICED_BACKEND").is_none() {
+        // SAFETY: called first thing in `main`, before any other thread
+        // (tokio, iced, logging) exists, so nothing can read the
+        // environment concurrently.
+        unsafe { std::env::set_var("ICED_BACKEND", "tiny-skia") };
+    }
     let cfg = match Config::from_args(std::env::args()) {
         Ok(c) => c,
         Err(e) => {
