@@ -1,0 +1,66 @@
+//! Discord protocol client: Gateway (WebSocket), REST API, remote-auth (QR
+//! login). Owns sockets; never touches UI types.
+
+pub mod gateway;
+pub mod model;
+pub mod ratelimit;
+pub mod remote_auth;
+pub mod rest;
+pub mod types;
+pub mod zlib;
+
+use model::*;
+
+/// Connection state of the gateway, rendered as a banner by the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting { attempt: u32, delay_ms: u64 },
+}
+
+/// Events pushed from the gateway to the app.
+#[derive(Debug, Clone)]
+pub enum Event {
+    Connection(ConnectionState),
+    Ready(Box<ReadyData>),
+    Resumed,
+    /// (guild, user, roles) from READY_SUPPLEMENTAL / member chunks.
+    MemberRoles(Vec<(GuildId, UserId, Vec<RoleId>)>),
+    MessageCreate(Box<Message>),
+    MessageUpdate(Box<MessagePatch>),
+    MessageDelete {
+        channel_id: ChannelId,
+        id: MessageId,
+    },
+    MessageDeleteBulk {
+        channel_id: ChannelId,
+        ids: Vec<MessageId>,
+    },
+    TypingStart {
+        channel_id: ChannelId,
+        guild_id: Option<GuildId>,
+        user_id: UserId,
+        timestamp_s: u64,
+        user: Option<User>,
+    },
+    MessageAck {
+        channel_id: ChannelId,
+        message_id: MessageId,
+        mention_count: u32,
+    },
+    ChannelUpsert(Box<Channel>, Vec<User>),
+    ChannelDelete(ChannelId),
+    GuildUpsert {
+        guild: Box<Guild>,
+        channels: Vec<Channel>,
+        /// GUILD_UPDATE carries no channels; keep the known ones.
+        partial: bool,
+    },
+    GuildDelete(GuildId),
+    /// The token was rejected (close code 4004). The session must be cleared.
+    AuthFailed,
+    /// Unrecoverable gateway error (bad intents, invalid API version, ...).
+    Fatal(String),
+}
