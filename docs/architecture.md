@@ -241,3 +241,50 @@ pub struct FerroTheme { pub palette: Palette, pub metrics: Metrics, pub dark: bo
 * Protocol client design and library choice → `docs/protocol.md`.
 * Screens and navigation map.
 * Palette table.
+
+### Ferrocord
+
+**Protocol client.** Own Gateway v10 + REST implementation (`net/gateway.rs`,
+`net/rest.rs`, `net/ratelimit.rs`, `net/zlib.rs`) and QR login
+(`net/remote_auth.rs`); details in `docs/protocol.md`. The gateway and QR
+streams run as `Subscription::run_with` keyed by a generation counter (the
+token is never hashed); bumping the counter reconnects, dropping the
+subscription disconnects.
+
+**Screens and navigation.**
+
+```
+Splash (no cache, restoring) ──▶ Login ──(token / QR)──▶ Main
+                                   ▲                       │
+                                   └──── logout / 4004 ────┘
+Main = Server rail │ Sidebar │ Chat pane
+  rail: Home (DMs) · unread DMs · guilds (unread pill, mention badge) · add
+  sidebar: guild → categories/channels   |  Home → Friends + DM list
+           user panel (avatar, name, log out)
+  chat: header (#name, topic, tools) · grouped messages (markdown, embeds,
+        attachments, day dividers) · composer · typing indicator
+```
+
+`View::Home(Option<ChannelId>)` / `View::Guild { guild, channel }`; the last
+channel per guild and the last view are stored in SQLite `meta`.
+
+**Palette.**
+
+| Token | Dark | Light |
+|---|---|---|
+| `bg_app` (rail) | `#1e1f22` | `#e3e5e8` |
+| `bg_sidebar` | `#2b2d31` | `#f2f3f5` |
+| `bg_panel` (chat) | `#313338` | `#ffffff` |
+| `bg_elevated` | `#111214` | `#ffffff` |
+| `bg_hover` | `rgba(78,80,88,.3)` | `rgba(116,127,141,.16)` |
+| `bg_selected` | `rgba(78,80,88,.6)` | `rgba(116,127,141,.3)` |
+| `text_primary` / header | `#f2f3f5` | `#060607` |
+| text normal | `#dbdee1` | `#313338` |
+| `text_secondary` | `#b5bac1` | `#4e5058` |
+| `text_muted` | `#949ba4` | `#5c5e66` |
+| `accent` | `#5865f2` | `#5865f2` |
+| `danger` / `badge` | `#f23f43` | `#da373c` |
+| `success` | `#23a559` | `#23a559` |
+| link | `#00a8fc` | `#006ce7` |
+
+Metrics are in `ui::theme::Metrics::DEFAULT` and `docs/protocol.md` §7.
