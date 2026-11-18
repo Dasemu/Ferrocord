@@ -335,7 +335,6 @@ pub fn rail_icon(
     p: Palette,
     selected: bool,
     has_image: bool,
-    home: bool,
 ) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let active =
@@ -345,7 +344,7 @@ pub fn rail_icon(
         let background = if has_image {
             None
         } else if active {
-            Some(Background::Color(if home { p.accent } else { p.accent }))
+            Some(Background::Color(p.accent))
         } else {
             Some(Background::Color(p.bg_panel))
         };

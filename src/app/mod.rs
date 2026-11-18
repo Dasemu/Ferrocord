@@ -197,10 +197,10 @@ impl App {
                 if let Some(ch) = self.chat.channels.get_mut(&c.id) {
                     ch.last_message_id = Some(last.id);
                 }
-                if let Some(rs) = self.chat.read_states.get_mut(&c.id) {
-                    if rs.last_read != Some(Snowflake(1)) {
-                        rs.last_read = Some(last.id);
-                    }
+                if let Some(rs) = self.chat.read_states.get_mut(&c.id)
+                    && rs.last_read != Some(Snowflake(1))
+                {
+                    rs.last_read = Some(last.id);
                 }
             }
             self.chat.insert_history(c.id, h, false, true);
@@ -359,10 +359,10 @@ impl App {
                 self.switch_view(View::Home(target))
             }
             Ui::SelectGuild(g) => {
-                if let View::Guild { guild, .. } = self.view {
-                    if guild == g {
-                        return Task::none();
-                    }
+                if let View::Guild { guild, .. } = self.view
+                    && guild == g
+                {
+                    return Task::none();
                 }
                 let remembered = self
                     .store
@@ -442,10 +442,8 @@ impl App {
             Ui::Logout => self.logout(),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
-                if f {
-                    if let Some(c) = self.open_channel() {
-                        return self.mark_read(c);
-                    }
+                if f && let Some(c) = self.open_channel() {
+                    return self.mark_read(c);
                 }
                 Task::none()
             }
@@ -1048,36 +1046,36 @@ impl App {
                 urls.push(u);
             }
         }
-        if let Some(c) = self.open_channel() {
-            if let Some(w) = self.chat.messages.get(&c) {
-                for m in w.messages.iter().rev().take(60) {
-                    if let Some(u) = self.rest.avatar_url(&m.author, 80) {
-                        urls.push(u);
-                    }
-                    for a in m.attachments.iter().filter(|a| a.is_image()) {
-                        urls.push(attachment_preview_url(a));
-                    }
-                    for e in &m.embeds {
-                        if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
-                            urls.push(i.url.clone());
-                        }
+        if let Some(c) = self.open_channel()
+            && let Some(w) = self.chat.messages.get(&c)
+        {
+            for m in w.messages.iter().rev().take(60) {
+                if let Some(u) = self.rest.avatar_url(&m.author, 80) {
+                    urls.push(u);
+                }
+                for a in m.attachments.iter().filter(|a| a.is_image()) {
+                    urls.push(attachment_preview_url(a));
+                }
+                for e in &m.embeds {
+                    if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
+                        urls.push(i.url.clone());
                     }
                 }
             }
         }
         if let View::Home(_) = self.view {
             for c in self.chat.dm_list().into_iter().take(40) {
-                if let Some(u) = c.recipients.first().and_then(|u| self.chat.users.get(u)) {
-                    if let Some(url) = self.rest.avatar_url(u, 64) {
-                        urls.push(url);
-                    }
+                if let Some(u) = c.recipients.first().and_then(|u| self.chat.users.get(u))
+                    && let Some(url) = self.rest.avatar_url(u, 64)
+                {
+                    urls.push(url);
                 }
             }
         }
-        if let Some(me) = &self.chat.me {
-            if let Some(u) = self.rest.avatar_url(me, 64) {
-                urls.push(u);
-            }
+        if let Some(me) = &self.chat.me
+            && let Some(u) = self.rest.avatar_url(me, 64)
+        {
+            urls.push(u);
         }
         let tasks: Vec<Task<Message>> = urls
             .into_iter()
@@ -1133,22 +1131,21 @@ impl App {
         if self.cfg.mock {
             return Subscription::batch(subs);
         }
-        if let (Some(token), true) = (&self.token, self.gateway_generation > 0) {
-            if !matches!(self.auth, AuthState::LoggedOut { .. }) {
-                let key = Keyed {
-                    id: self.gateway_generation,
-                    value: GatewayConfig {
-                        url: self.cfg.gateway_url.clone(),
-                        token: token.clone(),
-                        zlib: self.cfg.zlib,
-                        properties: ClientProperties::default(),
-                    },
-                };
-                subs.push(
-                    Subscription::run_with(key, |k| gateway::spawn(k.value.clone()))
-                        .map(Message::Net),
-                );
-            }
+        if let (Some(token), true) = (&self.token, self.gateway_generation > 0)
+            && !matches!(self.auth, AuthState::LoggedOut { .. })
+        {
+            let key = Keyed {
+                id: self.gateway_generation,
+                value: GatewayConfig {
+                    url: self.cfg.gateway_url.clone(),
+                    token: token.clone(),
+                    zlib: self.cfg.zlib,
+                    properties: ClientProperties::default(),
+                },
+            };
+            subs.push(
+                Subscription::run_with(key, |k| gateway::spawn(k.value.clone())).map(Message::Net),
+            );
         }
         let qr_active = matches!(
             self.qr,

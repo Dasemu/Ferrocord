@@ -653,12 +653,12 @@ impl WireReady {
                 continue;
             }
             let (guild, chans) = g.into_domain();
-            if let Some(members) = self.merged_members.get(idx) {
-                if let Some(m) = members.iter().find(|m| {
+            if let Some(members) = self.merged_members.get(idx)
+                && let Some(m) = members.iter().find(|m| {
                     m.user_id == Some(me.id) || m.user.as_ref().map(|u| u.id) == Some(me.id)
-                }) {
-                    my_roles.push((guild.id, m.roles.clone()));
-                }
+                })
+            {
+                my_roles.push((guild.id, m.roles.clone()));
             }
             channels.extend(chans);
             guilds.push(guild);
@@ -695,10 +695,10 @@ impl WireReady {
         let mut muted_guilds = Vec::new();
         let mut muted_channels = Vec::new();
         for e in settings_entries {
-            if e.muted {
-                if let Some(g) = e.guild_id {
-                    muted_guilds.push(g);
-                }
+            if e.muted
+                && let Some(g) = e.guild_id
+            {
+                muted_guilds.push(g);
             }
             muted_channels.extend(
                 e.channel_overrides

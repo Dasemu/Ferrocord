@@ -515,15 +515,15 @@ fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
         );
     }
     let mut inner = row![col].spacing(16);
-    if let (Some(th), None) = (&e.thumbnail, &e.image) {
-        if let Some(handle) = app.image(&th.url) {
-            inner = inner.push(
-                iced::widget::image(handle.clone())
-                    .width(80)
-                    .height(80)
-                    .border_radius(4.0),
-            );
-        }
+    if let (Some(th), None) = (&e.thumbnail, &e.image)
+        && let Some(handle) = app.image(&th.url)
+    {
+        inner = inner.push(
+            iced::widget::image(handle.clone())
+                .width(80)
+                .height(80)
+                .border_radius(4.0),
+        );
     }
     let bar = e.color.map(theme::from_int).unwrap_or(p.bg_app);
     container(

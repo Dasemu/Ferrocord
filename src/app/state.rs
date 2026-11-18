@@ -41,14 +41,13 @@ impl MessageWindow {
     /// Inserts or replaces one message, keeping id order. A server message
     /// whose nonce matches a pending local message replaces it.
     pub fn upsert(&mut self, msg: Message) {
-        if let Some(n) = &msg.nonce {
-            if let Some(pos) = self
+        if let Some(n) = &msg.nonce
+            && let Some(pos) = self
                 .messages
                 .iter()
                 .position(|m| m.pending && m.nonce.as_ref() == Some(n))
-            {
-                self.messages.remove(pos);
-            }
+        {
+            self.messages.remove(pos);
         }
         if let Some(existing) = self.messages.iter_mut().find(|m| m.id == msg.id) {
             *existing = msg;
@@ -197,10 +196,10 @@ impl ChatState {
             }
             Event::MessageCreate(m) => self.on_message_create(m, ctx, &mut fx),
             Event::MessageUpdate(p) => {
-                if let Some(w) = self.messages.get_mut(&p.channel_id) {
-                    if let Some(m) = w.messages.iter_mut().find(|m| m.id == p.id) {
-                        m.apply_patch(p);
-                    }
+                if let Some(w) = self.messages.get_mut(&p.channel_id)
+                    && let Some(m) = w.messages.iter_mut().find(|m| m.id == p.id)
+                {
+                    m.apply_patch(p);
                 }
             }
             Event::MessageDelete { channel_id, id } => {
@@ -296,16 +295,16 @@ impl ChatState {
             .entry(m.author.id)
             .and_modify(|u| *u = m.author.clone())
             .or_insert_with(|| m.author.clone());
-        if let Some(g) = m.guild_id {
-            if !m.author_roles.is_empty() {
-                self.member_roles
-                    .insert((g, m.author.id), m.author_roles.clone());
-            }
+        if let Some(g) = m.guild_id
+            && !m.author_roles.is_empty()
+        {
+            self.member_roles
+                .insert((g, m.author.id), m.author_roles.clone());
         }
-        if let Some(c) = self.channels.get_mut(&m.channel_id) {
-            if c.last_message_id.is_none_or(|l| m.id > l) {
-                c.last_message_id = Some(m.id);
-            }
+        if let Some(c) = self.channels.get_mut(&m.channel_id)
+            && c.last_message_id.is_none_or(|l| m.id > l)
+        {
+            c.last_message_id = Some(m.id);
         }
         if let Some(list) = self.typing.get_mut(&m.channel_id) {
             list.retain(|t| t.user_id != m.author.id);
@@ -361,10 +360,10 @@ impl ChatState {
         if m.mentions.contains(&me) || m.mention_everyone {
             return true;
         }
-        if let Some(g) = m.guild_id {
-            if let Some(roles) = self.my_roles.get(&g) {
-                return m.mention_roles.iter().any(|r| roles.contains(r));
-            }
+        if let Some(g) = m.guild_id
+            && let Some(roles) = self.my_roles.get(&g)
+        {
+            return m.mention_roles.iter().any(|r| roles.contains(r));
         }
         false
     }

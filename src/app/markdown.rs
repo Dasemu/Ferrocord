@@ -191,6 +191,8 @@ fn is_list_item(line: &str) -> bool {
     (t.starts_with("- ") || t.starts_with("* ")) && t.len() > 2
 }
 
+type Ctor = fn(Vec<Inline>) -> Inline;
+
 /// Parses inline markdown. Newlines become [`Inline::LineBreak`].
 pub fn parse_inline(src: &str) -> Vec<Inline> {
     let mut out = Vec::new();
@@ -226,23 +228,23 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         if c == b'`' {
             let ticks = if rest.starts_with("``") { 2 } else { 1 };
             let delim = &rest[..ticks];
-            if let Some(end) = rest[ticks..].find(delim) {
-                if end > 0 {
-                    let code = &rest[ticks..ticks + end];
-                    let code = if ticks == 2 { code.trim() } else { code };
-                    push!(Inline::Code(code.to_owned()));
-                    i += ticks + end + ticks;
-                    continue;
-                }
+            if let Some(end) = rest[ticks..].find(delim)
+                && end > 0
+            {
+                let code = &rest[ticks..ticks + end];
+                let code = if ticks == 2 { code.trim() } else { code };
+                push!(Inline::Code(code.to_owned()));
+                i += ticks + end + ticks;
+                continue;
             }
         }
         // Angle-bracket constructs.
-        if c == b'<' {
-            if let Some((node, len)) = angle(rest) {
-                push!(node);
-                i += len;
-                continue;
-            }
+        if c == b'<'
+            && let Some((node, len)) = angle(rest)
+        {
+            push!(node);
+            i += len;
+            continue;
         }
         if c == b'@' {
             let prev_ok = i == 0 || !b[i - 1].is_ascii_alphanumeric();
@@ -258,16 +260,16 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
             }
         }
         // Paired delimiters, longest first.
-        if rest.starts_with("***") {
-            if let Some(end) = find_closing(rest, 3, "***") {
-                push!(Inline::Bold(vec![Inline::Italic(parse_inline(
-                    &rest[3..end]
-                ))]));
-                i += end + 3;
-                continue;
-            }
+        if rest.starts_with("***")
+            && let Some(end) = find_closing(rest, 3, "***")
+        {
+            push!(Inline::Bold(vec![Inline::Italic(parse_inline(
+                &rest[3..end]
+            ))]));
+            i += end + 3;
+            continue;
         }
-        let pairs: [(&str, fn(Vec<Inline>) -> Inline); 4] = [
+        let pairs: [(&str, Ctor); 4] = [
             ("||", Inline::Spoiler),
             ("**", Inline::Bold),
             ("__", Inline::Underline),
@@ -275,44 +277,45 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         ];
         let mut matched = false;
         for (d, ctor) in pairs {
-            if rest.starts_with(d) {
-                if let Some(end) = find_closing(rest, 2, d) {
-                    push!(ctor(parse_inline(&rest[2..end])));
-                    i += end + 2;
-                    matched = true;
-                    break;
-                }
+            if rest.starts_with(d)
+                && let Some(end) = find_closing(rest, 2, d)
+            {
+                push!(ctor(parse_inline(&rest[2..end])));
+                i += end + 2;
+                matched = true;
+                break;
             }
         }
         if matched {
             continue;
         }
-        if c == b'*' && b.get(i + 1).is_some_and(|n| !n.is_ascii_whitespace()) {
-            if let Some(end) = find_closing(rest, 1, "*") {
-                if !rest[..end].ends_with(char::is_whitespace) {
-                    push!(Inline::Italic(parse_inline(&rest[1..end])));
-                    i += end + 1;
-                    continue;
-                }
-            }
+        if c == b'*'
+            && b.get(i + 1).is_some_and(|n| !n.is_ascii_whitespace())
+            && let Some(end) = find_closing(rest, 1, "*")
+            && !rest[..end].ends_with(char::is_whitespace)
+        {
+            push!(Inline::Italic(parse_inline(&rest[1..end])));
+            i += end + 1;
+            continue;
         }
-        if c == b'_' && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) {
-            if let Some(end) = find_closing(rest, 1, "_") {
-                let after = rest.as_bytes().get(end + 1);
-                if after.is_none_or(|a| !a.is_ascii_alphanumeric()) {
-                    push!(Inline::Italic(parse_inline(&rest[1..end])));
-                    i += end + 1;
-                    continue;
-                }
+        if c == b'_'
+            && (i == 0 || !b[i - 1].is_ascii_alphanumeric())
+            && let Some(end) = find_closing(rest, 1, "_")
+        {
+            let after = rest.as_bytes().get(end + 1);
+            if after.is_none_or(|a| !a.is_ascii_alphanumeric()) {
+                push!(Inline::Italic(parse_inline(&rest[1..end])));
+                i += end + 1;
+                continue;
             }
         }
         // Masked links.
-        if c == b'[' {
-            if let Some((node, len)) = masked_link(rest) {
-                push!(node);
-                i += len;
-                continue;
-            }
+        if c == b'['
+            && let Some((node, len)) = masked_link(rest)
+        {
+            push!(node);
+            i += len;
+            continue;
         }
         // Autolinks.
         if (c == b'h' || c == b'H') && (rest.starts_with("https://") || rest.starts_with("http://"))
@@ -349,11 +352,12 @@ fn find_closing(s: &str, from: usize, delim: &str) -> Option<usize> {
             j += 2;
             continue;
         }
-        if b[j] == b'`' && delim != "`" {
-            if let Some(end) = s[j + 1..].find('`') {
-                j += end + 2;
-                continue;
-            }
+        if b[j] == b'`'
+            && delim != "`"
+            && let Some(end) = s[j + 1..].find('`')
+        {
+            j += end + 2;
+            continue;
         }
         if s[j..].starts_with(delim) {
             // A single `*` must not close on half of a `**`.
@@ -468,10 +472,7 @@ fn autolink_len(s: &str) -> usize {
         .find(|c: char| c.is_whitespace() || c == '<' || c == '>' || c == '"')
         .unwrap_or(s.len());
     // Trim trailing punctuation, keeping balanced parentheses.
-    loop {
-        let Some(last) = s[..end].chars().last() else {
-            break;
-        };
+    while let Some(last) = s[..end].chars().last() {
         let trim = match last {
             '.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*' | '_' | '~' | '|' => true,
             ')' => s[..end].matches('(').count() < s[..end].matches(')').count(),

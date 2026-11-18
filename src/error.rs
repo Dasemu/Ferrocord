@@ -274,15 +274,15 @@ pub mod log_sink {
             if self.sink.stderr {
                 let _ = io::stderr().write_all(bytes);
             }
-            if let Some(f) = &self.sink.file {
-                if let Ok(mut f) = f.lock() {
-                    let _ = f.write(bytes);
-                }
+            if let Some(f) = &self.sink.file
+                && let Ok(mut f) = f.lock()
+            {
+                let _ = f.write(bytes);
             }
-            if let Some(c) = &self.sink.capture {
-                if let Ok(mut c) = c.lock() {
-                    c.extend_from_slice(bytes);
-                }
+            if let Some(c) = &self.sink.capture
+                && let Ok(mut c) = c.lock()
+            {
+                c.extend_from_slice(bytes);
             }
         }
     }

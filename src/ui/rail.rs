@@ -52,7 +52,6 @@ fn item<'a>(
     selected: bool,
     badge: Badge,
     has_image: bool,
-    home: bool,
 ) -> El<'a> {
     let p = app.theme.palette;
     let size = app.theme.metrics.rail_icon;
@@ -61,7 +60,7 @@ fn item<'a>(
         .height(size)
         .padding(0)
         .on_press(ui(on))
-        .style(theme::rail_icon(p, selected, has_image, home));
+        .style(theme::rail_icon(p, selected, has_image));
     let with_badge: El<'a> = if badge.mentions > 0 {
         stack![
             b,
@@ -122,7 +121,6 @@ pub fn view(app: &App) -> El<'_> {
         home_selected,
         Badge::default(),
         false,
-        true
     )]
     .spacing(8)
     .padding(Padding::from([12, 0]))
@@ -146,7 +144,6 @@ pub fn view(app: &App) -> El<'_> {
                 mentions: n,
             },
             true,
-            false,
         ));
     }
 
@@ -186,7 +183,6 @@ pub fn view(app: &App) -> El<'_> {
             selected,
             badge,
             has_image,
-            false,
         ));
     }
 

@@ -121,7 +121,7 @@ impl RateLimiter {
             Some(k) => self.buckets.get_mut(&k),
             None => self.unbucketed.get_mut(route),
         };
-        let Some(b) = bucket else { return None };
+        let b = bucket?;
         if b.reset_at <= now {
             // Bucket has reset; the next response will tell us the new state.
             return None;

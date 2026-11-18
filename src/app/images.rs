@@ -63,10 +63,10 @@ impl ImageCache {
         self.order.push_back(key.clone());
         self.entries.insert(key, (handle, size));
         while self.bytes > self.budget && self.order.len() > 1 {
-            if let Some(k) = self.order.pop_front() {
-                if let Some((_, s)) = self.entries.remove(&k) {
-                    self.bytes -= s;
-                }
+            if let Some(k) = self.order.pop_front()
+                && let Some((_, s)) = self.entries.remove(&k)
+            {
+                self.bytes -= s;
             }
         }
     }
@@ -83,10 +83,10 @@ impl ImageCache {
 
     /// Marks `key` most recently used.
     pub fn touch(&mut self, key: &str) {
-        if let Some(pos) = self.order.iter().position(|k| k == key) {
-            if let Some(k) = self.order.remove(pos) {
-                self.order.push_back(k);
-            }
+        if let Some(pos) = self.order.iter().position(|k| k == key)
+            && let Some(k) = self.order.remove(pos)
+        {
+            self.order.push_back(k);
         }
     }
 
