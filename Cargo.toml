@@ -37,6 +37,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }
 
 [profile.release]
 opt-level = 3

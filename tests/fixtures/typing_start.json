@@ -1,0 +1,2 @@
+{ "channel_id": "4000000000000000002", "guild_id": "2000000000000000001", "user_id": "1000000000000000002", "timestamp": 1763467200,
+  "member": { "user": { "id": "1000000000000000002", "username": "alice.dev", "global_name": "Alice" }, "roles": [] } }
