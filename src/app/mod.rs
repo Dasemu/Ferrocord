@@ -1070,6 +1070,18 @@ impl App {
                 for a in m.attachments.iter().filter(|a| a.is_image()) {
                     urls.push(attachment_preview_url(a));
                 }
+                if m.content.contains('<') {
+                    let blocks = markdown::parse(&m.content);
+                    if markdown::is_emoji_only(&blocks)
+                        && let Some(markdown::Block::Paragraph(v)) = blocks.first()
+                    {
+                        for i in v {
+                            if let markdown::Inline::Emoji { id, .. } = i {
+                                urls.push(emoji_url(&self.cfg.cdn_url, *id));
+                            }
+                        }
+                    }
+                }
                 for e in &m.embeds {
                     if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
                         urls.push(i.url.clone());
@@ -1199,6 +1211,11 @@ impl<T> Hash for Keyed<T> {
         std::any::type_name::<T>().hash(state);
         self.id.hash(state);
     }
+}
+
+/// CDN URL of a custom emoji (static PNG; animated ones show frame 1).
+pub fn emoji_url(cdn: &str, id: Snowflake) -> String {
+    format!("{}/emojis/{id}.png?size=96", cdn.trim_end_matches('/'))
 }
 
 fn qr_ready(url: &str) -> QrState {

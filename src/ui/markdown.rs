@@ -347,7 +347,7 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
     let mut r = row![].spacing(4);
     for i in v {
         if let Inline::Emoji { name, id, .. } = i {
-            let key = emoji_url(ctx.app, *id);
+            let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
             let el: El<'a> = match ctx.app.image(&key) {
                 Some(h) => iced::widget::image(h.clone()).width(48).height(48).into(),
                 None => container(text(format!(":{name}:")).size(16).color(p.text_secondary))
@@ -359,11 +359,4 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
         }
     }
     r.into()
-}
-
-pub fn emoji_url(app: &App, id: crate::net::model::Snowflake) -> String {
-    format!(
-        "{}/emojis/{id}.png?size=96",
-        app.cfg.cdn_url.trim_end_matches('/')
-    )
 }
