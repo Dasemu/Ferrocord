@@ -17,3 +17,5 @@ Things learned while building Ferrocord that are worth remembering.
   `properties`, deduplicated `users`, versioned `read_state`). Parse leniently.
 - **Snowflakes** give exact message timestamps (`id >> 22`), so messages need
   no ISO-8601 parsing.
+- iced 0.14 `scrollable::direction()` replaces the scrollbar *and its anchor*: call `anchor_bottom()` after `direction()`.
+- GitHub push protection rejects token-shaped test fixtures; assemble them at runtime.

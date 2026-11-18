@@ -360,6 +360,11 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                 "Reminder set for **Saturday 18:00**.",
             ),
         ],
+        DM_BOB => vec![
+            gm(DM_BOB, 2900, 0, 3, &[], "thanks for the review yesterday!"),
+            gm(DM_BOB, 2880, 0, 1, &[], "anytime 👍"),
+        ],
+        DM_EVE => vec![gm(DM_EVE, 4400, 0, 6, &[], "see you at the meetup")],
         _ => general(channel),
     }
 }
@@ -439,7 +444,7 @@ fn general(channel: ChannelId) -> Vec<Message> {
 fn showcase() -> Vec<Message> {
     let mut a = gm(
         CH_SHOWCASE,
-        95,
+        20,
         0,
         4,
         &[ROLE_MEMBER],
@@ -514,7 +519,7 @@ fn showcase() -> Vec<Message> {
         width: None,
         height: None,
     }];
-    let mut d = gm(CH_SHOWCASE, 20, 0, 5, &[ROLE_BOT], "");
+    let mut d = gm(CH_SHOWCASE, 95, 0, 5, &[ROLE_BOT], "");
     d.embeds = vec![Embed {
         kind: Some("rich".into()),
         title: Some("Weekly build report".into()),
@@ -548,7 +553,7 @@ fn showcase() -> Vec<Message> {
         &[],
         "that looks amazing <:party:1002> <:ferris:1001>",
     );
-    vec![a, b, c, d, e]
+    vec![d, b, c, a, e]
 }
 
 /// Procedurally generated RGBA image (a stylised landscape) used as the
