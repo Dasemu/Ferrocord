@@ -772,3 +772,112 @@ mod tray_flow {
         assert!(!a.settings_open);
     }
 }
+
+// -- widget tree stability (flicker regression) ---------------------------------
+
+mod tree_shape {
+    use super::*;
+    use iced::advanced::widget::Tree;
+
+    /// Structural fingerprint of a widget (sub)tree: widget type tags and
+    /// child counts, recursively.
+    fn shape(t: &Tree) -> String {
+        let kids: Vec<String> = t.children.iter().map(shape).collect();
+        format!("{:?}[{}]", t.tag, kids.join(","))
+    }
+
+    /// The part of the tree that holds the whole app body: layer stack
+    /// → base layer (banner slot, body).
+    fn body_shape(t: &Tree) -> String {
+        // t.children[0] = content column (banner slot, body).
+        shape(&t.children[0].children[1])
+    }
+
+    /// Diffs `tree` against the current view and returns the body shape.
+    fn diffed(tree: &mut Tree, a: &App) -> String {
+        let el = ferrocord::ui::view(a);
+        tree.diff(&el);
+        body_shape(tree)
+    }
+
+    fn msg_id(a: &App) -> ferrocord::net::model::MessageId {
+        a.chat.messages[&mock::CH_GENERAL]
+            .messages
+            .iter()
+            .find(|m| m.author.id == ferrocord::net::model::Snowflake(2))
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn opening_and_closing_popups_keeps_the_body_widget_tree() {
+        let mut a = app();
+        let mut tree = {
+            let el = ferrocord::ui::view(&a);
+            Tree::new(&el)
+        };
+        let base = body_shape(&tree);
+        let id = msg_id(&a);
+        let layers = ferrocord::ui::LAYER_SLOTS;
+        assert_eq!(tree.children.len(), layers);
+
+        for (name, open, close) in [
+            ("context menu", Ui::ContextMenu(id), Ui::CloseMenu),
+            ("status menu", Ui::ToggleStatusMenu, Ui::ToggleStatusMenu),
+            ("settings", Ui::OpenSettings, Ui::CloseSettings),
+            ("delete dialog", Ui::DeleteClicked(id), Ui::CancelDelete),
+            (
+                "link dialog",
+                Ui::ConfirmLink("https://example.com".into()),
+                Ui::CancelLink,
+            ),
+        ] {
+            ferrocord::app::input::set_shift_for_tests(false);
+            let _ = a.update(Message::Ui(open));
+            assert_eq!(
+                diffed(&mut tree, &a),
+                base,
+                "{name}: opening reshaped the body"
+            );
+            assert_eq!(tree.children.len(), layers, "{name}");
+            let _ = a.update(Message::Ui(close));
+            assert_eq!(
+                diffed(&mut tree, &a),
+                base,
+                "{name}: closing reshaped the body"
+            );
+        }
+    }
+
+    #[test]
+    fn a_toast_banner_keeps_the_body_widget_tree() {
+        let mut a = app();
+        let mut tree = {
+            let el = ferrocord::ui::view(&a);
+            Tree::new(&el)
+        };
+        let base = body_shape(&tree);
+        a.toast = Some("Could not do that".into());
+        assert_eq!(diffed(&mut tree, &a), base);
+        a.toast = None;
+        assert_eq!(diffed(&mut tree, &a), base);
+    }
+}
+
+#[test]
+fn image_handles_are_stable_across_views() {
+    // A handle built inside `view()` gets a fresh id every frame and makes
+    // the renderer re-upload the texture; the QR code is cached instead.
+    let a = app();
+    let modules: Vec<bool> = (0..25 * 25).map(|i| i % 3 == 0).collect();
+    let h1 = a.qr_handle(25, &modules);
+    let h2 = a.qr_handle(25, &modules);
+    assert_eq!(h1.id(), h2.id());
+    let other: Vec<bool> = modules.iter().map(|b| !b).collect();
+    assert_ne!(a.qr_handle(25, &other).id(), h1.id());
+    // Icons are cached too.
+    assert_eq!(
+        ferrocord::ui::icons::handle(ferrocord::ui::icons::Icon::Bell).id(),
+        ferrocord::ui::icons::handle(ferrocord::ui::icons::Icon::Bell).id()
+    );
+}

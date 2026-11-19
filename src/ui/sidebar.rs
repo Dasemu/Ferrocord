@@ -302,6 +302,27 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
     .into()
 }
 
+/// Width of every user-panel icon button.
+const PANEL_BTN: f32 = 28.0;
+const PANEL_GAP: f32 = 2.0;
+const PANEL_PAD: f32 = 8.0;
+/// Buttons in the panel: mic, deafen, settings.
+const PANEL_BUTTONS: f32 = 3.0;
+
+/// Width available to the name / status text next to the avatar.
+pub fn panel_text_width(sidebar_width: f32) -> f32 {
+    const AVATAR: f32 = 32.0;
+    const IDENTITY_PAD: f32 = 4.0;
+    const IDENTITY_GAP: f32 = 8.0;
+    let buttons = PANEL_BUTTONS * PANEL_BTN + PANEL_BUTTONS * PANEL_GAP;
+    (sidebar_width - 2.0 * PANEL_PAD - buttons - 2.0 * IDENTITY_PAD - AVATAR - IDENTITY_GAP)
+        .max(0.0)
+}
+
+/// Bottom-left user panel like the official client: identity on the left
+/// (name and status truncated with an ellipsis inside a fixed-width area,
+/// so they can never run under the buttons), then fixed-size icon buttons.
+/// There is no voice, so mic and deafen are shown disabled with a tooltip.
 fn user_panel(app: &App) -> El<'_> {
     let t = &app.theme;
     let p = t.palette;
@@ -313,33 +334,63 @@ fn user_panel(app: &App) -> El<'_> {
         bot: false,
     });
     let small = |i: Icon, on: Option<Ui>| {
-        let b = button(container(icon(i, 20.0, p.text_secondary)).center(32))
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(theme::icon_button(p));
+        let enabled = on.is_some();
+        let b = button(
+            container(icon(
+                i,
+                18.0,
+                if enabled {
+                    p.text_secondary
+                } else {
+                    p.text_muted
+                },
+            ))
+            .center(PANEL_BTN),
+        )
+        .width(PANEL_BTN)
+        .height(PANEL_BTN)
+        .padding(0)
+        .style(theme::icon_button(p));
         match on {
             Some(u) => b.on_press(ui(u)),
             None => b,
         }
     };
+    let disabled = |i: Icon, tip: &'static str| -> El<'_> {
+        iced::widget::tooltip(
+            small(i, None),
+            container(text(tip).size(13).color(p.header_text))
+                .padding(Padding::from([6, 10]))
+                .style(theme::rounded_bg(p.bg_elevated, 5.0)),
+            iced::widget::tooltip::Position::Top,
+        )
+        .gap(6)
+        .into()
+    };
+    let avail = panel_text_width(t.metrics.sidebar_width);
     // Clicking the avatar or name opens the status menu, like the
     // official user panel.
     let identity = button(
         row![
             avatar_with_status(app, &me, 32.0),
-            column![
-                text(me.display_name().to_owned())
+            container(column![
+                text(super::ellipsize(me.display_name(), avail, 14.0, true))
                     .size(14)
                     .font(INTER_SEMIBOLD)
                     .color(p.header_text)
                     .wrapping(text::Wrapping::None),
-                text(app.chat.my_status.label().to_owned())
-                    .size(12)
-                    .color(p.text_secondary)
-                    .wrapping(text::Wrapping::None),
-            ]
-            .width(Length::Fill),
+                text(super::ellipsize(
+                    app.chat.my_status.label(),
+                    avail,
+                    12.0,
+                    false
+                ))
+                .size(12)
+                .color(p.text_secondary)
+                .wrapping(text::Wrapping::None),
+            ])
+            .width(Length::Fill)
+            .clip(true),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -351,16 +402,15 @@ fn user_panel(app: &App) -> El<'_> {
     container(
         row![
             identity,
-            small(Icon::Mic, None),
-            small(Icon::Headphones, None),
+            disabled(Icon::Mic, "Voice is not supported in Ferrocord"),
+            disabled(Icon::Headphones, "Voice is not supported in Ferrocord"),
             small(Icon::Settings, Some(Ui::OpenSettings)),
-            small(Icon::LogOut, Some(Ui::Logout)),
         ]
-        .spacing(8)
+        .spacing(PANEL_GAP)
         .align_y(Alignment::Center),
     )
     .height(t.metrics.user_panel_height)
-    .padding(Padding::from([0, 8]))
+    .padding(Padding::from([0.0, PANEL_PAD]))
     .align_y(Alignment::Center)
     .style(theme::bg(p.user_panel))
     .into()

@@ -93,6 +93,11 @@ pub struct App {
     /// Parsed markdown per (message, content hash), so `view()` does not
     /// re-parse every message on every frame.
     md_cache: std::cell::RefCell<MarkdownCache>,
+    /// QR image handle for the login screen. An `image::Handle` built in
+    /// `view()` gets a new id each frame, so the renderer re-uploads the
+    /// texture on every redraw (visible blinking); it is built once per
+    /// code instead.
+    qr_cache: std::cell::RefCell<Option<(Vec<bool>, iced::widget::image::Handle)>>,
     pub window_focused: bool,
     gateway: GatewayHandle,
     pub reply: Option<ReplyDraft>,
@@ -188,6 +193,7 @@ impl App {
             revealed_spoilers: HashSet::new(),
             images: images::ImageCache::default(),
             md_cache: std::cell::RefCell::new(HashMap::new()),
+            qr_cache: std::cell::RefCell::new(None),
             window_focused: true,
             gateway: GatewayHandle::default(),
             reply: None,
@@ -383,6 +389,32 @@ impl App {
                     });
                 }
             }
+            Some(s @ (ScreenshotScreen::Panel | ScreenshotScreen::Menu)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+                if s == ScreenshotScreen::Panel {
+                    if let Some(me) = self.chat.me.as_mut() {
+                        me.global_name = Some("bronze age romantic of the northern coast".into());
+                    }
+                } else if let Some(id) = self
+                    .chat
+                    .messages
+                    .get(&mock::CH_GENERAL)
+                    .and_then(|w| w.messages.iter().find(|m| m.author.id == Snowflake(2)))
+                    .map(|m| m.id)
+                {
+                    let _ = self.update_ui(Ui::ContextMenu(id));
+                    if let Some(mn) = self.menu.as_mut() {
+                        mn.at = iced::Point::new(640.0, 300.0);
+                    }
+                }
+            }
             Some(ScreenshotScreen::Guild | ScreenshotScreen::Settings) | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -399,6 +431,10 @@ impl App {
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        if screen == Some(ScreenshotScreen::Panel) {
+            // After the member list: it carries our own (online) presence.
+            self.chat.my_status = Presence::Dnd;
+        }
     }
 
     pub fn screen(&self) -> Screen {
@@ -862,6 +898,7 @@ impl App {
     }
 
     fn logout(&mut self) -> Task<Message> {
+        self.settings_open = false;
         self.token = None;
         self.gateway_generation += 1;
         self.auth = self.auth.apply(AuthEvent::LoggedOut);
@@ -1429,6 +1466,23 @@ impl App {
         self.rest
             .avatar_url(user, 80)
             .or_else(|| self.rest.avatar_url(user, 64))
+    }
+
+    /// The login QR as an image handle, built once per distinct code.
+    pub fn qr_handle(&self, size: usize, modules: &[bool]) -> iced::widget::image::Handle {
+        let mut cache = self.qr_cache.borrow_mut();
+        if let Some((m, h)) = cache.as_ref()
+            && m == modules
+        {
+            return h.clone();
+        }
+        let h = iced::widget::image::Handle::from_rgba(
+            size as u32,
+            size as u32,
+            crate::ui::login::qr_pixels(modules),
+        );
+        *cache = Some((modules.to_vec(), h.clone()));
+        h
     }
 
     pub fn avatar_handle(&self, user: &User) -> Option<&iced::widget::image::Handle> {

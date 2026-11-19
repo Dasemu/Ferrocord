@@ -417,6 +417,28 @@ pub fn primary_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::
     }
 }
 
+/// Red filled button (destructive actions).
+pub fn danger_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let k = if hovered { 0.85 } else { 1.0 };
+        button::Style {
+            background: Some(Background::Color(Color {
+                r: p.danger.r * k,
+                g: p.danger.g * k,
+                b: p.danger.b * k,
+                a: 1.0,
+            })),
+            text_color: p.accent_text,
+            border: Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
 /// Borderless icon button (header, user panel).
 pub fn icon_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| button::Style {

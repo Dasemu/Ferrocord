@@ -30,6 +30,10 @@ pub enum ScreenshotScreen {
     Search,
     Compose,
     Settings,
+    /// Long display name and status in the user panel.
+    Panel,
+    /// Right-click menu on a message.
+    Menu,
 }
 
 impl ScreenshotScreen {
@@ -42,6 +46,8 @@ impl ScreenshotScreen {
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
+            "panel" | "userpanel" => Some(Self::Panel),
+            "menu" | "context-menu" => Some(Self::Menu),
             _ => None,
         }
     }

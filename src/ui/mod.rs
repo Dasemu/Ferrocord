@@ -51,27 +51,85 @@ pub fn view(app: &App) -> El<'_> {
             r.height(Length::Fill).into()
         }
     };
-    let banner = banner(app);
-    let mut content: El<'_> = match banner {
-        Some(b) => column![b, body].into(),
-        None => body,
-    };
-    if app.screen() == Screen::Main {
-        for layer in popups::layers(app) {
-            content = stack![content, layer].into();
-        }
+    // The widget tree must have the SAME shape whether or not a banner, a
+    // popup, the settings dialog or the link dialog is showing. iced diffs
+    // widget state by position and widget type: wrapping the body in a new
+    // `stack` (or a `column`) only while a popup is open makes every
+    // scrollable, hover and text-input state under it be thrown away, which
+    // jumped the message list and caused the "flicker" on right-click. Each
+    // optional layer therefore has a fixed slot that holds an empty `Space`
+    // while it is closed.
+    let banner: El<'_> = banner(app).unwrap_or_else(empty);
+    let content: El<'_> = column![banner, body].into();
+    if app.screen() != Screen::Main {
+        return container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::bg(t.palette.bg_app))
+            .into();
     }
-    if app.settings_open && app.screen() == Screen::Main {
-        content = stack![content, settings::view(app)].into();
-    }
-    if let Some(url) = &app.pending_link {
-        content = stack![content, leave_dialog(t, url)].into();
-    }
-    container(content)
+    let mut layers: Vec<El<'_>> = Vec::with_capacity(LAYER_SLOTS);
+    layers.push(content);
+    layers.extend(popups::layers(app));
+    layers.push(if app.settings_open {
+        settings::view(app)
+    } else {
+        empty()
+    });
+    layers.push(match &app.pending_link {
+        Some(url) => leave_dialog(t, url),
+        None => empty(),
+    });
+    container(stack(layers))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::bg(t.palette.bg_app))
         .into()
+}
+
+/// Base content + popup slots + settings + link dialog.
+pub const LAYER_SLOTS: usize = 1 + popups::SLOTS + 2;
+
+/// Approximate advance width of `c` in Inter, in em.
+fn glyph_em(c: char) -> f32 {
+    match c {
+        'i' | 'l' | 'j' | 'I' | '.' | ',' | ':' | ';' | '\'' | '!' | '|' => 0.30,
+        ' ' | 't' | 'f' | 'r' | '(' | ')' | '[' | ']' | '-' | '/' => 0.40,
+        'm' | 'w' | 'M' | 'W' | '@' => 0.92,
+        c if c.is_ascii_uppercase() => 0.70,
+        c if c.is_ascii() => 0.57,
+        // Wide scripts and emoji.
+        _ => 1.05,
+    }
+}
+
+/// Shortens `s` with a trailing `…` so that it is estimated to fit in
+/// `max_px` at `size` (semi-bold text is a little wider). iced has no text
+/// ellipsis, so views use this inside fixed-width areas (and clip as a
+/// safety net). The estimate errs on the short side.
+pub fn ellipsize(s: &str, max_px: f32, size: f32, semibold: bool) -> String {
+    let scale = size * if semibold { 1.06 } else { 1.0 };
+    let width = |s: &str| s.chars().map(glyph_em).sum::<f32>() * scale;
+    if width(s) <= max_px {
+        return s.to_owned();
+    }
+    let ellipsis = glyph_em('\u{2026}').max(0.9) * scale;
+    let mut out = String::new();
+    let mut used = ellipsis;
+    for c in s.chars() {
+        used += glyph_em(c) * scale;
+        if used > max_px {
+            break;
+        }
+        out.push(c);
+    }
+    let out = out.trim_end().to_owned();
+    format!("{out}\u{2026}")
+}
+
+/// Placeholder for a closed layer.
+pub fn empty<'a>() -> El<'a> {
+    iced::widget::Space::new().into()
 }
 
 /// "Leaving Ferrocord" confirmation for masked links: shows the real URL.
@@ -434,5 +492,47 @@ mod tests {
     fn sizes() {
         assert_eq!(human_size(500), "500 bytes");
         assert_eq!(human_size(1_532_211), "1.46 MB");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn est(s: &str, size: f32, semibold: bool) -> f32 {
+        s.chars().map(glyph_em).sum::<f32>() * size * if semibold { 1.06 } else { 1.0 }
+    }
+
+    #[test]
+    fn short_text_is_left_alone() {
+        assert_eq!(ellipsize("Ferris", 120.0, 14.0, true), "Ferris");
+        assert_eq!(ellipsize("", 10.0, 14.0, false), "");
+    }
+
+    #[test]
+    fn long_text_gets_an_ellipsis_and_fits() {
+        for (s, w) in [
+            ("bronze age romantic", 88.0),
+            ("Do Not Disturb", 60.0),
+            ("an extremely long display name that goes on and on", 88.0),
+            ("日本語の非常に長い表示名です", 88.0),
+        ] {
+            let out = ellipsize(s, w, 14.0, true);
+            assert!(out.ends_with('\u{2026}'), "{out}");
+            assert!(out.chars().count() < s.chars().count());
+            assert!(est(&out, 14.0, true) <= w + 1.0, "{out} too wide for {w}");
+        }
+    }
+
+    #[test]
+    fn degenerate_widths_do_not_panic() {
+        assert_eq!(ellipsize("abc", 0.0, 14.0, false), "\u{2026}");
+        assert_eq!(ellipsize("abc", -5.0, 14.0, false), "\u{2026}");
+    }
+
+    #[test]
+    fn user_panel_text_area_never_goes_negative() {
+        assert!(sidebar::panel_text_width(240.0) > 60.0);
+        assert_eq!(sidebar::panel_text_width(10.0), 0.0);
     }
 }
