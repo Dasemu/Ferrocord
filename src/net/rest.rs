@@ -326,6 +326,27 @@ impl RestClient {
         Ok(wire.into_domain())
     }
 
+    /// `POST /channels/{id}/messages` with only a sticker (`sticker_ids`).
+    pub async fn send_sticker(
+        &self,
+        channel: ChannelId,
+        sticker: Snowflake,
+        nonce: &str,
+        reply: Option<ReplyTarget>,
+    ) -> Result<Message> {
+        let mut body = create_message_body(channel, "", nonce, reply);
+        body.sticker_ids = vec![sticker];
+        let v = self
+            .request(
+                Method::POST,
+                &format!("/channels/{channel}/messages"),
+                Some(serde_json::to_value(body)?),
+            )
+            .await?;
+        let wire: WireMessage = serde_json::from_value(v)?;
+        Ok(wire.into_domain())
+    }
+
     /// `PATCH /channels/{c}/messages/{m}` — edits the content of one of the
     /// user's own messages. Returns the updated message.
     pub async fn edit_message(
@@ -610,6 +631,7 @@ pub fn create_message_body<'a>(
             parse: vec!["users", "roles", "everyone"],
             replied_user: false,
         }),
+        sticker_ids: Vec::new(),
     }
 }
 

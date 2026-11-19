@@ -1,5 +1,5 @@
-//! Popups drawn over the main view: message context menu, emoji and GIF
-//! pickers, delete confirmation and the status menu.
+//! Popups drawn over the main view: message context menu, emoji, GIF and
+//! sticker pickers, delete confirmation and the status menu.
 
 use iced::widget::{
     Space, button, column, container, image, mouse_area, opaque, row, scrollable, text, text_input,
@@ -63,6 +63,21 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
             gif_picker(app, gp),
             at,
             Ui::CloseGifPicker,
+        ));
+    }
+    if let Some(sp) = &app.sticker_picker {
+        let size = Size::new(STICKER_PICKER_W, STICKER_PICKER_H);
+        // Above and to the left of the composer button, like the emoji one.
+        let at = input::clamp_popup(
+            Point::new(sp.at.x - size.width + 16.0, sp.at.y - size.height - 12.0),
+            size,
+            window,
+        );
+        out.push(popup_layer(
+            app,
+            sticker_picker(app, sp),
+            at,
+            Ui::CloseStickerPicker,
         ));
     }
     if let Some((c, m)) = app.pending_delete {
@@ -169,6 +184,75 @@ fn notice<'a>(p: theme::Palette, msg: &str) -> El<'a> {
     container(text(msg.to_owned()).size(14).color(p.text_muted))
         .padding(24)
         .center_x(Length::Fill)
+        .into()
+}
+
+const STICKER_PICKER_W: f32 = 424.0;
+const STICKER_PICKER_H: f32 = 440.0;
+const STICKER_COLUMNS: usize = 4;
+
+fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker) -> El<'a> {
+    let p = app.theme.palette;
+    let search = text_input("Find the perfect sticker", &sp.query)
+        .id(iced::widget::Id::new("sticker-search"))
+        .on_input(|s| Message::Ui(Ui::StickerQuery(s)))
+        .size(14)
+        .font(INTER)
+        .padding(Padding::from([8, 10]))
+        .style(theme::input(p, p.bg_app));
+    let current = app
+        .open_channel()
+        .and_then(|c| app.chat.channels.get(&c))
+        .and_then(|c| c.guild_id);
+    let sections = crate::app::stickers::sections(&app.chat.guilds, current, &sp.query);
+    // Each cell: the sticker plus 4px of button padding on both sides.
+    let cell = (STICKER_PICKER_W - 16.0 - 8.0) / STICKER_COLUMNS as f32 - 8.0;
+    let mut list = column![].spacing(8).padding(Padding::from([0, 8]));
+    for (g, stickers) in &sections {
+        list = list.push(
+            text(g.name.to_uppercase())
+                .size(12)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_muted),
+        );
+        let mut grid = column![].spacing(4);
+        for chunk in stickers.chunks(STICKER_COLUMNS) {
+            let mut line = row![].spacing(4);
+            for s in chunk {
+                line = line.push(
+                    button(super::chat::sticker(app, s, cell))
+                        .padding(4)
+                        .on_press(ui(Ui::PickSticker(s.id)))
+                        .style(theme::icon_button(p)),
+                );
+            }
+            grid = grid.push(line);
+        }
+        list = list.push(grid);
+    }
+    let body: El<'a> = if sections.is_empty() {
+        let msg = if sp.query.trim().is_empty() {
+            "None of your servers have stickers yet."
+        } else {
+            "No stickers found"
+        };
+        container(text(msg).size(14).color(p.text_muted))
+            .padding(24)
+            .center_x(Length::Fill)
+            .into()
+    } else {
+        scrollable(list)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(theme::thin_scrollbar(p, false))
+            .height(Length::Fill)
+            .into()
+    };
+    container(column![container(search).padding(8), body].spacing(4))
+        .width(STICKER_PICKER_W)
+        .height(STICKER_PICKER_H)
+        .style(theme::popup(p))
         .into()
 }
 

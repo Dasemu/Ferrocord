@@ -98,6 +98,7 @@ fn guild(id: GuildId, name: &str, roles: Vec<Role>) -> Guild {
         roles,
         owner_id: Some(user(3).id),
         emojis: vec![],
+        stickers: vec![],
         premium_tier: 0,
     }
 }
@@ -117,7 +118,26 @@ fn custom_emoji(mut g: Guild) -> Guild {
             available: true,
         },
     ];
+    g.stickers = mock_stickers();
     g
+}
+
+/// Stickers of the mock Rust server: three images (drawn by
+/// [`mock_emoji`], preloaded in mock mode) and a Lottie one, which is shown
+/// as a named placeholder.
+pub fn mock_stickers() -> Vec<Sticker> {
+    let s = |id: u64, name: &str, format: StickerFormat| Sticker {
+        id: Snowflake(id),
+        name: name.into(),
+        format,
+        available: true,
+    };
+    vec![
+        s(1101, "Happy Ferris", StickerFormat::Png),
+        s(1102, "Party Crab", StickerFormat::Png),
+        s(1103, "Shipped it", StickerFormat::Apng),
+        s(1104, "Wave", StickerFormat::Lottie),
+    ]
 }
 
 fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
@@ -339,6 +359,7 @@ pub fn text_message(channel: ChannelId, id: MessageId, author: User, content: &s
         edited: false,
         attachments: vec![],
         embeds: vec![],
+        stickers: vec![],
         mentions: vec![],
         mention_roles: vec![],
         mention_everyone: false,
@@ -723,7 +744,12 @@ fn showcase() -> Vec<Message> {
         }),
         ..Default::default()
     }];
-    vec![d, b, c, a, e, f]
+    // A sticker-only message, and one with a Lottie sticker (placeholder).
+    let mut g = gm(CH_SHOWCASE, 4, 0, 3, &[], "");
+    g.stickers = vec![mock_stickers()[1].clone()];
+    let mut h = gm(CH_SHOWCASE, 2, 0, 4, &[], "");
+    h.stickers = vec![mock_stickers()[3].clone()];
+    vec![d, b, c, a, e, f, g, h]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for

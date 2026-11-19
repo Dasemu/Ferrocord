@@ -263,6 +263,35 @@ impl App {
                 self.gif_picker = None;
                 Task::none()
             }
+            Ui::OpenStickerPicker => {
+                if self.open_chan().is_none() {
+                    return Task::none();
+                }
+                self.menu = None;
+                self.emoji_picker = None;
+                self.sticker_picker = Some(super::stickers::StickerPicker {
+                    at: input::cursor(),
+                    query: String::new(),
+                });
+                Task::batch([
+                    focus(iced::widget::Id::new("sticker-search")),
+                    self.request_images(),
+                ])
+            }
+            Ui::StickerQuery(q) => {
+                if let Some(p) = self.sticker_picker.as_mut() {
+                    p.query = q;
+                }
+                Task::none()
+            }
+            Ui::PickSticker(id) => {
+                self.sticker_picker = None;
+                self.send_sticker(id)
+            }
+            Ui::CloseStickerPicker => {
+                self.sticker_picker = None;
+                Task::none()
+            }
             Ui::PickFiles => {
                 if self.open_chan().is_none() {
                     return Task::none();
@@ -538,6 +567,7 @@ impl App {
     fn escape(&mut self) -> Task<Message> {
         if self.emoji_picker.take().is_some()
             || self.gif_picker.take().is_some()
+            || self.sticker_picker.take().is_some()
             || self.menu.take().is_some()
         {
             return Task::none();
@@ -619,6 +649,42 @@ impl App {
                 result: r.map_err(|e| e.user_message()),
             })
         })
+    }
+
+    // -- stickers -------------------------------------------------------------------
+
+    /// Sends a sticker-only message to the open channel (as a reply if one
+    /// is being composed). Errors show as a toast.
+    fn send_sticker(&mut self, id: Snowflake) -> Task<Message> {
+        let Some(c) = self.open_chan() else {
+            return Task::none();
+        };
+        let nonce = Snowflake::from_timestamp_ms(now_ms(), fastrand::u64(0..4096)).to_string();
+        let reply = self.reply_target(c);
+        self.reply = None;
+        if self.cfg.mock {
+            let (Some(me), Some(sticker)) = (
+                self.chat.me.clone(),
+                super::stickers::find(&self.chat.guilds, id).cloned(),
+            ) else {
+                return Task::none();
+            };
+            let mut m =
+                crate::mock::text_message(c, Snowflake::from_timestamp_ms(now_ms(), 0), me, "");
+            m.stickers = vec![sticker];
+            return Task::done(Message::Net(crate::net::Event::MessageCreate(Box::new(m))));
+        }
+        let rest = self.rest.clone();
+        Task::perform(
+            async move { rest.send_sticker(c, id, &nonce, reply).await },
+            |r| match r {
+                Ok(m) => Message::Net(crate::net::Event::MessageCreate(Box::new(m))),
+                Err(e) => Message::Done(Done::ActionFailed(format!(
+                    "Could not send the sticker: {}",
+                    e.user_message()
+                ))),
+            },
+        )
     }
 
     fn pick_emoji(&mut self, e: Emoji) -> Task<Message> {

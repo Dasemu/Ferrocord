@@ -282,6 +282,7 @@ mod tests {
             }],
             owner_id: None,
             emojis: vec![],
+            stickers: vec![],
             premium_tier: 0,
         };
         assert_eq!(MemberListState::group_label("online", None), "Online");

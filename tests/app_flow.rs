@@ -798,3 +798,28 @@ fn gif_picker_opens_searches_and_sends() {
     let last_msg = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
     assert_eq!(last_msg.content, url);
 }
+
+#[test]
+fn sticker_picker_sends_a_sticker() {
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenStickerPicker));
+    assert!(a.sticker_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::StickerQuery("party".into())));
+    assert_eq!(a.sticker_picker.as_ref().unwrap().query, "party");
+    let party = mock::mock_stickers()[1].clone();
+    let _ = a.update(Message::Ui(Ui::PickSticker(party.id)));
+    assert!(a.sticker_picker.is_none());
+    // In mock mode the echo arrives as a task; apply it like the runtime would.
+    let mut echo = mock::text_message(
+        mock::CH_GENERAL,
+        ferrocord::net::model::Snowflake::from_timestamp_ms(ferrocord::app::now_ms() + 60_000, 0),
+        mock::user(1),
+        "",
+    );
+    echo.stickers = vec![party.clone()];
+    let _ = a.update(Message::Net(ferrocord::net::Event::MessageCreate(
+        Box::new(echo),
+    )));
+    let last = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
+    assert_eq!(last.stickers, vec![party]);
+}

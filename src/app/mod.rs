@@ -14,6 +14,7 @@ pub mod message;
 pub mod panel;
 pub mod search;
 pub mod state;
+pub mod stickers;
 pub mod upload;
 pub mod window;
 
@@ -103,6 +104,7 @@ pub struct App {
     pub menu: Option<MessageMenu>,
     pub emoji_picker: Option<OpenPicker>,
     pub gif_picker: Option<gifs::GifPicker>,
+    pub sticker_picker: Option<stickers::StickerPicker>,
     pub draft: Vec<upload::DraftAttachment>,
     pub uploads: Vec<upload::ActiveUpload>,
     upload_handles: HashMap<u64, iced::task::Handle>,
@@ -201,6 +203,7 @@ impl App {
             menu: None,
             emoji_picker: None,
             gif_picker: None,
+            sticker_picker: None,
             draft: Vec::new(),
             uploads: Vec::new(),
             upload_handles: HashMap::new(),
@@ -328,6 +331,22 @@ impl App {
                         (side * side * 4) as usize,
                     );
                 }
+            }
+        }
+        // Mock sticker images, under the CDN URLs the views ask for.
+        for (st, rgb) in mock::mock_stickers().into_iter().zip([
+            [255u8, 140, 60],
+            [230, 70, 70],
+            [90, 200, 120],
+            [0, 0, 0],
+        ]) {
+            if let Some(url) = st.image_url(&self.cfg.cdn_url) {
+                let (n, px) = mock::mock_emoji(rgb);
+                self.images.insert(
+                    url,
+                    iced::widget::image::Handle::from_rgba(n, n, px),
+                    (n * n * 4) as usize,
+                );
             }
         }
         for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
@@ -1373,6 +1392,11 @@ impl App {
                 for a in m.attachments.iter().filter(|a| a.is_image()) {
                     urls.push(attachment_preview_url(a));
                 }
+                urls.extend(
+                    m.stickers
+                        .iter()
+                        .filter_map(|s| s.image_url(&self.cfg.cdn_url)),
+                );
                 if let Some(a) = m.referenced.as_ref().and_then(|r| r.author.as_ref())
                     && let Some(u) = self.rest.avatar_url(a, 80)
                 {
@@ -1414,6 +1438,15 @@ impl App {
         }
         if let Some(p) = &self.gif_picker {
             urls.extend(p.results.iter().map(|g| g.preview.clone()));
+        }
+        if self.sticker_picker.is_some() {
+            for g in &self.chat.guilds {
+                urls.extend(
+                    g.stickers
+                        .iter()
+                        .filter_map(|s| s.image_url(&self.cfg.cdn_url)),
+                );
+            }
         }
         for m in self.search.results.iter().chain(&self.panel.messages) {
             if let Some(u) = self.rest.avatar_url(&m.author, 80) {

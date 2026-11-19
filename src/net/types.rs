@@ -299,7 +299,36 @@ pub struct WireGuild {
     #[serde(default)]
     pub emojis: Vec<CustomEmoji>,
     #[serde(default)]
+    pub stickers: Vec<WireSticker>,
+    #[serde(default)]
     pub premium_tier: u8,
+}
+
+/// A sticker as sent in guild objects and `sticker_items` of messages.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireSticker {
+    pub id: Snowflake,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub format_type: u8,
+    #[serde(default = "default_true")]
+    pub available: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl From<WireSticker> for Sticker {
+    fn from(w: WireSticker) -> Self {
+        Sticker {
+            id: w.id,
+            name: w.name,
+            format: StickerFormat::from_wire(w.format_type),
+            available: w.available,
+        }
+    }
 }
 
 impl WireGuild {
@@ -322,6 +351,7 @@ impl WireGuild {
                 .collect(),
             owner_id: self.owner_id.or(props.owner_id),
             emojis: self.emojis,
+            stickers: self.stickers.into_iter().map(Into::into).collect(),
             premium_tier,
         };
         let gid = guild.id;
@@ -549,6 +579,8 @@ pub struct WireMessage {
     #[serde(default)]
     pub embeds: Option<Vec<WireEmbed>>,
     #[serde(default)]
+    pub sticker_items: Option<Vec<WireSticker>>,
+    #[serde(default)]
     pub mentions: Vec<WireUser>,
     #[serde(default)]
     pub mention_roles: Vec<Snowflake>,
@@ -614,6 +646,12 @@ impl WireMessage {
                 .collect(),
             embeds: self
                 .embeds
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            stickers: self
+                .sticker_items
                 .unwrap_or_default()
                 .into_iter()
                 .map(Into::into)
@@ -973,6 +1011,13 @@ pub struct WirePresenceUpdate {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireStickersUpdate {
+    pub guild_id: Snowflake,
+    #[serde(default)]
+    pub stickers: Vec<WireSticker>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct WireEmojisUpdate {
     pub guild_id: Snowflake,
     #[serde(default)]
@@ -1255,6 +1300,13 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             let u: WireMemberListUpdate = serde_json::from_value(d)?;
             Event::MemberList(Box::new(u.into_domain()))
         }
+        "GUILD_STICKERS_UPDATE" => {
+            let e: WireStickersUpdate = serde_json::from_value(d)?;
+            Event::GuildStickers {
+                guild_id: e.guild_id,
+                stickers: e.stickers.into_iter().map(Into::into).collect(),
+            }
+        }
         "GUILD_EMOJIS_UPDATE" => {
             let e: WireEmojisUpdate = serde_json::from_value(d)?;
             Event::GuildEmojis {
@@ -1296,6 +1348,8 @@ pub struct CreateMessage<'a> {
     /// client.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_mentions: Option<AllowedMentions>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sticker_ids: Vec<Snowflake>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

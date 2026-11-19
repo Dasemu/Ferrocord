@@ -340,6 +340,9 @@ fn message<'a>(
     for a in &m.attachments {
         body = body.push(attachment(app, a));
     }
+    for s in &m.stickers {
+        body = body.push(sticker(app, s, STICKER_SIZE));
+    }
     for e in &m.embeds {
         body = body.push(match e.bare_media() {
             Some(media) => image_box(app, &media.url, media.width, media.height),
@@ -729,6 +732,43 @@ fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32
     }
 }
 
+/// Side of a sticker in a message (the official client's size).
+const STICKER_SIZE: f32 = 160.0;
+
+/// A sticker image, or a box with its name while loading and for Lottie
+/// stickers (vector animations, not rendered).
+pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a> {
+    let p = app.theme.palette;
+    if let Some(handle) = s
+        .image_url(&app.cfg.cdn_url)
+        .and_then(|url| app.image(&url))
+    {
+        return iced::widget::image(handle.clone())
+            .width(size)
+            .height(size)
+            .content_fit(iced::ContentFit::Contain)
+            .into();
+    }
+    container(
+        column![
+            icon(Icon::Sticker, size / 4.0, p.text_muted),
+            text(s.name.clone())
+                .size(12)
+                .color(p.text_muted)
+                .align_x(Alignment::Center),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center),
+    )
+    .width(size)
+    .height(size)
+    .padding(8)
+    .center_x(size)
+    .center_y(size)
+    .style(theme::rounded_bg(p.embed_bg, 8.0))
+    .into()
+}
+
 fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     let p = app.theme.palette;
     if a.is_image() {
@@ -940,7 +980,7 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             input,
             tool(Icon::Gift, None),
             tool(Icon::Gif, Some(Ui::OpenGifPicker)),
-            tool(Icon::Sticker, None),
+            tool(Icon::Sticker, Some(Ui::OpenStickerPicker)),
             tool(
                 Icon::Smile,
                 Some(Ui::OpenEmojiPicker(PickerTarget::Composer))

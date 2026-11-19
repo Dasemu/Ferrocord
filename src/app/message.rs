@@ -81,6 +81,12 @@ pub enum Ui {
     /// Sends the GIF with this Tenor URL to the open channel.
     PickGif(String),
     CloseGifPicker,
+    /// Composer sticker button.
+    OpenStickerPicker,
+    StickerQuery(String),
+    /// Sends this sticker to the open channel.
+    PickSticker(Snowflake),
+    CloseStickerPicker,
     // -- attachments
     PickFiles,
     FileDropped(PathBuf),

@@ -395,6 +395,11 @@ impl ChatState {
                     g.emojis.clone_from(emojis);
                 }
             }
+            Event::GuildStickers { guild_id, stickers } => {
+                if let Some(g) = self.guilds.iter_mut().find(|g| g.id == *guild_id) {
+                    g.stickers.clone_from(stickers);
+                }
+            }
             Event::Connection(_) | Event::Resumed | Event::AuthFailed | Event::Fatal(_) => {}
         }
         fx
@@ -1080,6 +1085,7 @@ impl ChatState {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],
             mention_everyone: false,
@@ -1600,6 +1606,7 @@ mod tests {
             roles: vec![],
             owner_id: None,
             emojis: vec![],
+            stickers: vec![],
             premium_tier: 0,
         };
         let ch = Channel {

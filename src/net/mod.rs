@@ -71,6 +71,10 @@ pub enum Event {
         guild_id: GuildId,
         emojis: Vec<CustomEmoji>,
     },
+    GuildStickers {
+        guild_id: GuildId,
+        stickers: Vec<Sticker>,
+    },
     /// The token was rejected (close code 4004). The session must be cleared.
     AuthFailed,
     /// Unrecoverable gateway error (bad intents, invalid API version, ...).

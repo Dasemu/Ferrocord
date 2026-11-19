@@ -206,6 +206,9 @@ pub struct Guild {
     /// Custom emoji of the server (for the picker).
     #[serde(default)]
     pub emojis: Vec<CustomEmoji>,
+    /// Stickers of the server (for the sticker picker).
+    #[serde(default)]
+    pub stickers: Vec<Sticker>,
     /// Boost tier (0-3); raises the upload limit.
     #[serde(default)]
     pub premium_tier: u8,
@@ -237,6 +240,51 @@ pub struct CustomEmoji {
 
 fn default_true() -> bool {
     true
+}
+
+/// Image format of a sticker (`format_type` on the wire).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StickerFormat {
+    #[default]
+    Png,
+    Apng,
+    /// Vector animation: not rendered, shown as a named placeholder.
+    Lottie,
+    Gif,
+}
+
+impl StickerFormat {
+    pub fn from_wire(n: u8) -> Self {
+        match n {
+            2 => Self::Apng,
+            3 => Self::Lottie,
+            4 => Self::Gif,
+            _ => Self::Png,
+        }
+    }
+}
+
+/// A sticker: one of a server's, or one attached to a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sticker {
+    pub id: Snowflake,
+    pub name: String,
+    pub format: StickerFormat,
+    #[serde(default = "default_true")]
+    pub available: bool,
+}
+
+impl Sticker {
+    /// CDN image of the sticker, `None` for Lottie stickers (not rendered).
+    /// APNG stickers are served as PNG and show their first frame.
+    pub fn image_url(&self, cdn: &str) -> Option<String> {
+        let ext = match self.format {
+            StickerFormat::Lottie => return None,
+            StickerFormat::Gif => "gif",
+            StickerFormat::Png | StickerFormat::Apng => "png",
+        };
+        Some(format!("{cdn}/stickers/{}.{ext}?size=160", self.id))
+    }
 }
 
 /// An emoji used in a reaction: Unicode (`id == None`, `name` is the
@@ -509,6 +557,8 @@ pub struct Message {
     pub edited: bool,
     pub attachments: Vec<Attachment>,
     pub embeds: Vec<Embed>,
+    #[serde(default)]
+    pub stickers: Vec<Sticker>,
     pub mentions: Vec<UserId>,
     pub mention_roles: Vec<RoleId>,
     pub mention_everyone: bool,
@@ -849,6 +899,7 @@ mod tests {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],
             mention_everyone: false,
@@ -875,6 +926,7 @@ mod tests {
             roles: vec![],
             owner_id: None,
             emojis: vec![],
+            stickers: vec![],
             premium_tier: 0,
         };
         assert_eq!(g.acronym(), "RPL");

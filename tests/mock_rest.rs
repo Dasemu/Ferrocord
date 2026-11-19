@@ -630,3 +630,30 @@ async fn gifs_trending_and_search() {
         rec[1].path
     );
 }
+
+#[tokio::test]
+async fn send_sticker_posts_sticker_ids() {
+    let server = http(Arc::new(|req, _| {
+        if req.method == "POST" && req.path == "/channels/10/messages" {
+            let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+            let mut m = msg(77);
+            m["content"] = json!("");
+            m["sticker_items"] =
+                json!([{"id": body["sticker_ids"][0], "name": "Wave", "format_type": 1}]);
+            Response::json(200, m)
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let m = rest
+        .send_sticker(Snowflake(10), Snowflake(555), "n1", None)
+        .await
+        .unwrap();
+    assert_eq!(m.stickers[0].id, Snowflake(555));
+    let body: serde_json::Value = serde_json::from_str(&server.recorded()[0].body).unwrap();
+    assert_eq!(body["sticker_ids"], json!(["555"]));
+    assert_eq!(body["content"], json!(""));
+    assert_eq!(body["nonce"], json!("n1"));
+}
