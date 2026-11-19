@@ -1244,6 +1244,24 @@ pub fn preview_key(a: &Attachment) -> String {
     attachment_preview_url(a)
 }
 
+/// Notification servers (KDE, GNOME) interpret a subset of HTML in the
+/// summary/body. Message text is untrusted, so `&`, `<`, `>` (and quotes)
+/// are escaped to keep it literal.
+pub fn escape_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn notify(n: state::Notification, mock: bool) -> Task<Message> {
     if mock {
         return Task::none();
@@ -1253,8 +1271,8 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
             let _ = tokio::task::spawn_blocking(move || {
                 let r = notify_rust::Notification::new()
                     .appname(crate::config::APP_NAME)
-                    .summary(&n.title)
-                    .body(&n.body)
+                    .summary(&escape_markup(&n.title))
+                    .body(&escape_markup(&n.body))
                     .icon("dev.ferro.ferrocord")
                     .hint(notify_rust::Hint::DesktopEntry(
                         crate::config::APP_ID.into(),
@@ -1293,4 +1311,18 @@ fn save_png(path: &std::path::Path, shot: &iced::window::Screenshot) -> crate::e
     }
     img.save_with_format(path, image::ImageFormat::Png)
         .map_err(|e| crate::error::Error::Io(std::io::Error::other(e.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_text_is_escaped() {
+        assert_eq!(
+            escape_markup(r#"<b>hi</b> & <a href="x">'y'</a>"#),
+            "&lt;b&gt;hi&lt;/b&gt; &amp; &lt;a href=&quot;x&quot;&gt;&#39;y&#39;&lt;/a&gt;"
+        );
+        assert_eq!(escape_markup("plain 🦀"), "plain 🦀");
+    }
 }
