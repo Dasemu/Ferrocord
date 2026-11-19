@@ -659,7 +659,21 @@ fn showcase() -> Vec<Message> {
         &[],
         "that looks amazing <:party:1002> <:ferris:1001>",
     );
-    vec![d, b, c, a, e]
+    // A GIF link: shown as the bare GIF, without the URL or an embed card.
+    let gif_url = "https://tenor.example/view/celebrate-123";
+    let mut f = gm(CH_SHOWCASE, 3, 0, 2, &[], gif_url);
+    f.embeds = vec![Embed {
+        kind: Some("gifv".into()),
+        url: Some(gif_url.into()),
+        provider_name: Some("Tenor".into()),
+        thumbnail: Some(EmbedMedia {
+            url: "mock://gif/1".into(),
+            width: Some(220),
+            height: Some(165),
+        }),
+        ..Default::default()
+    }];
+    vec![d, b, c, a, e, f]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for

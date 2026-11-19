@@ -476,6 +476,18 @@ pub struct Embed {
     pub thumbnail: Option<EmbedMedia>,
 }
 
+impl Embed {
+    /// Media to show on its own, without the embed card: GIF links (`gifv`,
+    /// e.g. Tenor/Giphy) and direct image links (`image`), as the official
+    /// client does. Uses the image, falling back to the thumbnail.
+    pub fn bare_media(&self) -> Option<&EmbedMedia> {
+        match self.kind.as_deref() {
+            Some("gifv" | "image") => self.image.as_ref().or(self.thumbnail.as_ref()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -523,6 +535,17 @@ impl fmt::Debug for Message {
 impl Message {
     pub fn timestamp_ms(&self) -> u64 {
         self.id.timestamp_ms()
+    }
+
+    /// True when the text is nothing but the link of its GIF embed: the
+    /// official client then shows only the GIF, not the URL.
+    pub fn content_is_gif_link(&self) -> bool {
+        let c = self.content.trim();
+        !c.is_empty()
+            && self
+                .embeds
+                .iter()
+                .any(|e| e.kind.as_deref() == Some("gifv") && e.url.as_deref() == Some(c))
     }
 
     /// Applies a MESSAGE_UPDATE patch (only the fields that were sent).
@@ -693,6 +716,56 @@ pub struct SearchPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gif_embed(url: &str) -> Embed {
+        Embed {
+            kind: Some("gifv".into()),
+            url: Some(url.into()),
+            provider_name: Some("Tenor".into()),
+            thumbnail: Some(EmbedMedia {
+                url: "https://media.example/thumb.png".into(),
+                width: Some(220),
+                height: Some(165),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gif_and_image_embeds_render_bare() {
+        let gif = gif_embed("https://tenor.com/view/cat-123");
+        assert_eq!(
+            gif.bare_media().map(|m| m.url.as_str()),
+            Some("https://media.example/thumb.png")
+        );
+        let rich = Embed {
+            kind: Some("rich".into()),
+            ..gif.clone()
+        };
+        assert!(rich.bare_media().is_none());
+        let no_media = Embed {
+            thumbnail: None,
+            ..gif
+        };
+        assert!(no_media.bare_media().is_none());
+    }
+
+    #[test]
+    fn gif_link_content_is_hidden_only_when_alone() {
+        let url = "https://tenor.com/view/cat-123";
+        let mut m = crate::mock::text_message(
+            Snowflake(1),
+            Snowflake(2),
+            crate::mock::user(2),
+            &format!(" {url} "),
+        );
+        m.embeds = vec![gif_embed(url)];
+        assert!(m.content_is_gif_link());
+        m.content = format!("look {url}");
+        assert!(!m.content_is_gif_link());
+        m.content = String::new();
+        assert!(!m.content_is_gif_link());
+    }
 
     #[test]
     fn emoji_identity_and_segments() {
