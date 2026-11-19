@@ -1,0 +1,148 @@
+{
+  "guild_id": "2000000000000000001",
+  "id": "everyone",
+  "member_count": 4,
+  "online_count": 2,
+  "groups": [
+    {
+      "id": "3000000000000000001",
+      "count": 1
+    },
+    {
+      "id": "online",
+      "count": 1
+    },
+    {
+      "id": "offline",
+      "count": 2
+    }
+  ],
+  "ops": [
+    {
+      "op": "SYNC",
+      "range": [
+        0,
+        99
+      ],
+      "items": [
+        {
+          "group": {
+            "id": "3000000000000000001",
+            "count": 1
+          }
+        },
+        {
+          "member": {
+            "user": {
+              "id": "1000000000000000002",
+              "username": "alice.dev",
+              "global_name": "Alice.Dev",
+              "avatar": null
+            },
+            "roles": [
+              "3000000000000000001"
+            ],
+            "nick": "Al",
+            "presence": {
+              "status": "online",
+              "activities": []
+            }
+          }
+        },
+        {
+          "group": {
+            "id": "online",
+            "count": 1
+          }
+        },
+        {
+          "member": {
+            "user": {
+              "id": "1000000000000000003",
+              "username": "bob",
+              "global_name": "Bob",
+              "avatar": null
+            },
+            "roles": [],
+            "presence": {
+              "status": "idle"
+            }
+          }
+        },
+        {
+          "group": {
+            "id": "offline",
+            "count": 2
+          }
+        },
+        {
+          "member": {
+            "user": {
+              "id": "1000000000000000004",
+              "username": "carol",
+              "global_name": "Carol",
+              "avatar": null
+            },
+            "roles": [],
+            "presence": {
+              "status": "offline"
+            }
+          }
+        },
+        {
+          "weird": true
+        }
+      ]
+    },
+    {
+      "op": "INSERT",
+      "index": 4,
+      "item": {
+        "member": {
+          "user": {
+            "id": "1000000000000000005",
+            "username": "dave",
+            "global_name": "Dave",
+            "avatar": null
+          },
+          "roles": [],
+          "presence": {
+            "status": "dnd"
+          }
+        }
+      }
+    },
+    {
+      "op": "UPDATE",
+      "index": 1,
+      "item": {
+        "member": {
+          "user": {
+            "id": "1000000000000000002",
+            "username": "alice.dev",
+            "global_name": "Alice.Dev",
+            "avatar": null
+          },
+          "roles": [],
+          "presence": {
+            "status": "idle"
+          }
+        }
+      }
+    },
+    {
+      "op": "DELETE",
+      "index": 4
+    },
+    {
+      "op": "INVALIDATE",
+      "range": [
+        0,
+        99
+      ]
+    },
+    {
+      "op": "BOGUS"
+    }
+  ]
+}

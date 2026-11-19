@@ -26,6 +26,8 @@ pub enum OpCode {
     InvalidSession = 9,
     Hello = 10,
     HeartbeatAck = 11,
+    /// Guild subscriptions (member list ranges, typing, activities).
+    GuildSubscriptions = 14,
 }
 
 impl OpCode {
@@ -42,6 +44,7 @@ impl OpCode {
             9 => Self::InvalidSession,
             10 => Self::Hello,
             11 => Self::HeartbeatAck,
+            14 => Self::GuildSubscriptions,
             _ => return None,
         })
     }
@@ -100,19 +103,54 @@ impl Default for ClientProperties {
 /// copes with both in case the server sends them anyway.
 pub const CAPABILITIES: u64 = 0;
 
-pub fn identify_payload(token: &str, props: &ClientProperties) -> GatewayPayload {
+pub fn identify_payload(token: &str, props: &ClientProperties, status: Presence) -> GatewayPayload {
     GatewayPayload::new(
         OpCode::Identify,
         serde_json::json!({
             "token": token,
             "capabilities": CAPABILITIES,
             "properties": props,
-            "presence": { "status": "online", "since": 0, "activities": [], "afk": false },
+            "presence": { "status": status.wire(), "since": 0, "activities": [], "afk": false },
             "compress": false,
             "client_state": { "guild_versions": {} },
             // Transport compression (zlib-stream) is negotiated in the URL;
             // per-payload compression stays off.
             "large_threshold": 100,
+        }),
+    )
+}
+
+/// Op 3: change the session's own status.
+pub fn presence_payload(status: Presence) -> GatewayPayload {
+    GatewayPayload::new(
+        OpCode::PresenceUpdate,
+        serde_json::json!({
+            "status": status.wire(),
+            "since": 0,
+            "activities": [],
+            "afk": false,
+        }),
+    )
+}
+
+/// Op 14: subscribe to the member list of `guild` for the given inclusive
+/// index ranges of `channel`, like the official client does when the member
+/// sidebar is open.
+pub fn member_subscribe_payload(
+    guild: GuildId,
+    channel: ChannelId,
+    ranges: &[(usize, usize)],
+) -> GatewayPayload {
+    let ranges: Vec<[usize; 2]> = ranges.iter().map(|(a, b)| [*a, *b]).collect();
+    GatewayPayload::new(
+        OpCode::GuildSubscriptions,
+        serde_json::json!({
+            "guild_id": guild.to_string(),
+            "typing": true,
+            "threads": true,
+            "activities": false,
+            "members": [],
+            "channels": { channel.to_string(): ranges },
         }),
     )
 }
@@ -146,6 +184,9 @@ pub struct WireUser {
     pub avatar: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    /// Only present on the current user (READY).
+    #[serde(default)]
+    pub premium_type: u8,
 }
 
 impl From<WireUser> for User {
@@ -255,11 +296,16 @@ pub struct WireGuild {
     pub threads: Vec<WireChannel>,
     #[serde(default)]
     pub roles: Vec<WireRole>,
+    #[serde(default)]
+    pub emojis: Vec<CustomEmoji>,
+    #[serde(default)]
+    pub premium_tier: u8,
 }
 
 impl WireGuild {
     pub fn into_domain(self) -> (Guild, Vec<Channel>) {
         let props = self.properties.unwrap_or_default();
+        let premium_tier = self.premium_tier;
         let guild = Guild {
             id: self.id,
             name: self.name.or(props.name).unwrap_or_default(),
@@ -275,6 +321,8 @@ impl WireGuild {
                 })
                 .collect(),
             owner_id: self.owner_id.or(props.owner_id),
+            emojis: self.emojis,
+            premium_tier,
         };
         let gid = guild.id;
         let channels = self
@@ -434,6 +482,45 @@ pub struct WireMessageRef {
     pub message_id: Option<Snowflake>,
 }
 
+fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(d)?))
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireEmoji {
+    #[serde(default)]
+    pub id: Option<Snowflake>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub animated: bool,
+}
+
+impl From<WireEmoji> for Emoji {
+    fn from(w: WireEmoji) -> Self {
+        Emoji {
+            id: w.id,
+            // Deleted custom emoji have a null name.
+            name: w.name.unwrap_or_default(),
+            animated: w.animated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireReaction {
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub me: bool,
+    #[serde(default)]
+    pub emoji: WireEmoji,
+}
+
 /// Nonces can be strings or integers on the wire.
 fn nonce_to_string(v: &Value) -> Option<String> {
     match v {
@@ -469,6 +556,11 @@ pub struct WireMessage {
     pub mention_everyone: bool,
     #[serde(default)]
     pub message_reference: Option<WireMessageRef>,
+    /// `Some(None)` = explicitly null (original deleted); `None` = absent.
+    #[serde(default, deserialize_with = "double_option")]
+    pub referenced_message: Option<Option<Box<WireMessage>>>,
+    #[serde(default)]
+    pub reactions: Vec<WireReaction>,
     #[serde(default)]
     pub nonce: Value,
     #[serde(rename = "type", default)]
@@ -477,6 +569,30 @@ pub struct WireMessage {
 
 impl WireMessage {
     pub fn into_domain(self) -> Message {
+        let reply_to = self.message_reference.as_ref().and_then(|r| r.message_id);
+        // Only real replies (type 19) get a header; other types can carry a
+        // reference too (crossposts, pins).
+        let referenced = if self.kind == 19 {
+            match self.referenced_message {
+                Some(Some(r)) => {
+                    let r = r.into_domain();
+                    Some(Box::new(ReplyPreview::from_message(&r)))
+                }
+                // Explicit null or absent: the original is gone or unknown.
+                _ => Some(Box::new(ReplyPreview::deleted(reply_to))),
+            }
+        } else {
+            None
+        };
+        let reactions = self
+            .reactions
+            .into_iter()
+            .map(|r| Reaction {
+                emoji: r.emoji.into(),
+                count: r.count,
+                me: r.me,
+            })
+            .collect();
         Message {
             id: self.id,
             channel_id: self.channel_id,
@@ -506,7 +622,9 @@ impl WireMessage {
             mention_roles: self.mention_roles,
             mention_everyone: self.mention_everyone,
             author_roles: self.member.map(|m| m.roles).unwrap_or_default(),
-            reply_to: self.message_reference.and_then(|r| r.message_id),
+            reply_to,
+            referenced,
+            reactions,
             nonce: nonce_to_string(&self.nonce),
             kind: self.kind,
             pending: false,
@@ -611,7 +729,31 @@ pub struct WireGuildFolder {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct WirePresence {
+    #[serde(default)]
+    pub user: Option<WireIdOnlyOpt>,
+    #[serde(default)]
+    pub user_id: Option<Snowflake>,
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireIdOnlyOpt {
+    #[serde(default)]
+    pub id: Option<Snowflake>,
+}
+
+impl WirePresence {
+    fn user_id(&self) -> Option<UserId> {
+        self.user_id.or(self.user.as_ref().and_then(|u| u.id))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct WireUserSettings {
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub guild_positions: Vec<Snowflake>,
     #[serde(default)]
@@ -638,6 +780,9 @@ pub struct WireReady {
     pub user_guild_settings: WireGuildSettings,
     #[serde(default)]
     pub user_settings: Option<WireUserSettings>,
+    /// Friends' presences (user accounts).
+    #[serde(default)]
+    pub presences: Vec<WirePresence>,
     /// One array per guild (same order as `guilds`) with the current user's
     /// member object.
     #[serde(default)]
@@ -646,7 +791,18 @@ pub struct WireReady {
 
 impl WireReady {
     pub fn into_domain(self) -> ReadyData {
+        let premium_type = self.user.premium_type;
         let me: User = self.user.into();
+        let presences: Vec<(UserId, Presence)> = self
+            .presences
+            .iter()
+            .filter_map(|p| Some((p.user_id()?, Presence::from_wire(&p.status))))
+            .collect();
+        let my_status = self
+            .user_settings
+            .as_ref()
+            .and_then(|s| s.status.as_deref())
+            .map(Presence::from_wire);
         let mut users: Vec<User> = self.users.into_iter().map(User::from).collect();
         let mut channels = Vec::new();
         let mut guilds = Vec::new();
@@ -746,6 +902,9 @@ impl WireReady {
             muted_channels,
             suppress_everyone,
             suppress_roles,
+            presences,
+            my_status,
+            premium_type,
         }
     }
 }
@@ -793,6 +952,164 @@ pub struct WireReadySupplemental {
     pub merged_members: Vec<Vec<WireMember>>,
     #[serde(default)]
     pub guilds: Vec<WireIdOnly>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireReactionEvent {
+    pub channel_id: Snowflake,
+    pub message_id: Snowflake,
+    #[serde(default)]
+    pub user_id: Option<Snowflake>,
+    #[serde(default)]
+    pub emoji: WireEmoji,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WirePresenceUpdate {
+    #[serde(default)]
+    pub user: Option<WireIdOnlyOpt>,
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireEmojisUpdate {
+    pub guild_id: Snowflake,
+    #[serde(default)]
+    pub emojis: Vec<CustomEmoji>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireListGroup {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireListMember {
+    #[serde(default)]
+    pub user: Option<WireUser>,
+    #[serde(default)]
+    pub nick: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<Snowflake>,
+    #[serde(default)]
+    pub presence: Option<WirePresenceUpdate>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireListItem {
+    #[serde(default)]
+    pub group: Option<WireListGroup>,
+    #[serde(default)]
+    pub member: Option<WireListMember>,
+}
+
+impl WireListItem {
+    /// Items without a recognisable shape are dropped (`None`).
+    fn into_domain(self) -> Option<MemberItem> {
+        if let Some(g) = self.group {
+            return Some(MemberItem::Group {
+                id: g.id,
+                count: g.count,
+            });
+        }
+        let m = self.member?;
+        let user: User = m.user?.into();
+        Some(MemberItem::Member(Box::new(MemberEntry {
+            user,
+            nick: m.nick,
+            roles: m.roles,
+            presence: m
+                .presence
+                .map(|p| Presence::from_wire(&p.status))
+                .unwrap_or(Presence::Offline),
+        })))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireListOp {
+    #[serde(default)]
+    pub op: String,
+    #[serde(default)]
+    pub range: Option<[usize; 2]>,
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub items: Vec<WireListItem>,
+    #[serde(default)]
+    pub item: Option<WireListItem>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireMemberListUpdate {
+    pub guild_id: Snowflake,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub member_count: u32,
+    #[serde(default)]
+    pub online_count: u32,
+    #[serde(default)]
+    pub groups: Vec<WireListGroup>,
+    #[serde(default)]
+    pub ops: Vec<WireListOp>,
+}
+
+/// Hard cap on operations / items processed from one update.
+const MAX_LIST_OPS: usize = 256;
+const MAX_LIST_ITEMS: usize = 1000;
+
+impl WireMemberListUpdate {
+    pub fn into_domain(self) -> MemberListUpdate {
+        let mut ops = Vec::new();
+        for op in self.ops.into_iter().take(MAX_LIST_OPS) {
+            match (op.op.as_str(), op.range, op.index) {
+                ("SYNC", Some([a, _]), _) => ops.push(MemberOp::Sync {
+                    start: a,
+                    // Unknown items keep their slot as an empty group so
+                    // later indexes stay aligned.
+                    items: op
+                        .items
+                        .into_iter()
+                        .take(MAX_LIST_ITEMS)
+                        .map(|i| {
+                            i.into_domain().unwrap_or(MemberItem::Group {
+                                id: String::new(),
+                                count: 0,
+                            })
+                        })
+                        .collect(),
+                }),
+                ("INSERT", _, Some(index)) => {
+                    if let Some(item) = op.item.and_then(WireListItem::into_domain) {
+                        ops.push(MemberOp::Insert { index, item });
+                    }
+                }
+                ("UPDATE", _, Some(index)) => {
+                    if let Some(item) = op.item.and_then(WireListItem::into_domain) {
+                        ops.push(MemberOp::Update { index, item });
+                    }
+                }
+                ("DELETE", _, Some(index)) => ops.push(MemberOp::Delete { index }),
+                ("INVALIDATE", Some([a, b]), _) => {
+                    ops.push(MemberOp::Invalidate { start: a, end: b })
+                }
+                _ => {}
+            }
+        }
+        MemberListUpdate {
+            guild_id: self.guild_id,
+            list_id: self.id,
+            member_count: self.member_count,
+            online_count: self.online_count,
+            groups: self.groups.into_iter().map(|g| (g.id, g.count)).collect(),
+            ops,
+        }
+    }
 }
 
 /// Converts a DISPATCH (`op 0`) frame into a client event.
@@ -887,6 +1204,64 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             let g: WireIdOnly = serde_json::from_value(d)?;
             Event::GuildDelete(g.id)
         }
+        "MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" => {
+            let r: WireReactionEvent = serde_json::from_value(d)?;
+            let Some(user_id) = r.user_id else {
+                return Ok(None);
+            };
+            let (channel_id, message_id, emoji) = (r.channel_id, r.message_id, r.emoji.into());
+            Event::Reaction(if t == "MESSAGE_REACTION_ADD" {
+                ReactionEvent::Add {
+                    channel_id,
+                    message_id,
+                    user_id,
+                    emoji,
+                }
+            } else {
+                ReactionEvent::Remove {
+                    channel_id,
+                    message_id,
+                    user_id,
+                    emoji,
+                }
+            })
+        }
+        "MESSAGE_REACTION_REMOVE_ALL" => {
+            let r: WireReactionEvent = serde_json::from_value(d)?;
+            Event::Reaction(ReactionEvent::RemoveAll {
+                channel_id: r.channel_id,
+                message_id: r.message_id,
+            })
+        }
+        "MESSAGE_REACTION_REMOVE_EMOJI" => {
+            let r: WireReactionEvent = serde_json::from_value(d)?;
+            Event::Reaction(ReactionEvent::RemoveEmoji {
+                channel_id: r.channel_id,
+                message_id: r.message_id,
+                emoji: r.emoji.into(),
+            })
+        }
+        "PRESENCE_UPDATE" => {
+            let p: WirePresenceUpdate = serde_json::from_value(d)?;
+            let Some(user_id) = p.user.and_then(|u| u.id) else {
+                return Ok(None);
+            };
+            Event::PresenceUpdate {
+                user_id,
+                status: Presence::from_wire(&p.status),
+            }
+        }
+        "GUILD_MEMBER_LIST_UPDATE" => {
+            let u: WireMemberListUpdate = serde_json::from_value(d)?;
+            Event::MemberList(Box::new(u.into_domain()))
+        }
+        "GUILD_EMOJIS_UPDATE" => {
+            let e: WireEmojisUpdate = serde_json::from_value(d)?;
+            Event::GuildEmojis {
+                guild_id: e.guild_id,
+                emojis: e.emojis,
+            }
+        }
         _ => return Ok(None),
     }))
 }
@@ -896,10 +1271,31 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+pub struct MessageReference {
+    pub message_id: MessageId,
+    pub channel_id: ChannelId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<GuildId>,
+    pub fail_if_not_exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AllowedMentions {
+    pub parse: Vec<&'static str>,
+    pub replied_user: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CreateMessage<'a> {
     pub content: &'a str,
     pub nonce: &'a str,
     pub tts: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_reference: Option<MessageReference>,
+    /// Only sent for replies with the ping toggled off, like the official
+    /// client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_mentions: Option<AllowedMentions>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -932,7 +1328,8 @@ mod tests {
 
     #[test]
     fn identify_contains_token_and_properties() {
-        let p = identify_payload("tok", &ClientProperties::default());
+        let p = identify_payload("tok", &ClientProperties::default(), Presence::Dnd);
+        assert_eq!(p.d["presence"]["status"], "dnd");
         assert_eq!(p.op, 2);
         assert_eq!(p.d["token"], "tok");
         assert_eq!(p.d["properties"]["browser"], "Ferrocord");
@@ -941,7 +1338,7 @@ mod tests {
     #[test]
     fn unknown_dispatch_is_ignored() {
         assert!(
-            parse_dispatch("PRESENCE_UPDATE", serde_json::json!({}))
+            parse_dispatch("TOTALLY_UNKNOWN", serde_json::json!({}))
                 .unwrap()
                 .is_none()
         );

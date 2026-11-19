@@ -1,0 +1,36 @@
+{
+  "id": "5000000000000000021",
+  "channel_id": "4000000000000000002",
+  "guild_id": "2000000000000000001",
+  "type": 19,
+  "content": "agreed!",
+  "edited_timestamp": null,
+  "mention_everyone": false,
+  "mentions": [
+    {
+      "id": "1000000000000000002",
+      "username": "alice.dev",
+      "global_name": "Alice"
+    }
+  ],
+  "mention_roles": [],
+  "attachments": [],
+  "embeds": [],
+  "author": {
+    "id": "1000000000000000001",
+    "username": "ferris_fan",
+    "global_name": "Ferris Fan",
+    "avatar": null
+  },
+  "member": {
+    "roles": [],
+    "nick": null
+  },
+  "message_reference": {
+    "message_id": "5000000000000000019",
+    "channel_id": "4000000000000000002",
+    "guild_id": "2000000000000000001"
+  },
+  "referenced_message": null,
+  "nonce": "n-1"
+}

@@ -1,10 +1,17 @@
 //! Application state and update loop (the "Elm" side). No direct I/O:
 //! everything that touches the network, disk or keyring runs in a `Task`.
 
+pub mod actions;
+pub mod emoji;
 pub mod images;
+pub mod input;
+pub mod jump;
 pub mod markdown;
+pub mod members;
 pub mod message;
+pub mod search;
 pub mod state;
+pub mod upload;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -13,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use iced::{Subscription, Task};
 
+use actions::{Editing, MessageMenu, OpenPicker, ReplyDraft};
 pub use message::{Done, Message, Ui};
 use state::{ChatState, Ctx, Effect};
 
@@ -21,7 +29,7 @@ use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
 use crate::config::{Config, ScreenshotScreen};
 use crate::error::Redacted;
 use crate::mock;
-use crate::net::gateway::{self, GatewayConfig};
+use crate::net::gateway::{self, GatewayConfig, GatewayHandle};
 use crate::net::model::*;
 use crate::net::remote_auth::{self, RaEvent};
 use crate::net::rest::RestClient;
@@ -82,6 +90,22 @@ pub struct App {
     /// re-parse every message on every frame.
     md_cache: std::cell::RefCell<MarkdownCache>,
     pub window_focused: bool,
+    gateway: GatewayHandle,
+    pub reply: Option<ReplyDraft>,
+    pub editing: Option<Editing>,
+    pub pending_delete: Option<(ChannelId, MessageId)>,
+    pub menu: Option<MessageMenu>,
+    pub emoji_picker: Option<OpenPicker>,
+    pub draft: Vec<upload::DraftAttachment>,
+    pub uploads: Vec<upload::ActiveUpload>,
+    upload_handles: HashMap<u64, iced::task::Handle>,
+    next_upload_id: u64,
+    pub members_open: bool,
+    member_rows_wanted: usize,
+    pub status_menu: bool,
+    pub search: search::SearchState,
+    /// Message flashed after a jump.
+    pub highlight: Option<MessageId>,
     pub toast: Option<String>,
     /// Masked link waiting for confirmation ("Leaving Ferrocord").
     pub pending_link: Option<String>,
@@ -147,6 +171,21 @@ impl App {
             images: images::ImageCache::default(),
             md_cache: std::cell::RefCell::new(HashMap::new()),
             window_focused: true,
+            gateway: GatewayHandle::default(),
+            reply: None,
+            editing: None,
+            pending_delete: None,
+            menu: None,
+            emoji_picker: None,
+            draft: Vec::new(),
+            uploads: Vec::new(),
+            upload_handles: HashMap::new(),
+            next_upload_id: 0,
+            members_open: true,
+            member_rows_wanted: members::RANGE_SIZE,
+            status_menu: false,
+            search: search::SearchState::default(),
+            highlight: None,
             toast: None,
             pending_link: None,
             boot_at,
@@ -272,6 +311,43 @@ impl App {
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
             }
+            Some(s @ (ScreenshotScreen::Search | ScreenshotScreen::Compose)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+                if s == ScreenshotScreen::Search {
+                    let _ = self.update_ui(Ui::SearchChanged("let".into()));
+                    let _ = self.update_ui(Ui::SubmitSearch);
+                } else {
+                    let target = self
+                        .chat
+                        .messages
+                        .get(&mock::CH_GENERAL)
+                        .and_then(|w| w.messages.iter().rev().nth(1))
+                        .map(|m| m.id);
+                    if let Some(t) = target {
+                        let _ = self.update_ui(Ui::StartReply(t));
+                    }
+                    self.draft.push(upload::DraftAttachment::from_file(
+                        crate::net::rest::UploadFile {
+                            path: "/tmp/design-notes.pdf".into(),
+                            name: "design-notes.pdf".into(),
+                            size: 482_113,
+                        },
+                        false,
+                    ));
+                    let guild = self.chat.guild(mock::GUILD_RUST);
+                    self.emoji_picker = Some(OpenPicker {
+                        picker: emoji::EmojiPicker::open(emoji::PickerTarget::Composer, guild),
+                        at: iced::Point::new(1000.0, 725.0),
+                    });
+                }
+            }
             Some(ScreenshotScreen::Guild) | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -283,6 +359,10 @@ impl App {
                 self.chat.mark_read(mock::CH_GENERAL);
             }
         }
+        let _ = self.sync_members();
+        let ctx = self.ctx();
+        self.chat
+            .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
     }
 
     pub fn screen(&self) -> Screen {
@@ -455,6 +535,11 @@ impl App {
                 if from_top < 400.0 {
                     return self.load_older();
                 }
+                // `absolute_offset` of an anchor_bottom list is the
+                // distance from the newest message.
+                if vp.absolute_offset().y < 200.0 {
+                    return self.load_newer();
+                }
                 Task::none()
             }
             Ui::RevealSpoiler(m) => {
@@ -492,6 +577,7 @@ impl App {
                 self.chat.prune_typing(now_ms());
                 Task::none()
             }
+            other => self.update_action(other),
         }
     }
 
@@ -501,6 +587,8 @@ impl App {
         }
         self.view = view;
         self.composer.clear();
+        self.reset_channel_ui();
+        let members = self.sync_members();
         let (g, c) = match view {
             View::Home(c) => (None, c),
             View::Guild { guild, channel } => (Some(guild), channel),
@@ -527,9 +615,12 @@ impl App {
             },
             |_| Message::Done(Done::Ignored),
         );
-        let Some(c) = c else { return persist };
+        let Some(c) = c else {
+            return Task::batch([persist, members]);
+        };
         Task::batch([
             persist,
+            members,
             self.mark_read(c),
             self.load_channel(c),
             self.request_images(),
@@ -649,19 +740,29 @@ impl App {
         let Some(c) = self.open_channel() else {
             return Task::none();
         };
-        if content.is_empty() || content.chars().count() > 2000 {
-            if !content.is_empty() {
-                self.toast = Some("Messages can be at most 2000 characters.".into());
-            }
+        if content.chars().count() > 2000 {
+            self.toast = Some("Messages can be at most 2000 characters.".into());
+            return Task::none();
+        }
+        if !self.draft.is_empty() {
+            // Files go as a multipart upload; the text is the caption.
+            return self.start_upload(c, content);
+        }
+        if content.is_empty() {
             return Task::none();
         }
         self.composer.clear();
         let now = now_ms();
         let nonce = Snowflake::from_timestamp_ms(now, fastrand::u64(0..4096)).to_string();
-        let Some(pending) = self
-            .chat
-            .push_pending(c, content.clone(), nonce.clone(), now)
-        else {
+        let reply = self.reply_target(c);
+        self.reply = None;
+        let Some(pending) = self.chat.push_pending(
+            c,
+            content.clone(),
+            nonce.clone(),
+            now,
+            reply.map(|r| r.message),
+        ) else {
             return Task::none();
         };
         self.last_typing_sent.remove(&c);
@@ -681,7 +782,7 @@ impl App {
         let rest = self.rest.clone();
         let n2 = nonce.clone();
         Task::perform(
-            async move { rest.send_message(c, &content, &nonce).await },
+            async move { rest.send_message(c, &content, &nonce, reply).await },
             move |r| {
                 Message::Done(Done::Sent {
                     channel: c,
@@ -846,8 +947,9 @@ impl App {
                 }
             }
             tasks.push(self.request_images());
+            tasks.push(self.sync_members());
         }
-        if matches!(ev, Event::MessageCreate(_)) {
+        if matches!(ev, Event::MessageCreate(_) | Event::MemberList(_)) {
             tasks.push(self.request_images());
         }
         for fx in effects {
@@ -1041,6 +1143,60 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Edited {
+                channel,
+                message,
+                result,
+            } => {
+                match result {
+                    Ok(m) => self.chat.set_content(channel, message, &m.content),
+                    Err(e) => self.toast = Some(format!("Could not edit the message: {e}")),
+                }
+                Task::none()
+            }
+            Done::ActionFailed(e) => {
+                self.toast = Some(e);
+                Task::none()
+            }
+            Done::ReactionFailed {
+                channel,
+                message,
+                emoji,
+                change,
+                error,
+            } => {
+                self.chat.revert_reaction(channel, message, &emoji, change);
+                self.toast = Some(format!("Could not update the reaction: {error}"));
+                Task::none()
+            }
+            Done::FilesReady(files) => self.on_files_ready(files),
+            Done::Pasted { files, pasted } => {
+                if !files.is_empty() {
+                    self.strip_pasted_paths(&pasted);
+                }
+                self.on_files_ready(files)
+            }
+            Done::Upload { id, event } => self.on_upload_event(id, event),
+            Done::Around {
+                channel,
+                target,
+                result,
+            } => self.on_around(channel, target, result),
+            Done::Newer { channel, result } => self.on_newer(channel, result),
+            Done::Search { generation, result } => self.on_search_done(generation, result),
+            Done::ScrollToMessage(m) => jump::scroll_to_message(m),
+            Done::ClearHighlight(m) => {
+                if self.highlight == Some(m) {
+                    self.highlight = None;
+                }
+                Task::none()
+            }
+            Done::StatusSaved(r) => {
+                if let Err(e) = r {
+                    self.toast = Some(format!("Could not save your status: {e}"));
+                }
+                Task::none()
+            }
             Done::Image { key, bytes } => {
                 match bytes {
                     Some(b) => self.images.insert_bytes(key, b),
@@ -1097,6 +1253,14 @@ impl App {
                 for a in m.attachments.iter().filter(|a| a.is_image()) {
                     urls.push(attachment_preview_url(a));
                 }
+                if let Some(a) = m.referenced.as_ref().and_then(|r| r.author.as_ref())
+                    && let Some(u) = self.rest.avatar_url(a, 80)
+                {
+                    urls.push(u);
+                }
+                for r in m.reactions.iter().filter_map(|r| r.emoji.id) {
+                    urls.push(emoji_url(&self.cfg.cdn_url, r));
+                }
                 if m.content.contains("<:") || m.content.contains("<a:") {
                     let blocks = self.parsed_markdown(m.id, &m.content);
                     collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
@@ -1106,6 +1270,31 @@ impl App {
                         urls.push(i.url.clone());
                     }
                 }
+            }
+        }
+        if self.emoji_picker.is_some()
+            && let Some(g) = self
+                .open_channel()
+                .and_then(|c| self.chat.channels.get(&c))
+                .and_then(|c| c.guild_id)
+                .and_then(|g| self.chat.guild(g))
+        {
+            for e in g.emojis.iter().filter(|e| e.available) {
+                urls.push(emoji_url(&self.cfg.cdn_url, e.id));
+            }
+        }
+        if let Some(l) = &self.chat.member_list {
+            for item in l.loaded().take(120) {
+                if let MemberItem::Member(m) = item
+                    && let Some(u) = self.rest.avatar_url(&m.user, 80)
+                {
+                    urls.push(u);
+                }
+            }
+        }
+        for m in self.search.results.iter() {
+            if let Some(u) = self.rest.avatar_url(&m.author, 80) {
+                urls.push(u);
             }
         }
         if let View::Home(_) = self.view {
@@ -1195,17 +1384,9 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![iced::event::listen_with(|e, _, _| match e {
-            iced::Event::Window(iced::window::Event::Focused) => {
-                Some(Message::Ui(Ui::WindowFocus(true)))
-            }
-            iced::Event::Window(iced::window::Event::Opened { .. }) => {
-                Some(Message::Ui(Ui::WindowOpened))
-            }
-            iced::Event::Window(iced::window::Event::Unfocused) => {
-                Some(Message::Ui(Ui::WindowFocus(false)))
-            }
-            _ => None,
+        let mut subs = vec![iced::event::listen_with(|e, status, _| {
+            input::record(&e);
+            input_message(e, status)
         })];
         if self.cfg.mock {
             return Subscription::batch(subs);
@@ -1220,6 +1401,7 @@ impl App {
                     token: token.clone(),
                     zlib: self.cfg.zlib,
                     properties: ClientProperties::default(),
+                    handle: self.gateway.clone(),
                 },
             };
             subs.push(
@@ -1246,6 +1428,43 @@ impl App {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Ui(Ui::Tick)));
         }
         Subscription::batch(subs)
+    }
+}
+
+/// Maps a runtime event to a message (non-capturing, as `listen_with`
+/// requires).
+fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message> {
+    use iced::keyboard::{Event as Key, Key as K, key::Named};
+    match e {
+        iced::Event::Window(iced::window::Event::Focused) => {
+            Some(Message::Ui(Ui::WindowFocus(true)))
+        }
+        iced::Event::Window(iced::window::Event::Opened { .. }) => {
+            Some(Message::Ui(Ui::WindowOpened))
+        }
+        iced::Event::Window(iced::window::Event::Unfocused) => {
+            Some(Message::Ui(Ui::WindowFocus(false)))
+        }
+        iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+            Some(Message::Ui(Ui::FileDropped(path)))
+        }
+        // The text input captures Escape when focused; handle it anyway.
+        iced::Event::Keyboard(Key::KeyPressed {
+            key: K::Named(Named::Escape),
+            ..
+        }) => Some(Message::Ui(Ui::Escape)),
+        iced::Event::Keyboard(Key::KeyPressed {
+            key: K::Named(Named::ArrowUp),
+            ..
+        }) if status == iced::event::Status::Ignored => Some(Message::Ui(Ui::EditLast)),
+        iced::Event::Keyboard(Key::KeyPressed {
+            key: K::Character(c),
+            modifiers,
+            ..
+        }) if modifiers.command() && c.as_str().eq_ignore_ascii_case("v") => {
+            Some(Message::Ui(Ui::Paste))
+        }
+        _ => None,
     }
 }
 
@@ -1343,9 +1562,10 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
     if mock {
         return Task::none();
     }
+    let channel = n.channel_id;
     Task::perform(
         async move {
-            let _ = tokio::task::spawn_blocking(move || {
+            tokio::task::spawn_blocking(move || {
                 let r = notify_rust::Notification::new()
                     .appname(crate::config::APP_NAME)
                     .summary(&escape_markup(&n.title))
@@ -1354,15 +1574,43 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
                     .hint(notify_rust::Hint::DesktopEntry(
                         crate::config::APP_ID.into(),
                     ))
+                    // "default" is the action a click on the notification
+                    // body invokes (freedesktop notification spec).
+                    .action("default", "Open")
                     .show();
-                if let Err(e) = r {
-                    tracing::debug!(error = %e, "notification failed");
+                match r {
+                    Ok(handle) => wait_for_click(handle),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "notification failed");
+                        false
+                    }
                 }
             })
-            .await;
+            .await
+            .unwrap_or(false)
         },
-        |_| Message::Done(Done::Ignored),
+        move |clicked| {
+            if clicked {
+                Message::Ui(Ui::OpenChannel(channel))
+            } else {
+                Message::Done(Done::Ignored)
+            }
+        },
     )
+}
+
+/// Blocks until the notification is closed or acted on; true if the user
+/// clicked it. Runs on the blocking pool.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wait_for_click(handle: notify_rust::NotificationHandle) -> bool {
+    let mut clicked = false;
+    handle.wait_for_action(|action| clicked = action == "default");
+    clicked
+}
+
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn wait_for_click(_handle: notify_rust::NotificationHandle) -> bool {
+    false
 }
 
 async fn open_url(url: String) {

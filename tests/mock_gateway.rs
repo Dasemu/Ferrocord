@@ -6,7 +6,8 @@
 use std::time::Duration;
 
 use ferrocord::auth::secrets::Secret;
-use ferrocord::net::gateway::{self, GatewayConfig};
+use ferrocord::net::gateway::{self, GatewayConfig, GatewayHandle, MemberSubscription};
+use ferrocord::net::model::{Presence, Snowflake};
 use ferrocord::net::types::ClientProperties;
 use ferrocord::net::{ConnectionState, Event};
 use flate2::{Compress, Compression, FlushCompress};
@@ -100,11 +101,16 @@ fn message(seq: u64, id: u64, content: &str) -> Value {
 }
 
 fn client(url: &str, zlib: bool) -> impl Stream<Item = Event> + Unpin {
+    client_with(url, zlib, GatewayHandle::default())
+}
+
+fn client_with(url: &str, zlib: bool, handle: GatewayHandle) -> impl Stream<Item = Event> + Unpin {
     Box::pin(gateway::spawn(GatewayConfig {
         url: url.to_owned(),
         token: Secret::new(TOKEN),
         zlib,
         properties: ClientProperties::default(),
+        handle,
     }))
 }
 
@@ -375,4 +381,98 @@ async fn server_down_reconnects_with_backoff() {
     };
     assert_eq!(attempt, 1);
     assert!((1_000..=2_000).contains(&delay_ms), "{delay_ms}");
+}
+
+#[tokio::test]
+async fn status_and_member_subscription_are_sent_and_resent() {
+    let (l, url) = listen().await;
+    let resume_url = format!("{url}/resume");
+    let handle = GatewayHandle::new(Presence::Dnd);
+    let mut c = client_with(&url, false, handle.clone());
+    let guild = Snowflake(2000000000000000001);
+    let channel = Snowflake(4000000000000000002);
+    let ru = resume_url.clone();
+    let server = tokio::spawn(async move {
+        let (mut ws, _) = accept(&l).await;
+        send(&mut ws, hello(45_000)).await;
+        // The status chosen before connecting is part of IDENTIFY.
+        let id = recv_op(&mut ws, 2).await;
+        assert_eq!(id["d"]["presence"]["status"], "dnd");
+        send(&mut ws, ready(1, &ru)).await;
+        // Op 14 with the requested range.
+        let sub = recv_op(&mut ws, 14).await;
+        assert_eq!(sub["d"]["guild_id"], "2000000000000000001");
+        assert_eq!(
+            sub["d"]["channels"]["4000000000000000002"],
+            json!([[0, 99]])
+        );
+        // A status change while connected is an op 3.
+        let st = recv_op(&mut ws, 3).await;
+        assert_eq!(st["d"]["status"], "idle");
+        assert_eq!(st["d"]["afk"], false);
+        // Member list update reaches the client.
+        send(
+            &mut ws,
+            json!({"op": 0, "t": "GUILD_MEMBER_LIST_UPDATE", "s": 2, "d": {
+                "guild_id": "2000000000000000001", "id": "everyone", "member_count": 1,
+                "online_count": 1, "groups": [{"id": "online", "count": 1}],
+                "ops": [{"op": "SYNC", "range": [0, 99], "items": [
+                    {"group": {"id": "online", "count": 1}},
+                    {"member": {"user": {"id": "1000000000000000002", "username": "alice.dev"},
+                                "roles": [], "presence": {"status": "online"}}}
+                ]}]
+            }}),
+        )
+        .await;
+        // Drop the connection: the client resumes and re-sends op 14.
+        send(&mut ws, json!({"op": 7, "d": null})).await;
+        let (mut ws2, uri) = accept(&l).await;
+        assert!(uri.starts_with("/resume"));
+        send(&mut ws2, hello(45_000)).await;
+        recv_op(&mut ws2, 6).await;
+        send(&mut ws2, json!({"op": 0, "t": "RESUMED", "s": 3, "d": {}})).await;
+        let again = recv_op(&mut ws2, 14).await;
+        assert_eq!(again["d"]["guild_id"], "2000000000000000001");
+        let _ = tokio::time::timeout(STEP, ws2.next()).await;
+    });
+    expect(&mut c, "ready", |e| matches!(e, Event::Ready(_))).await;
+    handle.subscribe_members(MemberSubscription {
+        guild,
+        channel,
+        ranges: vec![(0, 99)],
+    });
+    // Let the op 14 go out before changing the status (frames are ordered).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    handle.set_status(Presence::Idle);
+    let ev = expect(&mut c, "member list", |e| matches!(e, Event::MemberList(_))).await;
+    let Event::MemberList(u) = ev else { panic!() };
+    assert_eq!(u.member_count, 1);
+    expect(&mut c, "RESUMED", |e| matches!(e, Event::Resumed)).await;
+    drop(c);
+    server.await.unwrap();
+}
+
+#[test]
+fn identical_subscription_is_not_resent() {
+    let h = GatewayHandle::default();
+    let sub = MemberSubscription {
+        guild: Snowflake(1),
+        channel: Snowflake(2),
+        ranges: vec![(0, 99)],
+    };
+    h.subscribe_members(sub.clone());
+    assert_eq!(h.take_pending().len(), 1);
+    h.subscribe_members(sub.clone());
+    assert!(h.take_pending().is_empty());
+    h.subscribe_members(MemberSubscription {
+        ranges: vec![(0, 99), (100, 199)],
+        ..sub
+    });
+    assert_eq!(h.take_pending().len(), 1);
+    h.set_status(Presence::Online); // unchanged
+    assert!(h.take_pending().is_empty());
+    h.set_status(Presence::Idle);
+    assert_eq!(h.take_pending().len(), 1);
+    h.clear_members();
+    assert!(h.members().is_none());
 }

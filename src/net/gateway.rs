@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+use super::model::{ChannelId, GuildId, Presence};
 use super::types::{self, ClientProperties, GatewayPayload, Hello, OpCode};
 use super::zlib::ZlibStream;
 use super::{ConnectionState, Event};
@@ -36,6 +37,133 @@ pub struct GatewayConfig {
     pub token: Secret,
     pub zlib: bool,
     pub properties: ClientProperties,
+    /// Channel for commands from the app (status, member list).
+    pub handle: GatewayHandle,
+}
+
+/// The member list subscription the app wants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberSubscription {
+    pub guild: GuildId,
+    pub channel: ChannelId,
+    pub ranges: Vec<(usize, usize)>,
+}
+
+#[derive(Debug)]
+struct Desired {
+    status: Presence,
+    status_dirty: bool,
+    members: Option<MemberSubscription>,
+    members_dirty: bool,
+}
+
+/// Cheaply clonable handle to the running gateway. The app records what it
+/// wants (own status, member list ranges); the runner sends it as soon as
+/// the session is ready and again after every reconnect.
+#[derive(Clone)]
+pub struct GatewayHandle {
+    desired: std::sync::Arc<std::sync::Mutex<Desired>>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl std::fmt::Debug for GatewayHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GatewayHandle")
+    }
+}
+
+impl Default for GatewayHandle {
+    fn default() -> Self {
+        Self::new(Presence::Online)
+    }
+}
+
+impl GatewayHandle {
+    pub fn new(status: Presence) -> Self {
+        Self {
+            desired: std::sync::Arc::new(std::sync::Mutex::new(Desired {
+                status,
+                status_dirty: false,
+                members: None,
+                members_dirty: false,
+            })),
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut Desired) -> R) -> Option<R> {
+        self.desired.lock().ok().map(|mut d| f(&mut d))
+    }
+
+    pub fn status(&self) -> Presence {
+        self.with(|d| d.status).unwrap_or_default()
+    }
+
+    /// Sets the own status (op 3 once connected; IDENTIFY uses it too).
+    pub fn set_status(&self, status: Presence) {
+        self.with(|d| {
+            if d.status != status {
+                d.status = status;
+                d.status_dirty = true;
+            }
+        });
+        self.notify.notify_one();
+    }
+
+    /// Subscribes to member list ranges (op 14). Repeating the same
+    /// subscription is a no-op.
+    pub fn subscribe_members(&self, sub: MemberSubscription) {
+        self.with(|d| {
+            if d.members.as_ref() != Some(&sub) {
+                d.members = Some(sub);
+                d.members_dirty = true;
+            }
+        });
+        self.notify.notify_one();
+    }
+
+    /// Forgets the subscription (it is not re-sent after a reconnect).
+    pub fn clear_members(&self) {
+        self.with(|d| {
+            d.members = None;
+            d.members_dirty = false;
+        });
+    }
+
+    pub fn members(&self) -> Option<MemberSubscription> {
+        self.with(|d| d.members.clone()).flatten()
+    }
+
+    /// Called once READY/RESUMED arrived: pending state must be re-sent.
+    fn on_connected(&self) {
+        self.with(|d| d.members_dirty = d.members.is_some());
+    }
+
+    /// Drops a pending status change (IDENTIFY already carries it).
+    fn take_pending_status_only(&self) {
+        self.with(|d| d.status_dirty = false);
+    }
+
+    /// Frames to send now; clears the dirty flags.
+    pub fn take_pending(&self) -> Vec<String> {
+        self.with(|d| {
+            let mut out = Vec::new();
+            if d.status_dirty {
+                d.status_dirty = false;
+                out.push(to_json(&types::presence_payload(d.status)));
+            }
+            if d.members_dirty {
+                d.members_dirty = false;
+                if let Some(m) = &d.members {
+                    out.push(to_json(&types::member_subscribe_payload(
+                        m.guild, m.channel, &m.ranges,
+                    )));
+                }
+            }
+            out
+        })
+        .unwrap_or_default()
+    }
 }
 
 /// What the runner must do after a frame or timer.
@@ -116,6 +244,8 @@ pub struct Session {
     pub latency: Option<Duration>,
     /// Set when the current connection is trying to resume.
     pub resuming: bool,
+    /// Status sent in IDENTIFY.
+    pub status: Presence,
 }
 
 impl Session {
@@ -196,7 +326,7 @@ impl Session {
                     (Some(sid), Some(seq), true) => types::resume_payload(token, sid, seq),
                     _ => {
                         self.resuming = false;
-                        types::identify_payload(token, props)
+                        types::identify_payload(token, props, self.status)
                     }
                 };
                 vec![
@@ -389,6 +519,11 @@ async fn connect_once(
         }
     };
     session.on_connect();
+    session.status = cfg.handle.status();
+    // A status change made before this connection is part of IDENTIFY.
+    if !session.can_resume() {
+        cfg.handle.take_pending_status_only();
+    }
     let mut inflater = cfg.zlib.then(ZlibStream::new);
     let mut was_ready = false;
     let mut ready_at: Option<Instant> = None;
@@ -404,6 +539,18 @@ async fn connect_once(
             _ = tx.closed() => {
                 let _ = ws.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() })).await;
                 break Outcome::Closed;
+            }
+            _ = cfg.handle.notify.notified(), if ready_at.is_some() => {
+                let mut failed = false;
+                for frame in cfg.handle.take_pending() {
+                    if ws.send(WsMessage::text(frame)).await.is_err() {
+                        failed = true;
+                        break;
+                    }
+                }
+                if failed {
+                    break Outcome::Reconnect { resume: session.can_resume(), delay: Duration::ZERO, was_ready };
+                }
             }
             _ = &mut hello_deadline, if session.heartbeat_interval.is_none() => {
                 tracing::warn!("no HELLO from gateway");
@@ -484,6 +631,8 @@ async fn connect_once(
                         Action::Emit(EventKind::Connected) => {
                             was_ready = true;
                             ready_at.get_or_insert_with(Instant::now);
+                            cfg.handle.on_connected();
+                            cfg.handle.notify.notify_one();
                             if tx.send(Event::Connection(ConnectionState::Connected)).await.is_err() {
                                 stop = Some(Outcome::Closed);
                                 break;

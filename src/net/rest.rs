@@ -11,7 +11,9 @@ use tokio::time::Instant;
 
 use super::model::*;
 use super::ratelimit::{RateLimitHeaders, RateLimiter, route_key};
-use super::types::{CreateMessage, RateLimitBody, WireMessage, WireUser};
+use super::types::{
+    AllowedMentions, CreateMessage, MessageReference, RateLimitBody, WireMessage, WireUser,
+};
 use crate::auth::secrets::Secret;
 use crate::error::{Error, Result};
 
@@ -88,8 +90,23 @@ impl RestClient {
         &self.cdn
     }
 
-    /// Sends a request, waiting for rate limits and retrying 429s.
+    /// Sends a JSON request, waiting for rate limits and retrying 429s.
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.send_with(method, path, |req| match &body {
+            Some(b) => req.json(b),
+            None => req,
+        })
+        .await
+    }
+
+    /// Like [`request`](Self::request) with a custom body: `build` is called
+    /// for every attempt (a 429 retry needs a fresh body).
+    async fn send_with(
+        &self,
+        method: Method,
+        path: &str,
+        build: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<Value> {
         let route = route_key(method.as_str(), path);
         let url = format!("{}{}", self.base, path);
         let mut attempt = 0;
@@ -109,9 +126,7 @@ impl RestClient {
             if let Some(t) = &self.token {
                 req = req.header(reqwest::header::AUTHORIZATION, t.expose());
             }
-            if let Some(b) = &body {
-                req = req.json(b);
-            }
+            req = build(req);
             let resp = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
@@ -211,18 +226,15 @@ impl RestClient {
         Ok(msgs)
     }
 
-    /// `POST /channels/{id}/messages`.
+    /// `POST /channels/{id}/messages`, optionally as a reply.
     pub async fn send_message(
         &self,
         channel: ChannelId,
         content: &str,
         nonce: &str,
+        reply: Option<ReplyTarget>,
     ) -> Result<Message> {
-        let body = serde_json::to_value(CreateMessage {
-            content,
-            nonce,
-            tts: false,
-        })?;
+        let body = serde_json::to_value(create_message_body(channel, content, nonce, reply))?;
         let v = self
             .request(
                 Method::POST,
@@ -232,6 +244,157 @@ impl RestClient {
             .await?;
         let wire: WireMessage = serde_json::from_value(v)?;
         Ok(wire.into_domain())
+    }
+
+    /// `PATCH /channels/{c}/messages/{m}` — edits the content of one of the
+    /// user's own messages. Returns the updated message.
+    pub async fn edit_message(
+        &self,
+        channel: ChannelId,
+        message: MessageId,
+        content: &str,
+    ) -> Result<Message> {
+        let v = self
+            .request(
+                Method::PATCH,
+                &format!("/channels/{channel}/messages/{message}"),
+                Some(serde_json::json!({ "content": content })),
+            )
+            .await?;
+        Ok(serde_json::from_value::<WireMessage>(v)?.into_domain())
+    }
+
+    /// `DELETE /channels/{c}/messages/{m}`.
+    pub async fn delete_message(&self, channel: ChannelId, message: MessageId) -> Result<()> {
+        self.request(
+            Method::DELETE,
+            &format!("/channels/{channel}/messages/{message}"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `PUT/DELETE /channels/{c}/messages/{m}/reactions/{emoji}/@me`.
+    pub async fn set_reaction(
+        &self,
+        channel: ChannelId,
+        message: MessageId,
+        emoji: &Emoji,
+        add: bool,
+    ) -> Result<()> {
+        let path = format!(
+            "/channels/{channel}/messages/{message}/reactions/{}/@me",
+            emoji.api_segment()
+        );
+        let method = if add { Method::PUT } else { Method::DELETE };
+        self.request(method, &path, None).await.map(|_| ())
+    }
+
+    /// `GET /channels/{c}/messages?around={m}` — a window centred on a
+    /// message (for jumps). Returned oldest first.
+    pub async fn messages_around(
+        &self,
+        channel: ChannelId,
+        around: MessageId,
+        limit: u8,
+    ) -> Result<Vec<Message>> {
+        let path = format!(
+            "/channels/{channel}/messages?limit={}&around={around}",
+            limit.clamp(1, 100)
+        );
+        let wire: Vec<WireMessage> = self.get(&path).await?;
+        let mut msgs: Vec<Message> = wire.into_iter().map(WireMessage::into_domain).collect();
+        msgs.sort_by_key(|m| m.id);
+        Ok(msgs)
+    }
+
+    /// `GET /channels/{c}/messages?after={m}` — newer messages, oldest first.
+    pub async fn messages_after(
+        &self,
+        channel: ChannelId,
+        after: MessageId,
+        limit: u8,
+    ) -> Result<Vec<Message>> {
+        let path = format!(
+            "/channels/{channel}/messages?limit={}&after={after}",
+            limit.clamp(1, 100)
+        );
+        let wire: Vec<WireMessage> = self.get(&path).await?;
+        let mut msgs: Vec<Message> = wire.into_iter().map(WireMessage::into_domain).collect();
+        msgs.sort_by_key(|m| m.id);
+        Ok(msgs)
+    }
+
+    /// `PATCH /users/@me/settings` — persists the user's status (the
+    /// official client does the same; the change is pushed to all sessions).
+    pub async fn set_status_setting(&self, status: Presence) -> Result<()> {
+        self.request(
+            Method::PATCH,
+            "/users/@me/settings",
+            Some(serde_json::json!({ "status": status.wire() })),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Message search in a guild (`guild = Some`) or a DM channel.
+    /// Discord answers 202 while it builds the index; that is retried a few
+    /// times, honouring `retry_after`.
+    pub async fn search(&self, scope: SearchScope, query: &str, offset: u32) -> Result<SearchPage> {
+        let path = search_path(scope, query, offset);
+        for attempt in 0..4 {
+            let v = self.request(Method::GET, &path, None).await?;
+            if let Some(wait) = search_not_ready(&v) {
+                if attempt == 3 {
+                    return Err(Error::Protocol("search index not ready".into()));
+                }
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            return parse_search(v, scope.guild());
+        }
+        Err(Error::Protocol("search index not ready".into()))
+    }
+
+    /// `POST /channels/{id}/messages` with `multipart/form-data`: the
+    /// caption and reply go in `payload_json`, each file is streamed from
+    /// disk (never fully buffered). `progress` receives the number of body
+    /// bytes handed to the socket so far.
+    pub async fn send_with_files(
+        &self,
+        channel: ChannelId,
+        content: &str,
+        nonce: &str,
+        reply: Option<ReplyTarget>,
+        files: &[UploadFile],
+        progress: tokio::sync::mpsc::UnboundedSender<u64>,
+    ) -> Result<Message> {
+        let mut payload =
+            serde_json::to_value(create_message_body(channel, content, nonce, reply))?;
+        payload["attachments"] = serde_json::Value::Array(
+            files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| serde_json::json!({ "id": i, "filename": f.name }))
+                .collect(),
+        );
+        let payload = payload.to_string();
+        let boundary = multipart_boundary();
+        let layout = MultipartLayout::new(&boundary, &payload, files);
+        let path = format!("/channels/{channel}/messages");
+        let v = self
+            .send_with(Method::POST, &path, |req| {
+                let body = multipart_body(&layout, files, progress.clone());
+                req.header(
+                    reqwest::header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(reqwest::header::CONTENT_LENGTH, layout.total_len)
+                .body(body)
+            })
+            .await?;
+        Ok(serde_json::from_value::<WireMessage>(v)?.into_domain())
     }
 
     /// `POST /channels/{id}/typing`.
@@ -332,4 +495,337 @@ impl RestClient {
             .as_ref()
             .map(|h| format!("{}/icons/{}/{h}.png?size={size}", self.cdn, guild.id))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Replies, search and multipart helpers (pure, unit-tested)
+// ---------------------------------------------------------------------------
+
+/// What a reply points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplyTarget {
+    pub message: MessageId,
+    pub guild: Option<GuildId>,
+    /// "@ ON" in the reply bar.
+    pub mention: bool,
+}
+
+pub fn create_message_body<'a>(
+    channel: ChannelId,
+    content: &'a str,
+    nonce: &'a str,
+    reply: Option<ReplyTarget>,
+) -> CreateMessage<'a> {
+    CreateMessage {
+        content,
+        nonce,
+        tts: false,
+        message_reference: reply.map(|r| MessageReference {
+            message_id: r.message,
+            channel_id: channel,
+            guild_id: r.guild,
+            fail_if_not_exists: false,
+        }),
+        allowed_mentions: reply.filter(|r| !r.mention).map(|_| AllowedMentions {
+            parse: vec!["users", "roles", "everyone"],
+            replied_user: false,
+        }),
+    }
+}
+
+/// Where to search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchScope {
+    Guild(GuildId),
+    Channel(ChannelId),
+}
+
+impl SearchScope {
+    pub fn guild(self) -> Option<GuildId> {
+        match self {
+            Self::Guild(g) => Some(g),
+            Self::Channel(_) => None,
+        }
+    }
+}
+
+/// Results per page returned by the search endpoint.
+pub const SEARCH_PAGE: u32 = 25;
+
+pub fn search_path(scope: SearchScope, query: &str, offset: u32) -> String {
+    let base = match scope {
+        SearchScope::Guild(g) => format!("/guilds/{g}/messages/search"),
+        SearchScope::Channel(c) => format!("/channels/{c}/messages/search"),
+    };
+    format!(
+        "{base}?content={}&offset={offset}&include_nsfw=true",
+        percent_encode(query)
+    )
+}
+
+/// `Some(wait)` when the response means "index not ready, retry".
+pub fn search_not_ready(v: &Value) -> Option<Duration> {
+    let code = v.get("code").and_then(Value::as_u64)?;
+    if code != 110_000 {
+        return None;
+    }
+    let secs = v
+        .get("retry_after")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0)
+        .clamp(0.2, 5.0);
+    Some(Duration::from_secs_f64(secs))
+}
+
+/// Parses a search response: `messages` is an array of context groups, the
+/// hit has `hit: true`.
+pub fn parse_search(v: Value, guild: Option<GuildId>) -> Result<SearchPage> {
+    let total = v.get("total_results").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let groups = v
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut messages = Vec::new();
+    for group in groups {
+        let Some(items) = group.as_array() else {
+            continue;
+        };
+        let hit = items
+            .iter()
+            .find(|m| m.get("hit").and_then(Value::as_bool) == Some(true))
+            .or_else(|| items.first());
+        let Some(hit) = hit else { continue };
+        // A malformed hit is skipped, not fatal.
+        if let Ok(w) = serde_json::from_value::<WireMessage>(hit.clone()) {
+            let mut m = w.into_domain();
+            m.guild_id = m.guild_id.or(guild);
+            messages.push(m);
+        }
+    }
+    Ok(SearchPage { total, messages })
+}
+
+/// A file picked for upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadFile {
+    pub path: std::path::PathBuf,
+    /// File name sent to Discord.
+    pub name: String,
+    pub size: u64,
+}
+
+/// Upload limits (bytes). Tier numbers follow Discord's `premium_type`
+/// (user) and `premium_tier` (server boost level).
+pub const UPLOAD_LIMIT_DEFAULT: u64 = 10 * 1024 * 1024;
+pub const MAX_FILES_PER_MESSAGE: usize = 10;
+
+/// Largest file the account may upload in `guild`.
+pub fn upload_limit(premium_type: u8, guild_tier: u8) -> u64 {
+    const MIB: u64 = 1024 * 1024;
+    let user = match premium_type {
+        2 => 500 * MIB,
+        1 | 3 => 50 * MIB,
+        _ => UPLOAD_LIMIT_DEFAULT,
+    };
+    let guild = match guild_tier {
+        2 => 50 * MIB,
+        3 => 100 * MIB,
+        _ => UPLOAD_LIMIT_DEFAULT,
+    };
+    user.max(guild)
+}
+
+/// Why a set of files cannot be sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadError {
+    TooMany,
+    TooLarge { name: String, limit: u64 },
+    Empty { name: String },
+}
+
+/// Checks the count and size limits.
+pub fn check_upload(files: &[UploadFile], limit: u64) -> std::result::Result<(), UploadError> {
+    if files.len() > MAX_FILES_PER_MESSAGE {
+        return Err(UploadError::TooMany);
+    }
+    for f in files {
+        if f.size == 0 {
+            return Err(UploadError::Empty {
+                name: f.name.clone(),
+            });
+        }
+        if f.size > limit {
+            return Err(UploadError::TooLarge {
+                name: f.name.clone(),
+                limit,
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn multipart_boundary() -> String {
+    format!(
+        "ferrocord-{:016x}{:016x}",
+        fastrand::u64(..),
+        fastrand::u64(..)
+    )
+}
+
+/// Strips characters that would break out of a quoted header value.
+pub fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '"' | '\\' | '/'))
+        .collect();
+    if cleaned.trim().is_empty() {
+        "file".into()
+    } else {
+        cleaned
+    }
+}
+
+/// Byte layout of the multipart body: `parts[i]` is the preamble written
+/// before file `i`; the stream is `head`, then for each file its preamble
+/// and contents, then `tail`.
+#[derive(Debug, Clone)]
+pub struct MultipartLayout {
+    pub head: Vec<u8>,
+    pub file_heads: Vec<Vec<u8>>,
+    pub tail: Vec<u8>,
+    pub total_len: u64,
+}
+
+impl MultipartLayout {
+    pub fn new(boundary: &str, payload_json: &str, files: &[UploadFile]) -> Self {
+        let head = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n{payload_json}\r\n"
+        )
+        .into_bytes();
+        let mut file_heads = Vec::with_capacity(files.len());
+        for (i, f) in files.iter().enumerate() {
+            file_heads.push(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"files[{i}]\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+                    sanitize_filename(&f.name),
+                    mime_for(&f.name),
+                )
+                .into_bytes(),
+            );
+        }
+        let tail = format!("\r\n--{boundary}--\r\n").into_bytes();
+        // Every file part ends with CRLF before the next boundary.
+        let total_len = head.len() as u64
+            + file_heads.iter().map(|h| h.len() as u64).sum::<u64>()
+            + files.iter().map(|f| f.size).sum::<u64>()
+            + 2 * files.len().saturating_sub(1) as u64
+            + tail.len() as u64;
+        Self {
+            head,
+            file_heads,
+            tail,
+            total_len,
+        }
+    }
+}
+
+/// Content type by extension (Discord sniffs anyway; this only has to be
+/// plausible).
+pub fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "wav" => "audio/wav",
+        "txt" | "log" => "text/plain",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
+const CHUNK: usize = 64 * 1024;
+
+/// Streams the multipart body, reading files lazily in 64 KiB chunks.
+fn multipart_body(
+    layout: &MultipartLayout,
+    files: &[UploadFile],
+    progress: tokio::sync::mpsc::UnboundedSender<u64>,
+) -> reqwest::Body {
+    use futures::stream::{self, StreamExt};
+    use tokio::io::AsyncReadExt;
+
+    enum Step {
+        Bytes(Vec<u8>),
+        File(usize),
+    }
+    let mut steps = vec![Step::Bytes(layout.head.clone())];
+    for (i, h) in layout.file_heads.iter().enumerate() {
+        if i > 0 {
+            steps.push(Step::Bytes(b"\r\n".to_vec()));
+        }
+        steps.push(Step::Bytes(h.clone()));
+        steps.push(Step::File(i));
+    }
+    steps.push(Step::Bytes(layout.tail.clone()));
+    let paths: Vec<std::path::PathBuf> = files.iter().map(|f| f.path.clone()).collect();
+    let total = layout.total_len;
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let report = move |n: usize| {
+        use std::sync::atomic::Ordering;
+        let now = sent.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        // Throttle to ~1% steps so the UI is not flooded.
+        let step = (total / 100).max(1);
+        if now / step != (now - n as u64) / step || now >= total {
+            let _ = progress.send(now.min(total));
+        }
+    };
+    let s = stream::iter(steps).flat_map(move |step| match step {
+        Step::Bytes(b) => {
+            report(b.len());
+            stream::once(async move { Ok::<_, std::io::Error>(b) }).boxed()
+        }
+        Step::File(i) => {
+            let path = paths[i].clone();
+            let report = report.clone();
+            stream::unfold(
+                (None::<tokio::fs::File>, path, false),
+                move |(file, path, done)| {
+                    let report = report.clone();
+                    async move {
+                        if done {
+                            return None;
+                        }
+                        let mut file = match file {
+                            Some(f) => f,
+                            None => match tokio::fs::File::open(&path).await {
+                                Ok(f) => f,
+                                Err(e) => return Some((Err(e), (None, path, true))),
+                            },
+                        };
+                        let mut buf = vec![0u8; CHUNK];
+                        match file.read(&mut buf).await {
+                            Ok(0) => None,
+                            Ok(n) => {
+                                buf.truncate(n);
+                                report(n);
+                                Some((Ok(buf), (Some(file), path, false)))
+                            }
+                            Err(e) => Some((Err(e), (None, path, true))),
+                        }
+                    }
+                },
+            )
+            .boxed()
+        }
+    });
+    reqwest::Body::wrap_stream(s)
 }

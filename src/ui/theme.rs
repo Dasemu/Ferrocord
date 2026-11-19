@@ -58,6 +58,9 @@ pub struct Palette {
     pub spoiler: Color,
     pub channel_icon: Color,
     pub rail_pill: Color,
+    /// Presence dots (online is `success`, do-not-disturb is `danger`).
+    pub status_idle: Color,
+    pub status_offline: Color,
 }
 
 impl Palette {
@@ -93,6 +96,8 @@ impl Palette {
         spoiler: rgb(0x1e1f22),
         channel_icon: rgb(0x80848e),
         rail_pill: rgb(0xf2f3f5),
+        status_idle: rgb(0xf0b232),
+        status_offline: rgb(0x80848e),
     };
 
     pub const LIGHT: Palette = Palette {
@@ -127,6 +132,8 @@ impl Palette {
         spoiler: rgb(0xb9bbbe),
         channel_icon: rgb(0x6d6f78),
         rail_pill: rgb(0x060607),
+        status_idle: rgb(0xf0b232),
+        status_offline: rgb(0x80848e),
     };
 }
 
@@ -424,6 +431,90 @@ pub fn icon_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Sty
     }
 }
 
+/// Colour of a presence dot.
+pub fn presence_color(p: &Palette, status: crate::net::model::Presence) -> Color {
+    use crate::net::model::Presence::*;
+    match status {
+        Online => p.success,
+        Idle => p.status_idle,
+        Dnd => p.danger,
+        Offline => p.status_offline,
+    }
+}
+
+/// Floating menu / popover (context menu, emoji picker, status menu).
+pub fn popup(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.bg_elevated)),
+        border: Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: p.border,
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.45,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Row in a popup menu: accent fill on hover; `danger` rows turn red.
+pub fn menu_item(p: Palette, danger: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (bg, fg) = match (hovered, danger) {
+            (true, true) => (Some(Background::Color(p.danger)), p.accent_text),
+            (true, false) => (Some(Background::Color(p.accent)), p.accent_text),
+            (false, true) => (None, p.danger),
+            (false, false) => (None, p.text_normal),
+        };
+        button::Style {
+            background: bg,
+            text_color: fg,
+            border: Border {
+                radius: Metrics::DEFAULT.radius.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// Reaction pill: tinted with the accent when the user reacted.
+pub fn reaction_pill(p: Palette, me: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (bg, border) = if me {
+            (
+                Color {
+                    a: 0.15,
+                    ..p.accent
+                },
+                Color { a: 1.0, ..p.accent },
+            )
+        } else if hovered {
+            (p.bg_selected, p.text_muted)
+        } else {
+            (p.bg_sidebar, Color::TRANSPARENT)
+        };
+        button::Style {
+            background: Some(Background::Color(bg)),
+            text_color: p.text_normal,
+            border: Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: border,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 /// Text-like button (links, spoiler reveal).
 pub fn link_button(_p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, _| button::Style {
@@ -491,6 +582,18 @@ pub fn default_avatar_color(id: u64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presence_colours_are_distinct() {
+        use crate::net::model::Presence::*;
+        let p = Palette::DARK;
+        let cs = [Online, Idle, Dnd, Offline].map(|s| presence_color(&p, s));
+        for i in 0..cs.len() {
+            for j in i + 1..cs.len() {
+                assert_ne!(cs[i], cs[j]);
+            }
+        }
+    }
 
     #[test]
     fn int_colours() {

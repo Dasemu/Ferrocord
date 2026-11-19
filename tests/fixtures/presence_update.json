@@ -1,0 +1,11 @@
+{
+  "user": {
+    "id": "1000000000000000002"
+  },
+  "guild_id": "2000000000000000001",
+  "status": "dnd",
+  "client_status": {
+    "desktop": "dnd"
+  },
+  "activities": []
+}

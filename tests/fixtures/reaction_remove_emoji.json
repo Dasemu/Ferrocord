@@ -1,0 +1,10 @@
+{
+  "channel_id": "4000000000000000002",
+  "message_id": "5000000000000000022",
+  "guild_id": "2000000000000000001",
+  "emoji": {
+    "id": "1001",
+    "name": "ferris",
+    "animated": false
+  }
+}
