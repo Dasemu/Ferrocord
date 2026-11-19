@@ -192,6 +192,10 @@ async fn media_downloads_are_capped_and_host_restricted() {
     assert!(rest.is_allowed_media_url("https://media.discordapp.net/attachments/1/2/x.png"));
     assert!(rest.is_allowed_media_url("https://images-ext-1.discordapp.net/external/x"));
     assert!(!rest.is_allowed_media_url("https://images-ext-1.discordapp.net.evil.com/x"));
+    // GIF picker previews.
+    assert!(rest.is_allowed_media_url("https://media.tenor.com/abc/preview.png"));
+    assert!(!rest.is_allowed_media_url("http://media.tenor.com/abc/preview.png"));
+    assert!(!rest.is_allowed_media_url("https://media.tenor.com.evil.com/x.png"));
     assert!(
         rest.fetch_bytes("https://evil.example.com/a.png")
             .await

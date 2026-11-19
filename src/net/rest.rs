@@ -550,9 +550,13 @@ impl RestClient {
             // Override (e.g. a local mock): same scheme as configured.
             return url.starts_with(self.cdn.as_ref());
         }
+        // Tenor serves the GIF picker's previews (only exact host; these
+        // downloads never carry the token, see `request`).
         u.scheme() == "https"
-            && (matches!(host, "cdn.discordapp.com" | "media.discordapp.net")
-                || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
+            && (matches!(
+                host,
+                "cdn.discordapp.com" | "media.discordapp.net" | "media.tenor.com"
+            ) || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
     }
 
     /// Downloads a CDN asset (avatar, icon, attachment preview), refusing

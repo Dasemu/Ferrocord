@@ -823,3 +823,16 @@ fn sticker_picker_sends_a_sticker() {
     let last = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
     assert_eq!(last.stickers, vec![party]);
 }
+
+#[test]
+fn switching_channel_closes_the_gif_and_sticker_pickers() {
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    assert!(a.gif_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_HELP)));
+    assert!(a.gif_picker.is_none());
+    let _ = a.update(Message::Ui(Ui::OpenStickerPicker));
+    assert!(a.sticker_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_GENERAL)));
+    assert!(a.sticker_picker.is_none());
+}

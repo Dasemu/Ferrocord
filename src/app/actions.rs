@@ -94,6 +94,9 @@ impl App {
         self.editing = None;
         self.menu = None;
         self.emoji_picker = None;
+        // A picker left open would send to the newly opened channel.
+        self.gif_picker = None;
+        self.sticker_picker = None;
         self.pending_delete = None;
         self.highlight = None;
     }
