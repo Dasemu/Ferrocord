@@ -4,7 +4,10 @@ pub mod chat;
 pub mod icons;
 pub mod login;
 pub mod markdown;
+pub mod members;
+pub mod popups;
 pub mod rail;
+pub mod search;
 pub mod sidebar;
 pub mod theme;
 
@@ -24,15 +27,34 @@ pub fn view(app: &App) -> El<'_> {
     let body: El<'_> = match app.screen() {
         Screen::Splash => splash(t),
         Screen::Login => login::view(app),
-        Screen::Main => row![rail::view(app), sidebar::view(app), chat::view(app)]
-            .height(Length::Fill)
-            .into(),
+        Screen::Main => {
+            let mut r = row![rail::view(app), sidebar::view(app), chat::view(app)];
+            if app.search.panel_visible() {
+                r = r.push(search::view(app));
+            } else if app.members_open
+                && matches!(
+                    app.view,
+                    crate::app::View::Guild {
+                        channel: Some(_),
+                        ..
+                    }
+                )
+            {
+                r = r.push(members::view(app));
+            }
+            r.height(Length::Fill).into()
+        }
     };
     let banner = banner(app);
     let mut content: El<'_> = match banner {
         Some(b) => column![b, body].into(),
         None => body,
     };
+    if app.screen() == Screen::Main {
+        for layer in popups::layers(app) {
+            content = stack![content, layer].into();
+        }
+    }
     if let Some(url) = &app.pending_link {
         content = stack![content, leave_dialog(t, url)].into();
     }
@@ -197,18 +219,39 @@ pub fn initials_circle<'a>(p: &Palette, name: &str, color: iced::Color, size: f3
     .into()
 }
 
-/// Avatar with the green "online" dot used in the user panel and DM list.
+/// Avatar with its presence dot (user panel and DM list).
 pub fn avatar_with_status<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
+    avatar_with_presence(
+        app,
+        user,
+        size,
+        app.chat.presence_of(user.id),
+        app.theme.palette.user_panel,
+    )
+}
+
+/// Avatar with a presence dot; `ring` is the background colour the dot is
+/// cut out of.
+pub fn avatar_with_presence<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    status: crate::net::model::Presence,
+    ring_color: iced::Color,
+) -> El<'a> {
     let p = app.theme.palette;
     let dot = size * 0.3;
     let ring = container(
         container(text(""))
             .width(dot)
             .height(dot)
-            .style(theme::rounded_bg(p.success, dot / 2.0)),
+            .style(theme::rounded_bg(
+                theme::presence_color(&p, status),
+                dot / 2.0,
+            )),
     )
     .padding(2)
-    .style(theme::rounded_bg(p.user_panel, dot));
+    .style(theme::rounded_bg(ring_color, dot));
     stack![
         avatar(app, user, size),
         container(ring)

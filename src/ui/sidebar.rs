@@ -6,7 +6,7 @@ use iced::{Alignment, Length, Padding};
 
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
-use super::{El, avatar_with_status, initials_circle, mention_badge, ui};
+use super::{El, avatar_with_presence, avatar_with_status, initials_circle, mention_badge, ui};
 use crate::app::{App, Ui, View};
 use crate::net::model::*;
 
@@ -261,7 +261,9 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
         c.kind,
         c.recipients.first().and_then(|u| app.chat.users.get(u)),
     ) {
-        (ChannelKind::Dm, Some(u)) => avatar_with_status(app, u, 32.0),
+        (ChannelKind::Dm, Some(u)) => {
+            avatar_with_presence(app, u, 32.0, app.chat.presence_of(u.id), p.bg_sidebar)
+        }
         _ => initials_circle(&p, &label, theme::default_avatar_color(c.id.0), 32.0),
     };
     let mut names = column![
@@ -321,7 +323,9 @@ fn user_panel(app: &App) -> El<'_> {
             None => b,
         }
     };
-    container(
+    // Clicking the avatar or name opens the status menu, like the
+    // official user panel.
+    let identity = button(
         row![
             avatar_with_status(app, &me, 32.0),
             column![
@@ -330,12 +334,23 @@ fn user_panel(app: &App) -> El<'_> {
                     .font(INTER_SEMIBOLD)
                     .color(p.header_text)
                     .wrapping(text::Wrapping::None),
-                text(me.username.clone())
+                text(app.chat.my_status.label().to_owned())
                     .size(12)
                     .color(p.text_secondary)
                     .wrapping(text::Wrapping::None),
             ]
             .width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding(Padding::from([0, 4]))
+    .width(Length::Fill)
+    .on_press(ui(Ui::ToggleStatusMenu))
+    .style(theme::icon_button(p));
+    container(
+        row![
+            identity,
             small(Icon::Mic, None),
             small(Icon::Headphones, None),
             small(Icon::LogOut, Some(Ui::Logout)),
