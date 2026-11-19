@@ -726,6 +726,25 @@ pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     (w, h, px)
 }
 
+/// Mock pins of `channel`: its two oldest loaded text messages, most
+/// recently pinned (newest) first.
+pub fn pinned(chat: &crate::app::state::ChatState, channel: ChannelId) -> Vec<Message> {
+    let mut out: Vec<Message> = chat
+        .messages
+        .get(&channel)
+        .map(|w| {
+            w.messages
+                .iter()
+                .filter(|m| !m.content.is_empty())
+                .take(2)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    out.reverse();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

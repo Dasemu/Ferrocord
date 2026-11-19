@@ -90,6 +90,8 @@ pub enum Ui {
     SubmitSearch,
     SearchPage(bool),
     CloseSearch,
+    /// Header pin button: opens (or closes) the pinned messages panel.
+    TogglePins,
     /// A notification was clicked.
     OpenChannel(ChannelId),
     // -- window and tray
@@ -184,6 +186,11 @@ pub enum Done {
     Search {
         generation: u64,
         result: Result<SearchPage, String>,
+    },
+    /// Pinned messages loaded for the pins panel.
+    Pins {
+        generation: u64,
+        result: Result<Vec<crate::net::model::Message>, String>,
     },
     /// Delay after a jump so the new rows are laid out before scrolling.
     ScrollToMessage(MessageId),

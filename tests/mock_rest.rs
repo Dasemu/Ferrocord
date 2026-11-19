@@ -534,3 +534,42 @@ async fn upload_of_a_missing_file_fails_cleanly() {
     .expect("must not hang");
     assert!(r.is_err());
 }
+
+#[tokio::test]
+async fn pins_use_new_route_and_fall_back_to_legacy() {
+    // New paginated route.
+    let server = http(Arc::new(|req, _| {
+        if req.path == "/channels/10/messages/pins?limit=50" {
+            Response::json(
+                200,
+                json!({"items": [
+                    {"pinned_at": "2026-01-02T00:00:00+00:00", "message": msg(20)},
+                    {"pinned_at": "2026-01-01T00:00:00+00:00", "message": msg(10)}
+                ], "has_more": false}),
+            )
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let pins = rest.pins(Snowflake(10)).await.unwrap();
+    assert_eq!(
+        pins.iter().map(|m| m.id.0).collect::<Vec<_>>(),
+        vec![20, 10]
+    );
+
+    // Legacy route when the new one is unknown.
+    let server = http(Arc::new(|req, _| {
+        if req.path == "/channels/10/pins" {
+            Response::json(200, json!([msg(30)]))
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let pins = rest.pins(Snowflake(10)).await.unwrap();
+    assert_eq!(pins.iter().map(|m| m.id.0).collect::<Vec<_>>(), vec![30]);
+    assert_eq!(server.recorded().len(), 2);
+}

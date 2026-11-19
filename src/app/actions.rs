@@ -353,6 +353,7 @@ impl App {
                 self.search.close();
                 self.sync_members()
             }
+            Ui::TogglePins => self.toggle_pins(),
             Ui::OpenChannel(c) => self.open_from_notification(c),
             // Handled in `mod.rs`.
             _ => Task::none(),
@@ -772,6 +773,7 @@ impl App {
         let Some((generation, scope, query, offset)) = self.search.begin(scope, offset) else {
             return Task::none();
         };
+        self.pins.close();
         if self.cfg.mock {
             let page = mock_search(&self.chat, scope, &query, offset);
             self.search.finish(generation, Ok(page));
@@ -804,6 +806,52 @@ impl App {
         }
         self.search.finish(generation, result);
         self.request_search_images()
+    }
+
+    // -- pinned messages -----------------------------------------------------------
+
+    fn toggle_pins(&mut self) -> Task<Message> {
+        let Some(channel) = self.open_chan() else {
+            return Task::none();
+        };
+        if self.pins.is_open_for(Some(channel)) {
+            self.pins.close();
+            return Task::none();
+        }
+        // The pins panel takes the search panel's place.
+        if self.search.panel_visible() {
+            self.search.close();
+        }
+        let generation = self.pins.open(channel);
+        if self.cfg.mock {
+            let pinned = crate::mock::pinned(&self.chat, channel);
+            self.pins.finish(generation, Ok(pinned));
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        Task::perform(async move { rest.pins(channel).await }, move |r| {
+            Message::Done(Done::Pins {
+                generation,
+                result: r.map_err(|e| e.user_message()),
+            })
+        })
+    }
+
+    pub(super) fn on_pins_done(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<Msg>, String>,
+    ) -> Task<Message> {
+        if let Ok(ms) = &result {
+            for m in ms {
+                self.chat
+                    .users
+                    .entry(m.author.id)
+                    .or_insert_with(|| m.author.clone());
+            }
+        }
+        self.pins.finish(generation, result);
+        self.request_images()
     }
 
     /// Avatars for the search results.

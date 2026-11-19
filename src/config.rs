@@ -30,6 +30,7 @@ pub enum ScreenshotScreen {
     Search,
     Compose,
     Settings,
+    Pins,
 }
 
 impl ScreenshotScreen {
@@ -42,6 +43,7 @@ impl ScreenshotScreen {
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
+            "pins" => Some(Self::Pins),
             _ => None,
         }
     }
@@ -136,7 +138,7 @@ impl Config {
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings|pins> <out.png>]".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }

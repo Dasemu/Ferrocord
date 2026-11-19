@@ -226,6 +226,32 @@ impl RestClient {
         Ok(msgs)
     }
 
+    /// Pinned messages of a channel, most recently pinned first.
+    /// Uses `GET /channels/{id}/messages/pins` and falls back to the older
+    /// `GET /channels/{id}/pins` if the server does not know the new route.
+    pub async fn pins(&self, channel: ChannelId) -> Result<Vec<Message>> {
+        #[derive(serde::Deserialize)]
+        struct Page {
+            #[serde(default)]
+            items: Vec<Item>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Item {
+            message: WireMessage,
+        }
+        let wire: Vec<WireMessage> = match self
+            .get::<Page>(&format!("/channels/{channel}/messages/pins?limit=50"))
+            .await
+        {
+            Ok(p) => p.items.into_iter().map(|i| i.message).collect(),
+            Err(Error::Http { status: 404, .. }) => {
+                self.get(&format!("/channels/{channel}/pins")).await?
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(wire.into_iter().map(WireMessage::into_domain).collect())
+    }
+
     /// `POST /channels/{id}/messages`, optionally as a reply.
     pub async fn send_message(
         &self,

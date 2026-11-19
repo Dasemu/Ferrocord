@@ -10,6 +10,7 @@ pub mod jump;
 pub mod markdown;
 pub mod members;
 pub mod message;
+pub mod pins;
 pub mod search;
 pub mod state;
 pub mod upload;
@@ -108,6 +109,7 @@ pub struct App {
     member_rows_wanted: usize,
     pub status_menu: bool,
     pub search: search::SearchState,
+    pub pins: pins::PinsState,
     /// Message flashed after a jump.
     pub highlight: Option<MessageId>,
     pub toast: Option<String>,
@@ -203,6 +205,7 @@ impl App {
             member_rows_wanted: members::RANGE_SIZE,
             status_menu: false,
             search: search::SearchState::default(),
+            pins: pins::PinsState::default(),
             highlight: None,
             toast: None,
             pending_link: None,
@@ -383,7 +386,8 @@ impl App {
                     });
                 }
             }
-            Some(ScreenshotScreen::Guild | ScreenshotScreen::Settings) | None => {
+            Some(ScreenshotScreen::Guild | ScreenshotScreen::Settings | ScreenshotScreen::Pins)
+            | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
                 };
@@ -395,6 +399,9 @@ impl App {
             }
         }
         self.settings_open = screen == Some(ScreenshotScreen::Settings);
+        if screen == Some(ScreenshotScreen::Pins) {
+            let _ = self.update_ui(Ui::TogglePins);
+        }
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
@@ -1245,6 +1252,7 @@ impl App {
             } => self.on_around(channel, target, result),
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
+            Done::Pins { generation, result } => self.on_pins_done(generation, result),
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
                 if self.highlight == Some(m) {
@@ -1353,7 +1361,7 @@ impl App {
                 }
             }
         }
-        for m in self.search.results.iter() {
+        for m in self.search.results.iter().chain(&self.pins.messages) {
             if let Some(u) = self.rest.avatar_url(&m.author, 80) {
                 urls.push(u);
             }

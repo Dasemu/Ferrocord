@@ -152,7 +152,18 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     .style(theme::rounded_bg(p.bg_app, 4.0));
     let tools = row![
         tool(Icon::Bell),
-        tool(Icon::Pin),
+        button(icon(
+            Icon::Pin,
+            24.0,
+            if app.pins.is_open_for(Some(c.id)) {
+                p.header_text
+            } else {
+                p.text_secondary
+            },
+        ))
+        .padding(0)
+        .on_press(ui(Ui::TogglePins))
+        .style(theme::link_button(p)),
         members,
         search,
         tool(Icon::Inbox),

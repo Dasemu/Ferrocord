@@ -65,7 +65,7 @@ pub fn view(app: &App) -> El<'_> {
         );
     }
     for m in &s.results {
-        col = col.push(result_card(app, m, now));
+        col = col.push(result_card(app, m, now, true));
     }
     let pager = row![
         pager_button(app, "Previous", s.has_prev(), Ui::SearchPage(false)),
@@ -107,7 +107,9 @@ fn pager_button<'a>(app: &App, label: &'static str, enabled: bool, msg: Ui) -> E
     if enabled { b.on_press(ui(msg)) } else { b }.into()
 }
 
-fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64) -> El<'a> {
+/// A message as a clickable card that jumps to it; `show_place` adds the
+/// channel name above (search spans channels, pins do not).
+pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bool) -> El<'a> {
     let p = app.theme.palette;
     let channel = app.chat.channels.get(&m.channel_id);
     let place = match channel {
@@ -137,28 +139,32 @@ fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64) -> El<'a> {
     ]
     .spacing(2)
     .width(Length::Fill);
+    let card = button(
+        container(
+            row![avatar(app, &m.author, 32.0), body]
+                .spacing(12)
+                .align_y(Alignment::Start),
+        )
+        .padding(10)
+        .width(Length::Fill)
+        .style(theme::rounded_bg(p.bg_panel, 6.0)),
+    )
+    .padding(0)
+    .width(Length::Fill)
+    .on_press(ui(Ui::JumpTo {
+        channel: m.channel_id,
+        message: m.id,
+    }))
+    .style(theme::link_button(p));
+    if !show_place {
+        return card.into();
+    }
     column![
         text(place)
             .size(12)
             .font(INTER_SEMIBOLD)
             .color(p.text_muted),
-        button(
-            container(
-                row![avatar(app, &m.author, 32.0), body]
-                    .spacing(12)
-                    .align_y(Alignment::Start)
-            )
-            .padding(10)
-            .width(Length::Fill)
-            .style(theme::rounded_bg(p.bg_panel, 6.0)),
-        )
-        .padding(0)
-        .width(Length::Fill)
-        .on_press(ui(Ui::JumpTo {
-            channel: m.channel_id,
-            message: m.id,
-        }))
-        .style(theme::link_button(p)),
+        card,
     ]
     .spacing(4)
     .into()
