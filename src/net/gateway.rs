@@ -22,6 +22,11 @@ use crate::auth::secrets::Secret;
 use crate::error::Result;
 
 pub const API_VERSION: u8 = 10;
+/// A session must stay up this long before the reconnect attempt counter
+/// is reset; flapping connections keep backing off.
+pub const STABLE_AFTER: Duration = Duration::from_secs(60);
+/// Minimum delay before any reconnect.
+pub const MIN_RECONNECT: Duration = Duration::from_millis(1000);
 
 /// Everything needed to (re)connect.
 #[derive(Clone, Debug)]
@@ -71,10 +76,17 @@ pub fn close_code_action(code: Option<u16>, resumable: bool) -> Action {
         Some(4011) => Action::Fatal(FatalReason::Other("sharding required".into())),
         Some(4012) => Action::Fatal(FatalReason::Other("invalid API version".into())),
         Some(4013) | Some(4014) => Action::Fatal(FatalReason::Other("invalid intents".into())),
-        // Invalid seq / session timed out: the session is gone.
-        Some(4007) | Some(4009) => Action::Reconnect {
+        // Invalid seq / session timed out / not authenticated / already
+        // authenticated: the session is unusable, identify again. The
+        // caller's backoff keeps this from becoming a tight loop.
+        Some(4003) | Some(4005) | Some(4007) | Some(4009) => Action::Reconnect {
             resume: false,
             delay: Duration::ZERO,
+        },
+        // Rate limited (sent too fast): back off noticeably.
+        Some(4008) => Action::Reconnect {
+            resume: resumable,
+            delay: Duration::from_secs(5),
         },
         _ => Action::Reconnect {
             resume: resumable,
@@ -225,7 +237,11 @@ impl Session {
                 let mut out = Vec::new();
                 if t == "READY" {
                     self.session_id = payload.d["session_id"].as_str().map(String::from);
-                    self.resume_url = payload.d["resume_gateway_url"].as_str().map(String::from);
+                    // Never follow a resume URL that is not wss (or loopback ws).
+                    self.resume_url = payload.d["resume_gateway_url"]
+                        .as_str()
+                        .filter(|u| validate_url(u).is_ok())
+                        .map(String::from);
                     self.resuming = false;
                     out.push(Action::Emit(EventKind::Connected));
                 } else if t == "RESUMED" {
@@ -252,6 +268,7 @@ enum Outcome {
     Reconnect {
         resume: bool,
         delay: Duration,
+        /// The connection was up for at least `STABLE_AFTER`.
         was_ready: bool,
     },
     Fatal(FatalReason),
@@ -310,10 +327,13 @@ async fn run(cfg: GatewayConfig, tx: mpsc::Sender<Event>) {
         };
         attempt = attempt.saturating_add(1);
         let delay = if attempt == 1 && extra_delay.is_zero() {
-            // First retry after a healthy session: reconnect almost at once.
-            Duration::from_millis(fastrand::u64(100..1_000))
+            // First retry after a stable session: reconnect quickly, but
+            // never instantly.
+            MIN_RECONNECT + Duration::from_millis(fastrand::u64(0..1_000))
         } else {
-            backoff(attempt, fastrand::f64()).max(extra_delay)
+            backoff(attempt, fastrand::f64())
+                .max(extra_delay)
+                .max(MIN_RECONNECT)
         };
         tracing::info!(
             attempt,
@@ -371,6 +391,7 @@ async fn connect_once(
     session.on_connect();
     let mut inflater = cfg.zlib.then(ZlibStream::new);
     let mut was_ready = false;
+    let mut ready_at: Option<Instant> = None;
     // No heartbeat until HELLO arrives.
     let far = Instant::now() + Duration::from_secs(3600);
     let mut next_heartbeat = far;
@@ -462,6 +483,7 @@ async fn connect_once(
                         }
                         Action::Emit(EventKind::Connected) => {
                             was_ready = true;
+                            ready_at.get_or_insert_with(Instant::now);
                             if tx.send(Event::Connection(ConnectionState::Connected)).await.is_err() {
                                 stop = Some(Outcome::Closed);
                                 break;
@@ -495,6 +517,17 @@ async fn connect_once(
             }
         }
     };
+    // Only a session that stayed up for a while resets the backoff.
+    let _ = was_ready;
+    let stable = ready_at.is_some_and(|t| t.elapsed() >= STABLE_AFTER);
+    let outcome = match outcome {
+        Outcome::Reconnect { resume, delay, .. } => Outcome::Reconnect {
+            resume,
+            delay,
+            was_ready: stable,
+        },
+        other => other,
+    };
     if let Outcome::Reconnect { resume: true, .. } = outcome {
         // Close with a non-1000 code so the session stays resumable.
         let _ = ws
@@ -507,13 +540,22 @@ async fn connect_once(
     outcome
 }
 
-/// Validates the base URL early so misconfiguration is a typed error.
+/// Validates a gateway URL: `wss://` for any host, plain `ws://` only for
+/// loopback hosts (local mock servers). Applied to the configured URLs and
+/// to the `resume_gateway_url` the server hands us.
 pub fn validate_url(url: &str) -> Result<()> {
     let u = url::Url::parse(url).map_err(|e| crate::error::Error::Protocol(e.to_string()))?;
+    let loopback = matches!(
+        u.host(),
+        Some(url::Host::Domain("localhost"))
+            | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+            | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+    );
     match u.scheme() {
-        "ws" | "wss" => Ok(()),
+        "wss" if u.host().is_some() => Ok(()),
+        "ws" if loopback => Ok(()),
         s => Err(crate::error::Error::Protocol(format!(
-            "unsupported gateway scheme {s}"
+            "refusing gateway URL with scheme {s} (wss required)"
         ))),
     }
 }
@@ -591,6 +633,22 @@ mod tests {
         assert_eq!(v["op"], 6);
         assert_eq!(v["d"]["session_id"], "abc");
         assert_eq!(v["d"]["seq"], 7);
+    }
+
+    #[test]
+    fn insecure_resume_url_is_ignored() {
+        let mut s = Session::new();
+        s.on_payload(
+            &frame(json!({"op":0,"t":"READY","s":1,"d":{"session_id":"abc","resume_gateway_url":"ws://evil.example.com","user":{"id":"1"}}})),
+            "tok",
+            &props(),
+            Instant::now(),
+        );
+        assert_eq!(s.resume_url, None);
+        assert!(
+            s.connect_url("wss://gateway.discord.gg", false)
+                .starts_with("wss://gateway.discord.gg/")
+        );
     }
 
     #[test]
@@ -692,6 +750,16 @@ mod tests {
             close_code_action(Some(4014), true),
             Action::Fatal(_)
         ));
+        for code in [4003, 4005, 4007] {
+            assert!(matches!(
+                close_code_action(Some(code), true),
+                Action::Reconnect { resume: false, .. }
+            ));
+        }
+        assert!(matches!(
+            close_code_action(Some(4008), true),
+            Action::Reconnect { delay, .. } if delay >= Duration::from_secs(5)
+        ));
     }
 
     #[test]
@@ -707,5 +775,9 @@ mod tests {
     fn url_validation() {
         assert!(validate_url("wss://gateway.discord.gg").is_ok());
         assert!(validate_url("https://x").is_err());
+        assert!(validate_url("ws://evil.example.com").is_err());
+        assert!(validate_url("ws://127.0.0.1:9000").is_ok());
+        assert!(validate_url("ws://localhost:9000").is_ok());
+        assert!(validate_url("not a url").is_err());
     }
 }

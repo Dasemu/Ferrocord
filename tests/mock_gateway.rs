@@ -374,5 +374,5 @@ async fn server_down_reconnects_with_backoff() {
         unreachable!()
     };
     assert_eq!(attempt, 1);
-    assert!(delay_ms <= 1_000);
+    assert!((1_000..=2_000).contains(&delay_ms), "{delay_ms}");
 }

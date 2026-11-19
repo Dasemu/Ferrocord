@@ -47,6 +47,22 @@ pub enum ThemeChoice {
     Light,
 }
 
+/// `https://` for any host, plain `http://` only for loopback (mock servers).
+pub fn validate_http_url(url: &str) -> Result<(), String> {
+    let u = url::Url::parse(url).map_err(|e| format!("invalid URL {url}: {e}"))?;
+    let loopback = matches!(
+        u.host(),
+        Some(url::Host::Domain("localhost"))
+            | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+            | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+    );
+    match u.scheme() {
+        "https" if u.host().is_some() => Ok(()),
+        "http" if loopback => Ok(()),
+        _ => Err(format!("refusing insecure URL {url} (https required)")),
+    }
+}
+
 /// Runtime configuration, built once in `main`.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -102,15 +118,26 @@ impl Config {
             _ => ThemeChoice::Dark,
         };
         let dirs = directories::ProjectDirs::from("dev", "ferro", "ferrocord");
+        let gateway_url =
+            env("FERROCORD_GATEWAY_URL").unwrap_or_else(|| DEFAULT_GATEWAY_URL.into());
+        let remote_auth_url =
+            env("FERROCORD_REMOTE_AUTH_URL").unwrap_or_else(|| DEFAULT_REMOTE_AUTH_URL.into());
+        for u in [&gateway_url, &remote_auth_url] {
+            crate::net::gateway::validate_url(u).map_err(|e| e.to_string())?;
+        }
+        let api_url = env("FERROCORD_API_URL").unwrap_or_else(|| DEFAULT_API_URL.into());
+        let cdn_url = env("FERROCORD_CDN_URL").unwrap_or_else(|| DEFAULT_CDN_URL.into());
+        for u in [&api_url, &cdn_url] {
+            validate_http_url(u)?;
+        }
         Ok(Self {
             mock,
             screenshot,
             theme,
-            gateway_url: env("FERROCORD_GATEWAY_URL").unwrap_or_else(|| DEFAULT_GATEWAY_URL.into()),
-            api_url: env("FERROCORD_API_URL").unwrap_or_else(|| DEFAULT_API_URL.into()),
-            cdn_url: env("FERROCORD_CDN_URL").unwrap_or_else(|| DEFAULT_CDN_URL.into()),
-            remote_auth_url: env("FERROCORD_REMOTE_AUTH_URL")
-                .unwrap_or_else(|| DEFAULT_REMOTE_AUTH_URL.into()),
+            gateway_url,
+            api_url,
+            cdn_url,
+            remote_auth_url,
             zlib: env("FERROCORD_ZLIB").as_deref() != Some("0"),
             notification_preview: env("FERROCORD_NOTIFY_PREVIEW").as_deref() != Some("0"),
             trace_startup: env("FERRO_TRACE_STARTUP").is_some(),
@@ -169,6 +196,14 @@ mod tests {
         assert!(c.mock);
         assert_eq!(c.screenshot.as_ref().unwrap().0, ScreenshotScreen::Dms);
         assert!(c.database_path().is_none());
+    }
+
+    #[test]
+    fn url_validation() {
+        assert!(validate_http_url("https://discord.com/api/v9").is_ok());
+        assert!(validate_http_url("http://127.0.0.1:8080").is_ok());
+        assert!(validate_http_url("http://example.com").is_err());
+        assert!(validate_http_url("file:///etc/passwd").is_err());
     }
 
     #[test]
