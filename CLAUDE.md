@@ -31,7 +31,8 @@ remote auth), `src/store` (SQLite cache), `src/auth` (login + keyring).
 ## Workflow quirks
 - Work on `feat/*` branches off `development`; PRs target `development` only.
 - Never push to `main`/`development` directly, never merge.
-- `version.yml` bumps the version in `Cargo.toml` (do not bump by hand).
+- `version.yml` bumps the version in `Cargo.toml` (do not bump by hand) and syncs
+  `main` bumps back to `development`; protected branches need a bot bypass.
 
 ## Deployment
 No packaging yet: `cargo build --release` produces `target/release/ferrocord`.

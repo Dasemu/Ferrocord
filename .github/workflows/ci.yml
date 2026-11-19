@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Feature branches are covered by the pull_request trigger; pushing only
+  # main/development avoids duplicate runs for every PR commit.
   push:
-    branches: [main, development, "feat/**", "fix/**"]
+    branches: [main, development]
   pull_request:
     branches: [main, development]
 
@@ -42,3 +44,7 @@ jobs:
 
       - name: cargo test
         run: cargo test --all-targets
+
+      # `--all-targets` skips doctests.
+      - name: cargo test --doc
+        run: cargo test --doc

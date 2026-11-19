@@ -3,10 +3,20 @@ name: Version
 # Version policy (the version lives in Cargo.toml):
 # - push to `development`                       -> bump PATCH
 # - merged `development` -> `main` pull request -> bump MINOR, reset PATCH
+#   (merge commit, squash, rebase or fast-forward: detected via the API)
 # - any other (direct) push to `main`           -> bump PATCH
+# After a bump on `main` the new version is synced back to `development`
+# with a `chore(release)` bot commit so the next release PR does not
+# conflict on Cargo.toml / Cargo.lock.
 #
-# Loop protection: pushes made with GITHUB_TOKEN do not trigger workflows, and
-# the job is skipped when the head commit message starts with `chore(release)`.
+# Loop protection: pushes made with GITHUB_TOKEN do not trigger workflows,
+# and the job is skipped when the pusher is github-actions[bot]. (We do not
+# guard on the head commit message: a fast-forward dev -> main merge can
+# have a `chore(release)` commit at its head and must still bump MINOR.)
+#
+# Protected branches: if `main` / `development` require pull requests or
+# status checks, add a ruleset bypass for "GitHub Actions" (or use a
+# GitHub App / PAT with bypass rights), otherwise the bot push is rejected.
 
 on:
   push:
@@ -22,12 +32,20 @@ concurrency:
 
 jobs:
   bump:
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release)') }}
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+    env:
+      BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Decide bump kind
         id: kind
@@ -35,9 +53,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           kind=patch
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            head_ref=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-              --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].head.ref // ""' || true)
+          if [ "${BRANCH}" = "main" ]; then
+            head_ref=""
+            for attempt in 1 2 3; do
+              if head_ref=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                  --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].head.ref // ""'); then
+                break
+              fi
+              echo "PR lookup failed (attempt ${attempt}), retrying"
+              head_ref=""
+              sleep $((attempt * 5))
+            done
             if [ "${head_ref}" = "development" ]; then
               kind=minor
             fi
@@ -45,7 +71,7 @@ jobs:
           echo "kind=${kind}" >> "$GITHUB_OUTPUT"
           echo "Bump kind: ${kind}"
 
-      - name: Bump version in Cargo.toml
+      - name: Bump version
         id: bump
         run: |
           current=$(grep -m1 -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
@@ -56,19 +82,41 @@ jobs:
             patch=$((patch + 1))
           fi
           next="${major}.${minor}.${patch}"
-          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"${next}\"/" Cargo.toml
-          if [ -f Cargo.lock ]; then
-            awk -v nv="${next}" '
-              /^name = "ferrocord"$/ { print; getline; if ($0 ~ /^version = /) { print "version = \"" nv "\""; next } }
-              { print }' Cargo.lock > Cargo.lock.new && mv Cargo.lock.new Cargo.lock
-          fi
-          echo "from=${current}" >> "$GITHUB_OUTPUT"
           echo "to=${next}" >> "$GITHUB_OUTPUT"
+          ./.github/scripts/set-version.sh "${next}"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${next}"
 
-      - name: Commit and push
+      - name: Push (rebase and retry)
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock 2>/dev/null || git add Cargo.toml
-          git commit -m "chore(release): v${{ steps.bump.outputs.to }}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "${BRANCH}" && git push origin "HEAD:${BRANCH}"; then
+              exit 0
+            fi
+            echo "push failed (attempt ${attempt}), retrying"
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
+          exit 1
+
+      - name: Sync version back to development
+        if: ${{ github.ref_name == 'main' }}
+        run: |
+          next="${{ steps.bump.outputs.to }}"
+          for attempt in 1 2 3; do
+            git fetch origin development
+            git checkout -B development origin/development
+            ./.github/scripts/set-version.sh "${next}"
+            if git diff --quiet; then
+              echo "development already at v${next}"
+              exit 0
+            fi
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore(release): sync v${next} from main"
+            if git push origin HEAD:development; then
+              exit 0
+            fi
+            echo "sync push failed (attempt ${attempt}), retrying"
+            sleep $((attempt * 5))
+          done
+          exit 1
