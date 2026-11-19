@@ -45,5 +45,7 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - Integration tests use local mock WebSocket/HTTP servers; never real accounts.
 - Endpoints can be overridden with `FERROCORD_GATEWAY_URL`, `FERROCORD_API_URL`,
   `FERROCORD_REMOTE_AUTH_URL`, `FERROCORD_CDN_URL`.
+- Mouse position / Shift live in `app/input.rs` atomics (no per-event messages).
+- File dialog: `rfd` (xdg-portal). Clipboard files/images: `arboard`.
 - Keyring tests must use `MemoryStore` (no Secret Service in CI).
 - `main` defaults `ICED_BACKEND=tiny-skia` (wgpu costs 100-200 MB RSS).

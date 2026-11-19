@@ -39,11 +39,23 @@ states or remote auth.
 | 0 | DISPATCH | ← | Tracks `s`; parsed by `types::parse_dispatch`. |
 | 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
 | 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`), presence. |
+| 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`); also saved with `PATCH /users/@me/settings`. |
+| 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, channels: {id: [[0,99]]}}`, sent while the member sidebar is open. |
 | 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
 | 7 | RECONNECT | ← | Close with 4000 and resume. |
 | 9 | INVALID_SESSION | ← | `d = true` → resume; `false` → reset session, wait 1–5 s, identify. |
 | 10 | HELLO | ← | Start heartbeating (first beat after `interval × random[0,1)`), then IDENTIFY or RESUME. |
 | 11 | HEARTBEAT_ACK | ← | Clears the pending flag, measures latency. |
+
+### Commands from the app (`GatewayHandle`)
+
+The app records what it wants (own status, member list ranges) in a shared
+`GatewayHandle`; the runner sends op 3 / op 14 once the session is READY and
+again after every reconnect or resume. Identical requests are not re-sent.
+Member list ranges grow in steps of 100 rows up to 500 (`app/members.rs`);
+`GUILD_MEMBER_LIST_UPDATE` ops (SYNC, INSERT, UPDATE, DELETE, INVALIDATE) are
+applied by a bounded sparse list (at most 1500 rows). Presence comes from
+READY `presences` (friends), `PRESENCE_UPDATE`, and member list items.
 
 ### Heartbeat, zombies, reconnect
 
@@ -68,7 +80,8 @@ shared `Decompress` context. The buffer is capped at 64 MiB.
 `READY`, `READY_SUPPLEMENTAL`, `RESUMED`, `MESSAGE_CREATE`, `MESSAGE_UPDATE`
 (partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
 `MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
-`GUILD_CREATE/UPDATE/DELETE`. Unknown events are ignored; a malformed known
+`GUILD_CREATE/UPDATE/DELETE`, `MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI`,
+`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`. Unknown events are ignored; a malformed known
 event is logged (without its payload) and the connection stays up.
 
 ### User-account READY quirks
@@ -102,6 +115,13 @@ Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 | History | `GET /channels/{id}/messages?limit=50[&before=]` |
 | Send | `POST /channels/{id}/messages` `{ content, nonce, tts }` |
 | Typing | `POST /channels/{id}/typing` (at most every 8 s while typing) |
+| Edit / delete | `PATCH` / `DELETE /channels/{c}/messages/{m}` |
+| Reply | `POST .../messages` with `message_reference` and, if "@ OFF", `allowed_mentions {parse:[users,roles,everyone], replied_user:false}` |
+| Reactions | `PUT/DELETE /channels/{c}/messages/{m}/reactions/{emoji}/@me` (`%`-encoded Unicode, or `name:id`) |
+| Jump | `GET .../messages?around={m}` / `?after={m}` |
+| Search | `GET /guilds/{g}/messages/search?content=&offset=` or `/channels/{c}/...` (202 + `retry_after` while indexing is retried, max 4 tries) |
+| Upload | `POST .../messages` `multipart/form-data`: `payload_json` + `files[n]`, streamed from disk with an explicit `Content-Length` |
+| Status | `PATCH /users/@me/settings {status}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
 | Media | CDN `avatars/`, `icons/`, `emojis/`, attachment `proxy_url?width=&height=` |
@@ -191,3 +211,19 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 
 Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
 (ISC). No Discord logos, fonts or artwork are used.
+
+## 8. Round 2 behaviour notes
+
+* **Replies**: header from `referenced_message` (null = "Original message was
+  deleted"); refreshed from the loaded window when the original is there.
+  Replying to yourself never pings.
+* **Upload limits** (`rest::upload_limit`): 10 MiB default; Nitro Classic/Basic
+  50 MiB, Nitro 500 MiB; server boost tier 2 = 50 MiB, tier 3 = 100 MiB;
+  at most 10 files. Pasted images are written to a private temp file and
+  deleted afterwards.
+* **Detached windows**: after jumping to an old message the window holds that
+  region only; live messages are not appended until "Jump To Present" or
+  scrolling to the bottom loads the newer pages.
+* **Desktop helpers**: file dialog via `rfd` (xdg-portal, no GTK); Ctrl+V reads
+  copied files or an image through `arboard` (X11 and Wayland data-control),
+  encoded to PNG with a pixel and byte cap.
