@@ -94,6 +94,18 @@ pub struct Badge {
     pub mentions: u32,
 }
 
+/// How a message mentions the current user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MentionKind {
+    None,
+    /// `<@me>` or any message in a DM / group DM.
+    Direct,
+    /// A role the user has.
+    Role,
+    /// `@everyone` / `@here`.
+    Everyone,
+}
+
 /// A desktop notification to show.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
@@ -137,6 +149,10 @@ pub struct ChatState {
     pub member_roles: HashMap<(GuildId, UserId), Vec<RoleId>>,
     pub muted_guilds: HashSet<GuildId>,
     pub muted_channels: HashSet<ChannelId>,
+    /// Servers where @everyone/@here do not count as mentions.
+    pub suppress_everyone: HashSet<GuildId>,
+    /// Servers where role mentions do not count.
+    pub suppress_roles: HashSet<GuildId>,
 }
 
 impl ChatState {
@@ -173,6 +189,8 @@ impl ChatState {
         self.my_roles = r.my_roles.iter().cloned().collect();
         self.muted_guilds = r.muted_guilds.iter().copied().collect();
         self.muted_channels = r.muted_channels.iter().copied().collect();
+        self.suppress_everyone = r.suppress_everyone.iter().copied().collect();
+        self.suppress_roles = r.suppress_roles.iter().copied().collect();
         // Cached windows stay, but must be re-synced from the network.
         for w in self.messages.values_mut() {
             w.synced = false;
@@ -327,16 +345,30 @@ impl ChatState {
             }
             return;
         }
-        let mentioned = self.mentions_me(m);
-        if mentioned {
+        let muted = self.muted_channels.contains(&m.channel_id)
+            || m.guild_id.is_some_and(|g| self.muted_guilds.contains(&g));
+        // Like the official client: a direct @mention (or a DM) always
+        // badges and notifies, even in a muted channel/server; @everyone,
+        // @here and role mentions respect mutes and the per-server
+        // "suppress" settings.
+        let counted = match self.mention_kind(m) {
+            MentionKind::None => false,
+            MentionKind::Direct => true,
+            MentionKind::Everyone => {
+                !muted
+                    && !m
+                        .guild_id
+                        .is_some_and(|g| self.suppress_everyone.contains(&g))
+            }
+            MentionKind::Role => {
+                !muted && !m.guild_id.is_some_and(|g| self.suppress_roles.contains(&g))
+            }
+        };
+        if counted {
             self.read_states
                 .entry(m.channel_id)
                 .or_default()
                 .mention_count += 1;
-        }
-        let muted = self.muted_channels.contains(&m.channel_id)
-            || m.guild_id.is_some_and(|g| self.muted_guilds.contains(&g));
-        if mentioned && (!muted || self.is_private(m.channel_id)) {
             fx.push(Effect::Notify(self.notification_for(m, ctx)));
         }
     }
@@ -348,24 +380,33 @@ impl ChatState {
     /// Whether `m` should ping the current user: direct mention, role
     /// mention, @everyone/@here, or any message in a DM.
     pub fn mentions_me(&self, m: &Message) -> bool {
-        let Some(me) = self.me_id() else { return false };
+        self.mention_kind(m) != MentionKind::None
+    }
+
+    /// How `m` mentions the current user (strongest kind wins).
+    pub fn mention_kind(&self, m: &Message) -> MentionKind {
+        let Some(me) = self.me_id() else {
+            return MentionKind::None;
+        };
         if m.author.id == me {
-            return false;
+            return MentionKind::None;
         }
         if self.is_private(m.channel_id)
             || m.guild_id.is_none() && !self.channels.contains_key(&m.channel_id)
+            || m.mentions.contains(&me)
         {
-            return true;
-        }
-        if m.mentions.contains(&me) || m.mention_everyone {
-            return true;
+            return MentionKind::Direct;
         }
         if let Some(g) = m.guild_id
             && let Some(roles) = self.my_roles.get(&g)
+            && m.mention_roles.iter().any(|r| roles.contains(r))
         {
-            return m.mention_roles.iter().any(|r| roles.contains(r));
+            return MentionKind::Role;
         }
-        false
+        if m.mention_everyone {
+            return MentionKind::Everyone;
+        }
+        MentionKind::None
     }
 
     fn notification_for(&self, m: &Message, ctx: &Ctx) -> Notification {
@@ -452,9 +493,10 @@ impl ChatState {
         };
         match self.read_states.get(&c).and_then(|r| r.last_read) {
             Some(read) => last > read,
-            // No read state: Discord treats DMs without one as read only if
-            // they have no messages; guild channels without one are unread.
-            None => true,
+            // No read state: we cannot know what was read. Treat it as read
+            // rather than lighting up every channel never opened; the next
+            // message (or MESSAGE_ACK) creates a read state.
+            None => false,
         }
     }
 
@@ -855,8 +897,54 @@ mod tests {
         let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
         assert!(fx.is_empty());
         assert!(!s.guild_badge(mock::GUILD_RUST).unread);
-        // ...but mentions are still counted, like the official client.
-        assert!(s.guild_badge(mock::GUILD_RUST).mentions > 0);
+        // @everyone in a muted server does not add a badge...
+        let before = s.mention_count(mock::CH_RANDOM);
+        assert_eq!(before, 0);
+        // ...but a direct @mention still does, and notifies.
+        let mut m = msg_in(&s, mock::CH_RANDOM, mock::user(2), "<@1>");
+        m.mentions = vec![mock::ME];
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert_eq!(s.mention_count(mock::CH_RANDOM), 1);
+        assert!(matches!(fx[0], Effect::Notify(_)));
+    }
+
+    #[test]
+    fn muted_channel_role_mentions_do_not_badge() {
+        let mut s = loaded();
+        s.muted_channels.insert(mock::CH_RANDOM);
+        s.my_roles.insert(mock::GUILD_RUST, vec![mock::ROLE_MOD]);
+        let mut m = msg_in(&s, mock::CH_RANDOM, mock::user(2), "<@&900>");
+        m.mention_roles = vec![mock::ROLE_MOD];
+        assert_eq!(s.mention_kind(&m), MentionKind::Role);
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert!(fx.is_empty());
+        assert_eq!(s.mention_count(mock::CH_RANDOM), 0);
+    }
+
+    #[test]
+    fn suppress_settings_are_respected() {
+        let mut s = loaded();
+        s.suppress_everyone.insert(mock::GUILD_RUST);
+        let mut m = msg_in(&s, mock::CH_GENERAL, mock::user(2), "@everyone");
+        m.mention_everyone = true;
+        let fx = s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx());
+        assert!(fx.is_empty());
+        assert_eq!(s.mention_count(mock::CH_GENERAL), 0);
+        s.suppress_roles.insert(mock::GUILD_RUST);
+        s.my_roles.insert(mock::GUILD_RUST, vec![mock::ROLE_MOD]);
+        let mut m = msg_in(&s, mock::CH_GENERAL, mock::user(2), "<@&900>");
+        m.mention_roles = vec![mock::ROLE_MOD];
+        assert!(
+            s.apply_event(&Event::MessageCreate(Box::new(m)), &ctx())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn channel_without_read_state_is_not_unread() {
+        let mut s = loaded();
+        s.read_states.remove(&mock::CH_GENERAL);
+        assert!(!s.is_unread(mock::CH_GENERAL));
     }
 
     #[test]

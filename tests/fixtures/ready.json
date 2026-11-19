@@ -52,7 +52,7 @@
     "version": 1,
     "partial": false,
     "entries": [
-      { "guild_id": "2000000000000000002", "muted": true, "channel_overrides": [] },
+      { "guild_id": "2000000000000000002", "muted": true, "suppress_everyone": true, "suppress_roles": false, "channel_overrides": [] },
       { "guild_id": "2000000000000000001", "muted": false, "channel_overrides": [ { "channel_id": "4000000000000000003", "muted": true } ] }
     ]
   },

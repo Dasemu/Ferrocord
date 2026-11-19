@@ -100,6 +100,8 @@ fn ready_read_states_settings_and_roles() {
     assert_eq!(dm.last_read, None);
 
     assert_eq!(r.muted_guilds, vec![sf("2000000000000000002")]);
+    assert_eq!(r.suppress_everyone, vec![sf("2000000000000000002")]);
+    assert!(r.suppress_roles.is_empty());
     assert_eq!(r.muted_channels, vec![sf("4000000000000000003")]);
     assert_eq!(
         r.guild_order,

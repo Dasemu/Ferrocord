@@ -581,6 +581,10 @@ pub struct WireGuildSettingsEntry {
     #[serde(default)]
     pub muted: bool,
     #[serde(default)]
+    pub suppress_everyone: bool,
+    #[serde(default)]
+    pub suppress_roles: bool,
+    #[serde(default)]
     pub channel_overrides: Vec<WireChannelOverride>,
 }
 
@@ -694,7 +698,17 @@ impl WireReady {
         };
         let mut muted_guilds = Vec::new();
         let mut muted_channels = Vec::new();
+        let mut suppress_everyone = Vec::new();
+        let mut suppress_roles = Vec::new();
         for e in settings_entries {
+            if let Some(g) = e.guild_id {
+                if e.suppress_everyone {
+                    suppress_everyone.push(g);
+                }
+                if e.suppress_roles {
+                    suppress_roles.push(g);
+                }
+            }
             if e.muted
                 && let Some(g) = e.guild_id
             {
@@ -730,6 +744,8 @@ impl WireReady {
             my_roles,
             muted_guilds,
             muted_channels,
+            suppress_everyone,
+            suppress_roles,
         }
     }
 }

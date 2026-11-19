@@ -250,6 +250,8 @@ pub fn ready() -> ReadyData {
         my_roles: vec![(GUILD_RUST, vec![ROLE_MEMBER])],
         muted_guilds: vec![],
         muted_channels: vec![],
+        suppress_everyone: vec![],
+        suppress_roles: vec![],
     }
 }
 

@@ -371,6 +371,9 @@ pub struct ReadyData {
     /// Muted guilds / channels from user guild settings.
     pub muted_guilds: Vec<GuildId>,
     pub muted_channels: Vec<ChannelId>,
+    /// Servers with "suppress @everyone and @here" / "suppress role mentions".
+    pub suppress_everyone: Vec<GuildId>,
+    pub suppress_roles: Vec<GuildId>,
 }
 
 #[cfg(test)]
