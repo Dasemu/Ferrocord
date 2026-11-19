@@ -203,6 +203,12 @@ pub struct Guild {
     pub icon: Option<String>,
     pub roles: Vec<Role>,
     pub owner_id: Option<UserId>,
+    /// Custom emoji of the server (for the picker).
+    #[serde(default)]
+    pub emojis: Vec<CustomEmoji>,
+    /// Boost tier (0-3); raises the upload limit.
+    #[serde(default)]
+    pub premium_tier: u8,
 }
 
 impl Guild {
@@ -215,6 +221,199 @@ impl Guild {
             .take(3)
             .collect();
         if a.is_empty() { "?".into() } else { a }
+    }
+}
+
+/// A server's custom emoji.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomEmoji {
+    pub id: Snowflake,
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    #[serde(default = "default_true")]
+    pub available: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// An emoji used in a reaction: Unicode (`id == None`, `name` is the
+/// character sequence) or custom (`id` set).
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
+pub struct Emoji {
+    pub id: Option<Snowflake>,
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+}
+
+/// Identity: custom emoji by id, Unicode by sequence (names of custom
+/// emoji can change).
+impl PartialEq for Emoji {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.id, other.id) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => self.name == other.name,
+            _ => false,
+        }
+    }
+}
+
+impl Emoji {
+    pub fn unicode(s: &str) -> Self {
+        Self {
+            id: None,
+            name: s.to_owned(),
+            animated: false,
+        }
+    }
+
+    pub fn custom(e: &CustomEmoji) -> Self {
+        Self {
+            id: Some(e.id),
+            name: e.name.clone(),
+            animated: e.animated,
+        }
+    }
+
+    /// Path segment for the reaction endpoints: percent-encoded Unicode, or
+    /// `name:id` for custom emoji.
+    pub fn api_segment(&self) -> String {
+        match self.id {
+            Some(id) => format!("{}:{id}", percent_encode(&self.name)),
+            None => percent_encode(&self.name),
+        }
+    }
+
+    /// Text inserted in the composer: the character(s), or `<:name:id>`.
+    pub fn composer_text(&self) -> String {
+        match self.id {
+            Some(id) => format!(
+                "<{}:{}:{id}>",
+                if self.animated { "a" } else { "" },
+                self.name
+            ),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// Percent-encodes everything except unreserved characters.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// One reaction pill on a message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reaction {
+    pub emoji: Emoji,
+    pub count: u32,
+    /// The current user reacted with this emoji.
+    pub me: bool,
+}
+
+/// The message a reply points at, as shown in the reply header.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplyPreview {
+    pub message_id: Option<MessageId>,
+    pub author: Option<User>,
+    /// Truncated to [`REPLY_SNIPPET_CHARS`].
+    pub content: String,
+    pub has_attachment: bool,
+    /// The original was deleted (or could not be loaded).
+    pub deleted: bool,
+}
+
+impl std::fmt::Debug for ReplyPreview {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ReplyPreview({:?})", self.message_id)
+    }
+}
+
+pub const REPLY_SNIPPET_CHARS: usize = 200;
+
+/// Truncates to `max` chars on a char boundary, adding an ellipsis.
+pub fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    s.chars().take(max).collect::<String>() + "…"
+}
+
+impl ReplyPreview {
+    pub fn from_message(m: &Message) -> Self {
+        Self {
+            message_id: Some(m.id),
+            author: Some(m.author.clone()),
+            content: truncate_chars(&m.content, REPLY_SNIPPET_CHARS),
+            has_attachment: !m.attachments.is_empty(),
+            deleted: false,
+        }
+    }
+
+    pub fn deleted(id: Option<MessageId>) -> Self {
+        Self {
+            message_id: id,
+            author: None,
+            content: String::new(),
+            has_attachment: false,
+            deleted: true,
+        }
+    }
+}
+
+/// User status shown as a coloured dot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Presence {
+    Online,
+    Idle,
+    Dnd,
+    #[default]
+    Offline,
+}
+
+impl Presence {
+    /// Parses the gateway `status` string (`invisible` counts as offline).
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "online" => Self::Online,
+            "idle" => Self::Idle,
+            "dnd" => Self::Dnd,
+            _ => Self::Offline,
+        }
+    }
+
+    /// Value for IDENTIFY / op 3 / user settings.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Idle => "idle",
+            Self::Dnd => "dnd",
+            Self::Offline => "invisible",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Online => "Online",
+            Self::Idle => "Idle",
+            Self::Dnd => "Do Not Disturb",
+            Self::Offline => "Invisible",
+        }
+    }
+
+    pub fn is_online(self) -> bool {
+        self != Self::Offline
     }
 }
 
@@ -293,6 +492,11 @@ pub struct Message {
     /// Role ids of the author in this guild (from `member`), for colour.
     pub author_roles: Vec<RoleId>,
     pub reply_to: Option<MessageId>,
+    /// Snapshot of the replied-to message for the reply header.
+    #[serde(default)]
+    pub referenced: Option<Box<ReplyPreview>>,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
     pub nonce: Option<String>,
     /// Message type (0 = default, 19 = reply, 7 = member join, ...).
     pub kind: u8,
@@ -374,11 +578,157 @@ pub struct ReadyData {
     /// Servers with "suppress @everyone and @here" / "suppress role mentions".
     pub suppress_everyone: Vec<GuildId>,
     pub suppress_roles: Vec<GuildId>,
+    /// Status of friends from READY `presences`.
+    pub presences: Vec<(UserId, Presence)>,
+    /// The user's own status (`user_settings.status`).
+    pub my_status: Option<Presence>,
+    /// Nitro type of the current user (0 none, 1 classic, 2 nitro, 3 basic).
+    pub premium_type: u8,
+}
+
+/// A member shown in the member list.
+#[derive(Clone, PartialEq)]
+pub struct MemberEntry {
+    pub user: User,
+    pub nick: Option<String>,
+    pub roles: Vec<RoleId>,
+    pub presence: Presence,
+}
+
+impl std::fmt::Debug for MemberEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MemberEntry({})", self.user.id)
+    }
+}
+
+impl MemberEntry {
+    pub fn display_name(&self) -> &str {
+        self.nick
+            .as_deref()
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| self.user.display_name())
+    }
+}
+
+/// One row of the member list: a group header or a member.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberItem {
+    /// `id` is a role id, `online` or `offline`.
+    Group {
+        id: String,
+        count: u32,
+    },
+    Member(Box<MemberEntry>),
+}
+
+/// An operation of GUILD_MEMBER_LIST_UPDATE (indexes are into the flat
+/// list of groups and members).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberOp {
+    Sync {
+        start: usize,
+        items: Vec<MemberItem>,
+    },
+    Insert {
+        index: usize,
+        item: MemberItem,
+    },
+    Update {
+        index: usize,
+        item: MemberItem,
+    },
+    Delete {
+        index: usize,
+    },
+    Invalidate {
+        start: usize,
+        end: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberListUpdate {
+    pub guild_id: GuildId,
+    /// List id (`everyone` or a hash of the channel permissions).
+    pub list_id: String,
+    pub member_count: u32,
+    pub online_count: u32,
+    pub groups: Vec<(String, u32)>,
+    pub ops: Vec<MemberOp>,
+}
+
+/// MESSAGE_REACTION_* events.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReactionEvent {
+    Add {
+        channel_id: ChannelId,
+        message_id: MessageId,
+        user_id: UserId,
+        emoji: Emoji,
+    },
+    Remove {
+        channel_id: ChannelId,
+        message_id: MessageId,
+        user_id: UserId,
+        emoji: Emoji,
+    },
+    RemoveAll {
+        channel_id: ChannelId,
+        message_id: MessageId,
+    },
+    RemoveEmoji {
+        channel_id: ChannelId,
+        message_id: MessageId,
+        emoji: Emoji,
+    },
+}
+
+/// One search hit with the channel it came from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchPage {
+    pub total: u32,
+    pub messages: Vec<Message>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emoji_identity_and_segments() {
+        let a = Emoji::unicode("👍");
+        assert_eq!(a.api_segment(), "%F0%9F%91%8D");
+        let c = Emoji {
+            id: Some(Snowflake(5)),
+            name: "party_blob".into(),
+            animated: true,
+        };
+        assert_eq!(c.api_segment(), "party_blob:5");
+        assert_eq!(c.composer_text(), "<a:party_blob:5>");
+        let renamed = Emoji {
+            name: "other".into(),
+            ..c.clone()
+        };
+        assert_eq!(c, renamed);
+        assert_ne!(a, Emoji::unicode("👎"));
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn truncation_is_char_safe() {
+        assert_eq!(truncate_chars("héllo", 10), "héllo");
+        assert_eq!(truncate_chars("héllo wörld", 5), "héllo…");
+        assert_eq!(truncate_chars("🦀🦀🦀", 2), "🦀🦀…");
+    }
+
+    #[test]
+    fn presence_wire() {
+        assert_eq!(Presence::from_wire("dnd"), Presence::Dnd);
+        assert_eq!(Presence::from_wire("invisible"), Presence::Offline);
+        assert_eq!(Presence::from_wire("???"), Presence::Offline);
+        assert_eq!(Presence::Idle.wire(), "idle");
+        assert!(Presence::Online.is_online() && !Presence::Offline.is_online());
+    }
 
     #[test]
     fn snowflake_timestamp() {
@@ -420,6 +770,8 @@ mod tests {
             mention_everyone: false,
             author_roles: vec![],
             reply_to: None,
+            referenced: None,
+            reactions: vec![],
             nonce: None,
             kind: 0,
             pending: false,
@@ -438,6 +790,8 @@ mod tests {
             icon: None,
             roles: vec![],
             owner_id: None,
+            emojis: vec![],
+            premium_tier: 0,
         };
         assert_eq!(g.acronym(), "RPL");
     }

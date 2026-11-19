@@ -273,3 +273,298 @@ fn ready_then_mention_updates_unread_state() {
     };
     assert_eq!(s.author_color(m.guild_id, &m), Some(3066993));
 }
+
+// -- replies, reactions, presence, member list, emoji ---------------------------
+
+fn parse(t: &str, f: &str) -> Event {
+    parse_dispatch(t, fixture(f)).unwrap().unwrap()
+}
+
+fn message_of(t: &str, f: &str) -> Message {
+    match parse(t, f) {
+        Event::MessageCreate(m) => *m,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn reply_with_referenced_message() {
+    let m = message_of("MESSAGE_CREATE", "message_create_reply.json");
+    assert_eq!(m.kind, 19);
+    assert_eq!(m.reply_to, Some(sf("5000000000000000019")));
+    let r = m.referenced.expect("reply preview");
+    assert!(!r.deleted);
+    assert_eq!(r.message_id, Some(sf("5000000000000000019")));
+    assert_eq!(r.author.as_ref().unwrap().display_name(), "Alice");
+    assert_eq!(r.content, "Has anyone tried the new let chains?");
+    assert!(r.has_attachment);
+}
+
+#[test]
+fn reply_to_deleted_message() {
+    let m = message_of("MESSAGE_CREATE", "message_create_reply_deleted.json");
+    let r = m.referenced.expect("reply preview");
+    assert!(r.deleted);
+    assert_eq!(r.message_id, Some(sf("5000000000000000019")));
+}
+
+#[test]
+fn non_reply_messages_have_no_header() {
+    let m = message_of("MESSAGE_CREATE", "message_with_reactions.json");
+    assert_eq!(m.kind, 0);
+    assert!(m.referenced.is_none());
+}
+
+#[test]
+fn reactions_are_parsed() {
+    let m = message_of("MESSAGE_CREATE", "message_with_reactions.json");
+    assert_eq!(m.reactions.len(), 3);
+    assert_eq!(m.reactions[0].emoji, Emoji::unicode("👍"));
+    assert_eq!((m.reactions[0].count, m.reactions[0].me), (3, true));
+    assert_eq!(m.reactions[1].emoji.id, Some(sf("1001")));
+    assert_eq!(m.reactions[1].emoji.api_segment(), "ferris:1001");
+    assert!(!m.reactions[2].me);
+}
+
+fn state_with_reaction_message() -> (ChatState, MessageId, ChannelId) {
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    let m = message_of("MESSAGE_CREATE", "message_with_reactions.json");
+    let (id, ch) = (m.id, m.channel_id);
+    s.messages.entry(ch).or_default().upsert(m);
+    (s, id, ch)
+}
+
+#[test]
+fn reaction_events_update_counts() {
+    let (mut s, id, ch) = state_with_reaction_message();
+    let ctx = Ctx::default();
+    let count = |s: &ChatState, e: &Emoji| {
+        s.message(ch, id)
+            .unwrap()
+            .reactions
+            .iter()
+            .find(|r| r.emoji == *e)
+            .map(|r| (r.count, r.me))
+    };
+    let thumbs = Emoji::unicode("👍");
+    // Another user adds a thumbs up.
+    s.apply_event(&parse("MESSAGE_REACTION_ADD", "reaction_add.json"), &ctx);
+    assert_eq!(count(&s, &thumbs), Some((4, true)));
+    // The custom emoji is removed for everybody.
+    s.apply_event(
+        &parse(
+            "MESSAGE_REACTION_REMOVE_EMOJI",
+            "reaction_remove_emoji.json",
+        ),
+        &ctx,
+    );
+    let ferris = s.message(ch, id).unwrap().reactions.len();
+    assert_eq!(ferris, 2);
+    // Remove-all clears the lot.
+    s.apply_event(
+        &Event::Reaction(ReactionEvent::RemoveAll {
+            channel_id: ch,
+            message_id: id,
+        }),
+        &ctx,
+    );
+    assert!(s.message(ch, id).unwrap().reactions.is_empty());
+}
+
+#[test]
+fn own_reaction_echo_is_idempotent() {
+    let (mut s, id, ch) = state_with_reaction_message();
+    let me = s.me_id().unwrap();
+    let party = Emoji::unicode("🎈");
+    // Optimistic toggle, then the gateway echo of our own add.
+    assert_eq!(
+        s.toggle_reaction(ch, id, &party),
+        Some(ferrocord::app::state::ReactionChange::Added)
+    );
+    let echo = Event::Reaction(ReactionEvent::Add {
+        channel_id: ch,
+        message_id: id,
+        user_id: me,
+        emoji: party.clone(),
+    });
+    s.apply_event(&echo, &Ctx::default());
+    let r = s
+        .message(ch, id)
+        .unwrap()
+        .reactions
+        .iter()
+        .find(|r| r.emoji == party)
+        .unwrap();
+    assert_eq!((r.count, r.me), (1, true));
+    // Toggle off and echo the removal.
+    assert_eq!(
+        s.toggle_reaction(ch, id, &party),
+        Some(ferrocord::app::state::ReactionChange::Removed)
+    );
+    s.apply_event(
+        &Event::Reaction(ReactionEvent::Remove {
+            channel_id: ch,
+            message_id: id,
+            user_id: me,
+            emoji: party.clone(),
+        }),
+        &Ctx::default(),
+    );
+    assert!(
+        s.message(ch, id)
+            .unwrap()
+            .reactions
+            .iter()
+            .all(|r| r.emoji != party)
+    );
+}
+
+#[test]
+fn failed_reaction_is_reverted() {
+    let (mut s, id, ch) = state_with_reaction_message();
+    let thumbs = Emoji::unicode("👍");
+    // We had reacted (me = true): toggling removes, a failure restores.
+    let change = s.toggle_reaction(ch, id, &thumbs).unwrap();
+    assert_eq!(s.message(ch, id).unwrap().reactions[0].count, 2);
+    s.revert_reaction(ch, id, &thumbs, change);
+    let r = &s.message(ch, id).unwrap().reactions[0];
+    assert_eq!((r.count, r.me), (3, true));
+}
+
+#[test]
+fn presence_update_and_ready_presences() {
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    let alice = sf("1000000000000000002");
+    assert_eq!(s.presence_of(alice), Presence::Offline);
+    s.apply_event(
+        &parse("PRESENCE_UPDATE", "presence_update.json"),
+        &Ctx::default(),
+    );
+    assert_eq!(s.presence_of(alice), Presence::Dnd);
+    // READY presences replace what we knew.
+    let mut r = ready();
+    r.presences = vec![(alice, Presence::Idle)];
+    r.my_status = Some(Presence::Dnd);
+    s.load_ready(&r);
+    assert_eq!(s.presence_of(alice), Presence::Idle);
+    assert_eq!(s.presence_of(s.me_id().unwrap()), Presence::Dnd);
+}
+
+#[test]
+fn ready_presences_and_settings_status_are_parsed() {
+    let mut d = fixture("ready.json");
+    d["presences"] = serde_json::json!([
+        { "user": { "id": "1000000000000000002" }, "status": "idle" },
+        { "user_id": "1000000000000000003", "status": "online" },
+        { "status": "online" }
+    ]);
+    d["user_settings"] = serde_json::json!({ "status": "dnd" });
+    d["user"]["premium_type"] = serde_json::json!(2);
+    let Event::Ready(r) = parse_dispatch("READY", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(r.presences.len(), 2);
+    assert_eq!(r.presences[0].1, Presence::Idle);
+    assert_eq!(r.my_status, Some(Presence::Dnd));
+    assert_eq!(r.premium_type, 2);
+}
+
+#[test]
+fn member_list_update_is_converted_and_applied() {
+    let Event::MemberList(u) = parse("GUILD_MEMBER_LIST_UPDATE", "member_list_update.json") else {
+        panic!()
+    };
+    assert_eq!(u.member_count, 4);
+    // The unknown op is dropped; the unknown item keeps its slot.
+    assert_eq!(u.ops.len(), 5);
+    let MemberOp::Sync { start, items } = &u.ops[0] else {
+        panic!()
+    };
+    assert_eq!((*start, items.len()), (0, 7));
+    let MemberItem::Member(alice) = &items[1] else {
+        panic!()
+    };
+    assert_eq!(alice.display_name(), "Al");
+    assert_eq!(alice.presence, Presence::Online);
+
+    // Reduce all ops in order: after INVALIDATE nothing is loaded.
+    let mut l = ferrocord::app::members::MemberListState::new(u.guild_id);
+    let first_only = ferrocord::net::model::MemberListUpdate {
+        ops: vec![u.ops[0].clone()],
+        ..(*u).clone()
+    };
+    l.apply(&first_only);
+    assert_eq!(l.loaded().count(), 7);
+    l.apply(&ferrocord::net::model::MemberListUpdate {
+        ops: u.ops[1..].to_vec(),
+        ..(*u).clone()
+    });
+    assert_eq!(l.loaded().count(), 0);
+}
+
+#[test]
+fn member_list_feeds_presence_and_users() {
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    let ev = parse("GUILD_MEMBER_LIST_UPDATE", "member_list_update.json");
+    s.member_list = Some(ferrocord::app::members::MemberListState::new(sf(
+        "2000000000000000001",
+    )));
+    s.apply_event(&ev, &Ctx::default());
+    assert_eq!(s.presence_of(sf("1000000000000000003")), Presence::Idle);
+    assert!(s.users.contains_key(&sf("1000000000000000004")));
+}
+
+#[test]
+fn guild_emojis_are_loaded_and_updated() {
+    let mut d = fixture("guild_create.json");
+    d["emojis"] = serde_json::json!([{ "id": "1001", "name": "ferris" }]);
+    d["premium_tier"] = serde_json::json!(2);
+    let Event::GuildUpsert { guild, .. } = parse_dispatch("GUILD_CREATE", d).unwrap().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(guild.emojis.len(), 1);
+    assert!(guild.emojis[0].available, "available defaults to true");
+    assert_eq!(guild.premium_tier, 2);
+
+    let mut s = ChatState::default();
+    s.guilds.push(*guild.clone());
+    s.apply_event(
+        &parse("GUILD_EMOJIS_UPDATE", "guild_emojis_update.json"),
+        &Ctx::default(),
+    );
+    // The fixture guild id differs from GUILD_CREATE's: nothing changes...
+    let gid = sf("2000000000000000001");
+    s.guilds[0].id = gid;
+    s.apply_event(
+        &parse("GUILD_EMOJIS_UPDATE", "guild_emojis_update.json"),
+        &Ctx::default(),
+    );
+    // ...and with the right id the list is replaced.
+    assert_eq!(s.guild(gid).unwrap().emojis.len(), 2);
+    assert!(s.guild(gid).unwrap().emojis[1].animated);
+}
+
+#[test]
+fn malformed_new_events_do_not_panic() {
+    for t in [
+        "MESSAGE_REACTION_ADD",
+        "MESSAGE_REACTION_REMOVE",
+        "MESSAGE_REACTION_REMOVE_ALL",
+        "GUILD_MEMBER_LIST_UPDATE",
+        "GUILD_EMOJIS_UPDATE",
+    ] {
+        // Missing required ids: an error (logged by the gateway), no panic.
+        let _ = parse_dispatch(t, serde_json::json!({}));
+        let _ = parse_dispatch(t, serde_json::json!({"ops": "nope", "emoji": 7}));
+    }
+    // PRESENCE_UPDATE without a user is ignored.
+    assert!(
+        parse_dispatch("PRESENCE_UPDATE", serde_json::json!({"status": "online"}))
+            .unwrap()
+            .is_none()
+    );
+}
