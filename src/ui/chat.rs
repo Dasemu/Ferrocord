@@ -107,25 +107,21 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             );
     }
     let tool = |i: Icon| icon(i, 24.0, p.text_secondary);
-    let in_guild = matches!(app.view, View::Guild { .. });
-    let members_icon = icon(
+    // Guilds show the member list; DMs show the participants (or, in a 1:1
+    // DM, the other person's profile).
+    let members: El<'a> = button(icon(
         Icon::Users,
         24.0,
-        if app.members_open && in_guild {
+        if app.members_open {
             p.header_text
         } else {
             p.text_secondary
         },
-    );
-    let members: El<'a> = if in_guild {
-        button(members_icon)
-            .padding(0)
-            .on_press(ui(Ui::ToggleMembers))
-            .style(theme::link_button(p))
-            .into()
-    } else {
-        members_icon
-    };
+    ))
+    .padding(0)
+    .on_press(ui(Ui::ToggleMembers))
+    .style(theme::link_button(p))
+    .into();
     let searching = app.search.open || app.search.panel_visible();
     let search_input = text_input("Search", &app.search.input)
         .id(search_id())
