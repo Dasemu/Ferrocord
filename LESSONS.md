@@ -25,3 +25,4 @@ Things learned while building Ferrocord that are worth remembering.
 - Reaction echoes of our own actions must be idempotent with the optimistic update.
 - iced 0.14 `daemon` drops the compositor when the last window closes, so "hide to tray" = close the window; set `exit_on_close_request: false` and handle `CloseRequested` yourself. `iced::daemon` view closures need a named `fn(&App, window::Id)` (inference fails on lifetimes).
 - ksni 0.3 shares zbus 5 with notify-rust/keyring; `spawn()` errors when no StatusNotifierWatcher exists, which is the "no tray host" signal. SNI signals carry no values, so test proxies need `CacheProperties::No`.
+- Bot pushes made with `GITHUB_TOKEN` never trigger `push` workflows, so the release workflow chains off the version workflow with `workflow_run` (conclusion `success`, branch `main`, checkout `ref: main` for the bump commit).

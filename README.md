@@ -16,6 +16,34 @@ using a fraction of its memory.
 > is "self-botting" as far as Discord is concerned. Use it at your own risk,
 > preferably with an account you can afford to lose.
 
+## Install / update
+
+Linux x86_64, no root needed. One command installs and updates (it downloads
+the latest [release](https://github.com/Dasemu/Ferrocord/releases/latest), checks
+its SHA-256 and puts the binary, menu entry and icon under `~/.local`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh
+```
+
+Uninstall (removes only what the installer added, never your account data):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh -s -- --uninstall
+```
+
+Manual alternative: download `ferrocord-vX.Y.Z-linux-x86_64.tar.gz` and its
+`.sha256` from the Releases page, then:
+
+```sh
+sha256sum -c ferrocord-*-linux-x86_64.tar.gz.sha256
+tar xzf ferrocord-*-linux-x86_64.tar.gz
+./ferrocord-*-linux-x86_64/ferrocord
+```
+
+The tarball also has `packaging/dev.ferro.ferrocord.desktop` and `.svg` if you want
+a menu entry. Releases are built on Ubuntu 22.04 (glibc 2.35).
+
 ## Features
 
 - Token login (token stored only in the OS keyring) and QR-code login

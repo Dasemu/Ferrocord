@@ -36,7 +36,11 @@ remote auth), `src/store` (SQLite cache), `src/auth` (login + keyring).
   no sync commit); protected branches need a bot bypass.
 
 ## Deployment
-No packaging yet: `cargo build --release` produces `target/release/ferrocord`.
+Releases are automatic: `.github/workflows/release.yml` chains off the "Version" workflow
+via `workflow_run` (GITHUB_TOKEN bot pushes don't trigger `push` workflows), builds on
+ubuntu-22.04, and creates GitHub Release `v<Cargo version>` with `ferrocord-v<ver>-linux-x86_64.tar.gz`
++ `.sha256` (skips if the release exists; manual re-run: workflow_dispatch). Users run
+`install.sh` (`curl ... | sh`; `-s -- --uninstall`); test it with `FERRO_RELEASE_API=file://...`.
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 
 ## Gotchas

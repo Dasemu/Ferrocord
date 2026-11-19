@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Ferrocord
+GenericName=Discord client
+Comment=Lightweight unofficial Discord desktop client
+Exec=ferrocord %U
+Icon=dev.ferro.ferrocord
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=discord;chat;messenger;
+StartupWMClass=dev.ferro.ferrocord
