@@ -1637,19 +1637,21 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                let r = notify_rust::Notification::new()
-                    .appname(crate::config::APP_NAME)
+                let mut note = notify_rust::Notification::new();
+                note.appname(crate::config::APP_NAME)
                     .summary(&escape_markup(&n.title))
                     .body(&escape_markup(&n.body))
-                    .icon("dev.ferro.ferrocord")
-                    .hint(notify_rust::Hint::DesktopEntry(
-                        crate::config::APP_ID.into(),
-                    ))
-                    // "default" is the action a click on the notification
-                    // body invokes (freedesktop notification spec).
-                    .action("default", "Open")
-                    .show();
-                match r {
+                    .icon("dev.ferro.ferrocord");
+                // Desktop entry and click actions are freedesktop (XDG)
+                // notification features; Windows toasts have neither.
+                #[cfg(all(unix, not(target_os = "macos")))]
+                note.hint(notify_rust::Hint::DesktopEntry(
+                    crate::config::APP_ID.into(),
+                ))
+                // "default" is the action a click on the notification
+                // body invokes (freedesktop notification spec).
+                .action("default", "Open");
+                match note.show() {
                     Ok(handle) => wait_for_click(handle),
                     Err(e) => {
                         tracing::debug!(error = %e, "notification failed");
@@ -1680,7 +1682,7 @@ fn wait_for_click(handle: notify_rust::NotificationHandle) -> bool {
 }
 
 #[cfg(not(all(unix, not(target_os = "macos"))))]
-fn wait_for_click(_handle: notify_rust::NotificationHandle) -> bool {
+fn wait_for_click(_handle: ()) -> bool {
     false
 }
 

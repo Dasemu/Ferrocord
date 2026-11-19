@@ -53,3 +53,16 @@ jobs:
       # `--all-targets` skips doctests.
       - name: cargo test --doc
         run: cargo test --doc
+
+  # The Linux job cannot see `cfg(windows)` breakage; build and test on Windows too.
+  windows:
+    name: windows build, test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build --all-targets
+      - name: cargo test
+        run: cargo test --all-targets
