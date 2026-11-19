@@ -23,3 +23,5 @@ Things learned while building Ferrocord that are worth remembering.
 - Mouse position and Shift state are recorded in atomics from the event subscription (returning no message), so reading them in `update` costs no extra view rebuilds.
 - `stack` only lets clicks through to a backdrop when the popup layer reports no mouse interaction; wrap popups in `opaque`.
 - Reaction echoes of our own actions must be idempotent with the optimistic update.
+- iced 0.14 `daemon` drops the compositor when the last window closes, so "hide to tray" = close the window; set `exit_on_close_request: false` and handle `CloseRequested` yourself. `iced::daemon` view closures need a named `fn(&App, window::Id)` (inference fails on lifetimes).
+- ksni 0.3 shares zbus 5 with notify-rust/keyring; `spawn()` errors when no StatusNotifierWatcher exists, which is the "no tray host" signal. SNI signals carry no values, so test proxies need `CacheProperties::No`.

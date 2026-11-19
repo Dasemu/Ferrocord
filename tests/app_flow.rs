@@ -653,7 +653,6 @@ mod tray_flow {
         assert!(a.win.visible);
         let _ = a.update(Message::Ui(Ui::CloseRequested));
         assert!(!a.win.visible, "close hides while a tray exists");
-        // Notifications must not be suppressed for a window nobody sees.
         let _ = a.update(Message::Ui(Ui::ShowWindow));
         assert!(a.win.visible);
     }
