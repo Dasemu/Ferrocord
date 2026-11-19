@@ -558,6 +558,31 @@ fn showcase() -> Vec<Message> {
     vec![d, b, c, a, e]
 }
 
+/// A small round "emoji" image (original artwork: a coloured face) used for
+/// the mock custom emoji. Returns (size, pixels).
+pub fn mock_emoji(rgb: [u8; 3]) -> (u32, Vec<u8>) {
+    let n = 48u32;
+    let mut px = Vec::with_capacity((n * n * 4) as usize);
+    let c = (n as f32 - 1.0) / 2.0;
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 - c, y as f32 - c);
+            let d = (dx * dx + dy * dy).sqrt();
+            let eye = ((dx.abs() - 8.0).powi(2) + (dy + 6.0).powi(2)).sqrt() < 3.5;
+            let mouth = (d - 12.0).abs() < 2.0 && dy > 4.0;
+            let p = if d > c {
+                [0, 0, 0, 0]
+            } else if eye || mouth {
+                [40, 30, 30, 255]
+            } else {
+                [rgb[0], rgb[1], rgb[2], 255]
+            };
+            px.extend_from_slice(&p);
+        }
+    }
+    (n, px)
+}
+
 /// Procedurally generated RGBA image (a stylised landscape) used as the
 /// mock attachment preview. Returns (width, height, pixels).
 pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
