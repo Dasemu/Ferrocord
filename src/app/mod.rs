@@ -1105,13 +1105,22 @@ impl App {
         }
         let tasks: Vec<Task<Message>> = urls
             .into_iter()
+            .filter(|u| self.rest.is_allowed_media_url(u))
             .filter(|u| self.images.want(u))
             .take(64)
             .map(|url| {
                 let rest = self.rest.clone();
                 Task::perform(
                     async move {
-                        let bytes = rest.fetch_bytes(&url).await.ok();
+                        let bytes = match rest.fetch_bytes(&url).await {
+                            Ok(b) => tokio::task::spawn_blocking(move || {
+                                crate::net::rest::check_image_dimensions(&b).map(|_| b)
+                            })
+                            .await
+                            .ok()
+                            .and_then(|r| r.ok()),
+                            Err(_) => None,
+                        };
                         (url, bytes)
                     },
                     |(key, bytes)| Message::Done(Done::Image { key, bytes }),

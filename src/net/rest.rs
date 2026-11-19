@@ -16,6 +16,24 @@ use crate::auth::secrets::Secret;
 use crate::error::{Error, Result};
 
 const MAX_RETRIES: u32 = 3;
+/// Hard cap for downloaded media.
+pub const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
+/// Images above this many pixels are not handed to the renderer.
+pub const MAX_MEDIA_PIXELS: u64 = 4096 * 4096;
+
+/// Reads image dimensions from the header and rejects decompression bombs.
+pub fn check_image_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| Error::Protocol("unreadable image".into()))?;
+    let (w, h) = reader
+        .into_dimensions()
+        .map_err(|_| Error::Protocol("unreadable image".into()))?;
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_MEDIA_PIXELS {
+        return Err(Error::Protocol("image too large".into()));
+    }
+    Ok((w, h))
+}
 
 /// Cheaply clonable REST handle.
 #[derive(Clone)]
@@ -244,16 +262,56 @@ impl RestClient {
             .ok_or_else(|| Error::Protocol("remote-auth login without encrypted_token".into()))
     }
 
-    /// Downloads a CDN asset (avatar, icon, attachment preview).
+    /// Whether `url` points at Discord's CDN / media proxy (or the
+    /// configured CDN override). Nothing else is ever fetched: embeds
+    /// without a proxied URL are skipped instead of contacting arbitrary
+    /// third-party hosts.
+    pub fn is_allowed_media_url(&self, url: &str) -> bool {
+        let Ok(u) = url::Url::parse(url) else {
+            return false;
+        };
+        let Some(host) = u.host_str() else {
+            return false;
+        };
+        let cdn_host = url::Url::parse(&self.cdn)
+            .ok()
+            .and_then(|c| c.host_str().map(str::to_owned));
+        if cdn_host.as_deref() == Some(host) {
+            // Override (e.g. a local mock): same scheme as configured.
+            return url.starts_with(self.cdn.as_ref());
+        }
+        u.scheme() == "https"
+            && (matches!(host, "cdn.discordapp.com" | "media.discordapp.net")
+                || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
+    }
+
+    /// Downloads a CDN asset (avatar, icon, attachment preview), refusing
+    /// non-Discord hosts and anything larger than [`MAX_MEDIA_BYTES`].
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.http.get(url).send().await?;
+        if !self.is_allowed_media_url(url) {
+            return Err(Error::Protocol("media host not allowed".into()));
+        }
+        let mut resp = self.http.get(url).send().await?;
         if !resp.status().is_success() {
             return Err(Error::Http {
                 status: resp.status().as_u16(),
                 message: "asset download failed".into(),
             });
         }
-        Ok(resp.bytes().await?.to_vec())
+        if resp
+            .content_length()
+            .is_some_and(|l| l > MAX_MEDIA_BYTES as u64)
+        {
+            return Err(Error::Protocol("media too large".into()));
+        }
+        let mut out = Vec::new();
+        while let Some(chunk) = resp.chunk().await? {
+            if out.len() + chunk.len() > MAX_MEDIA_BYTES {
+                return Err(Error::Protocol("media too large".into()));
+            }
+            out.extend_from_slice(&chunk);
+        }
+        Ok(out)
     }
 
     pub fn avatar_url(&self, user: &User, size: u32) -> Option<String> {

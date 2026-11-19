@@ -151,3 +151,65 @@ async fn exhausted_bucket_delays_next_request() {
     let gap2 = rec[2].at - rec[1].at;
     assert!(gap2 < Duration::from_millis(300), "{gap2:?}");
 }
+
+#[tokio::test]
+async fn media_downloads_are_capped_and_host_restricted() {
+    let big = "x".repeat(ferrocord::net::rest::MAX_MEDIA_BYTES + 1);
+    let server = http(Arc::new(move |req, _| {
+        if req.path.starts_with("/big") {
+            Response {
+                status: 200,
+                headers: vec![],
+                body: big.clone(),
+            }
+        } else {
+            Response {
+                status: 200,
+                headers: vec![],
+                body: "small".into(),
+            }
+        }
+    }))
+    .await;
+    // The mock server is the configured CDN, so it is allowed.
+    let rest = RestClient::new("http://unused", &server.base(), None).unwrap();
+    assert_eq!(
+        rest.fetch_bytes(&format!("{}/ok.png", server.base()))
+            .await
+            .unwrap(),
+        b"small"
+    );
+    assert!(
+        rest.fetch_bytes(&format!("{}/big.png", server.base()))
+            .await
+            .is_err()
+    );
+    // Arbitrary hosts are never contacted.
+    assert!(!rest.is_allowed_media_url("https://evil.example.com/a.png"));
+    assert!(!rest.is_allowed_media_url("http://cdn.discordapp.com/a.png"));
+    assert!(rest.is_allowed_media_url("https://cdn.discordapp.com/avatars/1/a.png"));
+    assert!(rest.is_allowed_media_url("https://media.discordapp.net/attachments/1/2/x.png"));
+    assert!(rest.is_allowed_media_url("https://images-ext-1.discordapp.net/external/x"));
+    assert!(!rest.is_allowed_media_url("https://images-ext-1.discordapp.net.evil.com/x"));
+    assert!(
+        rest.fetch_bytes("https://evil.example.com/a.png")
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn decompression_bombs_are_rejected() {
+    use ferrocord::net::rest::check_image_dimensions;
+    let mut ok = Vec::new();
+    image::RgbaImage::new(4, 3)
+        .write_to(&mut std::io::Cursor::new(&mut ok), image::ImageFormat::Png)
+        .unwrap();
+    assert_eq!(check_image_dimensions(&ok).unwrap(), (4, 3));
+    // A PNG header claiming 100000 x 100000 pixels.
+    let mut bomb = ok.clone();
+    bomb[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+    bomb[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+    assert!(check_image_dimensions(&bomb).is_err());
+    assert!(check_image_dimensions(b"not an image").is_err());
+}
