@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Ferrocord icon: original artwork (same licence as the code). Two
+       interlocked diamonds in the app accent colour on a dark tile; no
+       resemblance to any chat service's logo. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#1e1f22"/>
+  <g fill="none" stroke="#5865f2" stroke-width="18" stroke-linejoin="round">
+    <path d="M128 52 L184 108 L128 164 L72 108 Z"/>
+    <path d="M128 92 L184 148 L128 204 L72 148 Z" stroke="#8c96f7"/>
+  </g>
+</svg>

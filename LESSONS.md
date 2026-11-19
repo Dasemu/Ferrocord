@@ -23,3 +23,4 @@ Things learned while building Ferrocord that are worth remembering.
 - Mouse position and Shift state are recorded in atomics from the event subscription (returning no message), so reading them in `update` costs no extra view rebuilds.
 - `stack` only lets clicks through to a backdrop when the popup layer reports no mouse interaction; wrap popups in `opaque`.
 - Reaction echoes of our own actions must be idempotent with the optimistic update.
+- Bot pushes made with `GITHUB_TOKEN` never trigger `push` workflows, so the release workflow chains off the version workflow with `workflow_run` (conclusion `success`, branch `main`, checkout `ref: main` for the bump commit).
