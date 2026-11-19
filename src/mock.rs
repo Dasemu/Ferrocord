@@ -726,6 +726,23 @@ pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     (w, h, px)
 }
 
+/// Mock inbox: every loaded message that mentions the current user, newest
+/// first.
+pub fn recent_mentions(chat: &crate::app::state::ChatState) -> Vec<Message> {
+    let mut out: Vec<Message> = chat
+        .messages
+        .values()
+        .flat_map(|w| w.messages.iter())
+        .filter(|m| chat.mentions_me(m))
+        .cloned()
+        .collect();
+    out.sort_by_key(|m| std::cmp::Reverse(m.id));
+    // Mock channels share their sample history; list each text once.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|m| seen.insert(m.content.clone()));
+    out
+}
+
 /// Mock pins of `channel`: its two oldest loaded text messages, most
 /// recently pinned (newest) first.
 pub fn pinned(chat: &crate::app::state::ChatState, channel: ChannelId) -> Vec<Message> {

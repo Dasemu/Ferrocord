@@ -5,7 +5,7 @@ pub mod icons;
 pub mod login;
 pub mod markdown;
 pub mod members;
-pub mod pins;
+pub mod panel;
 pub mod popups;
 pub mod rail;
 pub mod search;
@@ -38,8 +38,8 @@ pub fn view(app: &App) -> El<'_> {
             let mut r = row![rail::view(app), sidebar::view(app), chat::view(app)];
             if app.search.panel_visible() {
                 r = r.push(search::view(app));
-            } else if app.pins.is_open_for(app.open_channel()) {
-                r = r.push(pins::view(app));
+            } else if let Some(kind) = app.panel.visible(app.open_channel()) {
+                r = r.push(panel::view(app, kind));
             } else if app.members_open {
                 match app.view {
                     crate::app::View::Guild {

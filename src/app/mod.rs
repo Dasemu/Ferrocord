@@ -10,7 +10,7 @@ pub mod jump;
 pub mod markdown;
 pub mod members;
 pub mod message;
-pub mod pins;
+pub mod panel;
 pub mod search;
 pub mod state;
 pub mod upload;
@@ -109,7 +109,8 @@ pub struct App {
     member_rows_wanted: usize,
     pub status_menu: bool,
     pub search: search::SearchState,
-    pub pins: pins::PinsState,
+    /// Pins / inbox side panel.
+    pub panel: panel::MessagePanel,
     /// Message flashed after a jump.
     pub highlight: Option<MessageId>,
     pub toast: Option<String>,
@@ -205,7 +206,7 @@ impl App {
             member_rows_wanted: members::RANGE_SIZE,
             status_menu: false,
             search: search::SearchState::default(),
-            pins: pins::PinsState::default(),
+            panel: panel::MessagePanel::default(),
             highlight: None,
             toast: None,
             pending_link: None,
@@ -386,7 +387,12 @@ impl App {
                     });
                 }
             }
-            Some(ScreenshotScreen::Guild | ScreenshotScreen::Settings | ScreenshotScreen::Pins)
+            Some(
+                ScreenshotScreen::Guild
+                | ScreenshotScreen::Settings
+                | ScreenshotScreen::Pins
+                | ScreenshotScreen::Inbox,
+            )
             | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -399,8 +405,14 @@ impl App {
             }
         }
         self.settings_open = screen == Some(ScreenshotScreen::Settings);
-        if screen == Some(ScreenshotScreen::Pins) {
-            let _ = self.update_ui(Ui::TogglePins);
+        match screen {
+            Some(ScreenshotScreen::Pins) => {
+                let _ = self.update_ui(Ui::TogglePins);
+            }
+            Some(ScreenshotScreen::Inbox) => {
+                let _ = self.update_ui(Ui::ToggleInbox);
+            }
+            _ => {}
         }
         let _ = self.sync_members();
         let ctx = self.ctx();
@@ -1252,7 +1264,7 @@ impl App {
             } => self.on_around(channel, target, result),
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
-            Done::Pins { generation, result } => self.on_pins_done(generation, result),
+            Done::Panel { generation, result } => self.on_panel_done(generation, result),
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
                 if self.highlight == Some(m) {
@@ -1361,7 +1373,7 @@ impl App {
                 }
             }
         }
-        for m in self.search.results.iter().chain(&self.pins.messages) {
+        for m in self.search.results.iter().chain(&self.panel.messages) {
             if let Some(u) = self.rest.avatar_url(&m.author, 80) {
                 urls.push(u);
             }

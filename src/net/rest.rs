@@ -226,6 +226,15 @@ impl RestClient {
         Ok(msgs)
     }
 
+    /// `GET /users/@me/mentions` — the inbox: recent messages that mention
+    /// the current user (directly, via a role or @everyone), newest first.
+    pub async fn recent_mentions(&self) -> Result<Vec<Message>> {
+        let wire: Vec<WireMessage> = self
+            .get("/users/@me/mentions?limit=25&roles=true&everyone=true")
+            .await?;
+        Ok(wire.into_iter().map(WireMessage::into_domain).collect())
+    }
+
     /// Pinned messages of a channel, most recently pinned first.
     /// Uses `GET /channels/{id}/messages/pins` and falls back to the older
     /// `GET /channels/{id}/pins` if the server does not know the new route.

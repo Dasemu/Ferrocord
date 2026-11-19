@@ -92,6 +92,8 @@ pub enum Ui {
     CloseSearch,
     /// Header pin button: opens (or closes) the pinned messages panel.
     TogglePins,
+    /// Header inbox button: opens (or closes) the recent mentions panel.
+    ToggleInbox,
     /// A notification was clicked.
     OpenChannel(ChannelId),
     // -- window and tray
@@ -187,8 +189,8 @@ pub enum Done {
         generation: u64,
         result: Result<SearchPage, String>,
     },
-    /// Pinned messages loaded for the pins panel.
-    Pins {
+    /// Messages loaded for the pins / inbox panel.
+    Panel {
         generation: u64,
         result: Result<Vec<crate::net::model::Message>, String>,
     },

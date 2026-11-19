@@ -12,6 +12,7 @@ use iced::{Point, Task};
 
 use super::emoji::{EmojiPicker, PickerTarget};
 use super::members::MemberListState;
+use super::panel::PanelKind;
 use super::state::ReactionChange;
 use super::upload::{self, ActiveUpload, Clipboard, UploadEvent};
 use super::{App, Done, Message, PAGE, Ui, View, input, now_ms};
@@ -353,7 +354,11 @@ impl App {
                 self.search.close();
                 self.sync_members()
             }
-            Ui::TogglePins => self.toggle_pins(),
+            Ui::TogglePins => match self.open_chan() {
+                Some(c) => self.toggle_panel(PanelKind::Pins(c)),
+                None => Task::none(),
+            },
+            Ui::ToggleInbox => self.toggle_panel(PanelKind::Inbox),
             Ui::OpenChannel(c) => self.open_from_notification(c),
             // Handled in `mod.rs`.
             _ => Task::none(),
@@ -773,7 +778,7 @@ impl App {
         let Some((generation, scope, query, offset)) = self.search.begin(scope, offset) else {
             return Task::none();
         };
-        self.pins.close();
+        self.panel.close();
         if self.cfg.mock {
             let page = mock_search(&self.chat, scope, &query, offset);
             self.search.finish(generation, Ok(page));
@@ -808,36 +813,45 @@ impl App {
         self.request_search_images()
     }
 
-    // -- pinned messages -----------------------------------------------------------
+    // -- pins and inbox panel --------------------------------------------------------
 
-    fn toggle_pins(&mut self) -> Task<Message> {
-        let Some(channel) = self.open_chan() else {
-            return Task::none();
-        };
-        if self.pins.is_open_for(Some(channel)) {
-            self.pins.close();
+    /// Opens the message panel on `kind`, or closes it if it already shows
+    /// that. It takes the search panel's place.
+    fn toggle_panel(&mut self, kind: PanelKind) -> Task<Message> {
+        if self.panel.is_open(kind) {
+            self.panel.close();
             return Task::none();
         }
-        // The pins panel takes the search panel's place.
         if self.search.panel_visible() {
             self.search.close();
         }
-        let generation = self.pins.open(channel);
+        let generation = self.panel.open(kind);
         if self.cfg.mock {
-            let pinned = crate::mock::pinned(&self.chat, channel);
-            self.pins.finish(generation, Ok(pinned));
+            let msgs = match kind {
+                PanelKind::Pins(c) => crate::mock::pinned(&self.chat, c),
+                PanelKind::Inbox => crate::mock::recent_mentions(&self.chat),
+            };
+            self.panel.finish(generation, Ok(msgs));
             return Task::none();
         }
         let rest = self.rest.clone();
-        Task::perform(async move { rest.pins(channel).await }, move |r| {
-            Message::Done(Done::Pins {
-                generation,
-                result: r.map_err(|e| e.user_message()),
-            })
-        })
+        Task::perform(
+            async move {
+                match kind {
+                    PanelKind::Pins(c) => rest.pins(c).await,
+                    PanelKind::Inbox => rest.recent_mentions().await,
+                }
+            },
+            move |r| {
+                Message::Done(Done::Panel {
+                    generation,
+                    result: r.map_err(|e| e.user_message()),
+                })
+            },
+        )
     }
 
-    pub(super) fn on_pins_done(
+    pub(super) fn on_panel_done(
         &mut self,
         generation: u64,
         result: Result<Vec<Msg>, String>,
@@ -850,7 +864,7 @@ impl App {
                     .or_insert_with(|| m.author.clone());
             }
         }
-        self.pins.finish(generation, result);
+        self.panel.finish(generation, result);
         self.request_images()
     }
 

@@ -7,7 +7,7 @@ use super::icons::{Icon, icon};
 use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, format_timestamp, ui};
 use crate::app::{App, Ui, now_ms};
-use crate::net::model::{self as model, Message as Msg};
+use crate::net::model::Message as Msg;
 
 pub const WIDTH: f32 = 420.0;
 
@@ -108,7 +108,7 @@ fn pager_button<'a>(app: &App, label: &'static str, enabled: bool, msg: Ui) -> E
 }
 
 /// A message as a clickable card that jumps to it; `show_place` adds the
-/// channel name above (search spans channels, pins do not).
+/// channel name above (search and the inbox span channels, pins do not).
 pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bool) -> El<'a> {
     let p = app.theme.palette;
     let channel = app.chat.channels.get(&m.channel_id);
@@ -117,11 +117,17 @@ pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bo
         Some(c) => format!("#{}", c.name.as_deref().unwrap_or("channel")),
         None => "unknown channel".to_owned(),
     };
-    let snippet = model::truncate_chars(&m.content.replace('\n', " "), 260);
-    let snippet = if snippet.is_empty() && !m.attachments.is_empty() {
-        "Sent an attachment".to_owned()
+    // Rendered like in the chat so mentions, channels and emoji show by
+    // name instead of as raw `<@id>` markup.
+    let snippet: El<'a> = if !m.content.is_empty() {
+        super::markdown::render(app, m.id, &m.content, p.text_normal, 14.0)
+    } else if !m.attachments.is_empty() {
+        text("Sent an attachment")
+            .size(14)
+            .color(p.text_muted)
+            .into()
     } else {
-        snippet
+        Space::new().into()
     };
     let body = column![
         row![
@@ -135,7 +141,7 @@ pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bo
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        text(snippet).size(14).color(p.text_normal),
+        snippet,
     ]
     .spacing(2)
     .width(Length::Fill);

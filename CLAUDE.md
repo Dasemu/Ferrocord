@@ -7,7 +7,7 @@ REST API directly (`tokio-tungstenite` + `reqwest`). Voice is out of scope.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|guild|dms|embeds|search|compose|settings|pins> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|guild|dms|embeds|search|compose|settings|pins|inbox> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`.

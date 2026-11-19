@@ -15,6 +15,7 @@ use super::{
 };
 use crate::app::actions::{composer_id, edit_id, search_id};
 use crate::app::emoji::PickerTarget;
+use crate::app::panel::PanelKind;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind, Embed};
@@ -155,7 +156,7 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
         button(icon(
             Icon::Pin,
             24.0,
-            if app.pins.is_open_for(Some(c.id)) {
+            if app.panel.is_open(PanelKind::Pins(c.id)) {
                 p.header_text
             } else {
                 p.text_secondary
@@ -166,7 +167,18 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
         .style(theme::link_button(p)),
         members,
         search,
-        tool(Icon::Inbox),
+        button(icon(
+            Icon::Inbox,
+            24.0,
+            if app.panel.is_open(PanelKind::Inbox) {
+                p.header_text
+            } else {
+                p.text_secondary
+            },
+        ))
+        .padding(0)
+        .on_press(ui(Ui::ToggleInbox))
+        .style(theme::link_button(p)),
         button(tool(Icon::CircleHelp))
             .padding(0)
             .on_press(ui(Ui::OpenUrl(HELP_URL.to_owned())))

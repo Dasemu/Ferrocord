@@ -573,3 +573,23 @@ async fn pins_use_new_route_and_fall_back_to_legacy() {
     assert_eq!(pins.iter().map(|m| m.id.0).collect::<Vec<_>>(), vec![30]);
     assert_eq!(server.recorded().len(), 2);
 }
+
+#[tokio::test]
+async fn recent_mentions_hits_inbox_route() {
+    let server = http(Arc::new(|req, _| {
+        if req.path.starts_with("/users/@me/mentions") {
+            Response::json(200, json!([msg(20), msg(10)]))
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let ms = rest.recent_mentions().await.unwrap();
+    // Newest first, as the inbox lists them.
+    assert_eq!(ms.iter().map(|m| m.id.0).collect::<Vec<_>>(), vec![20, 10]);
+    assert_eq!(
+        server.recorded()[0].path,
+        "/users/@me/mentions?limit=25&roles=true&everyone=true"
+    );
+}
