@@ -28,6 +28,9 @@ pub enum Ui {
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
     OpenUrl(String),
+    /// A link whose visible text differs from its target: ask first.
+    ConfirmLink(String),
+    CancelLink,
     Logout,
     WindowFocus(bool),
     WindowOpened,

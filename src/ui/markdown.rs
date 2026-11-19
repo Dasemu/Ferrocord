@@ -249,7 +249,15 @@ fn inline<'a>(
                     color: p.link,
                     ..st
                 };
-                inline(ctx, label, lst, Some(Ui::OpenUrl(url.clone())), spans);
+                // Masked links whose text is not the URL itself go through
+                // a confirmation that shows the real target.
+                let plain = matches!(label.as_slice(), [Inline::Text(t)] if t == url);
+                let action = if plain {
+                    Ui::OpenUrl(url.clone())
+                } else {
+                    Ui::ConfirmLink(url.clone())
+                };
+                inline(ctx, label, lst, Some(action), spans);
             }
             Inline::UserMention(_)
             | Inline::RoleMention(_)

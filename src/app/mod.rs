@@ -77,6 +77,8 @@ pub struct App {
     pub images: images::ImageCache,
     pub window_focused: bool,
     pub toast: Option<String>,
+    /// Masked link waiting for confirmation ("Leaving Ferrocord").
+    pub pending_link: Option<String>,
     boot_at: Instant,
     first_frame_logged: bool,
     fonts_ready: bool,
@@ -139,6 +141,7 @@ impl App {
             images: images::ImageCache::default(),
             window_focused: true,
             toast: None,
+            pending_link: None,
             boot_at,
             first_frame_logged: false,
             fonts_ready: false,
@@ -443,7 +446,16 @@ impl App {
                 self.revealed_spoilers.insert(m);
                 Task::none()
             }
+            Ui::ConfirmLink(url) => {
+                self.pending_link = Some(url);
+                Task::none()
+            }
+            Ui::CancelLink => {
+                self.pending_link = None;
+                Task::none()
+            }
             Ui::OpenUrl(url) => {
+                self.pending_link = None;
                 if !(url.starts_with("https://") || url.starts_with("http://")) || self.cfg.mock {
                     return Task::none();
                 }
@@ -1307,7 +1319,20 @@ async fn open_url(url: String) {
         let cmd = "explorer";
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         let cmd = "xdg-open";
-        let _ = std::process::Command::new(cmd).arg(url).spawn();
+        // Wait for the opener so it is reaped (xdg-open/open return as soon
+        // as the browser has been handed the URL).
+        match std::process::Command::new(cmd)
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let _ = child.wait();
+            }
+            Err(e) => tracing::warn!(error = %e, "could not launch URL opener"),
+        }
     })
     .await;
 }

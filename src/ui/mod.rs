@@ -29,15 +29,69 @@ pub fn view(app: &App) -> El<'_> {
             .into(),
     };
     let banner = banner(app);
-    let content: El<'_> = match banner {
+    let mut content: El<'_> = match banner {
         Some(b) => column![b, body].into(),
         None => body,
     };
+    if let Some(url) = &app.pending_link {
+        content = stack![content, leave_dialog(t, url)].into();
+    }
     container(content)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::bg(t.palette.bg_app))
         .into()
+}
+
+/// "Leaving Ferrocord" confirmation for masked links: shows the real URL.
+fn leave_dialog<'a>(t: &FerroTheme, url: &str) -> El<'a> {
+    let p = t.palette;
+    let card = container(
+        column![
+            text("Leaving Ferrocord")
+                .size(t.metrics.font_l)
+                .font(INTER_SEMIBOLD)
+                .color(p.header_text),
+            text("This link is taking you to the following website")
+                .size(t.metrics.font_s)
+                .color(p.text_secondary),
+            container(
+                text(url.to_owned())
+                    .size(t.metrics.font_s)
+                    .color(p.text_normal)
+            )
+            .width(Length::Fill)
+            .padding(10)
+            .style(theme::rounded_bg(p.bg_app, 4.0)),
+            row![
+                iced::widget::Space::new().width(Length::Fill),
+                iced::widget::button(text("Go Back").size(14).color(p.text_normal))
+                    .padding(Padding::from([8, 16]))
+                    .on_press(ui(Ui::CancelLink))
+                    .style(theme::icon_button(p)),
+                iced::widget::button(text("Visit Site").size(14).color(p.accent_text))
+                    .padding(Padding::from([8, 16]))
+                    .on_press(ui(Ui::OpenUrl(url.to_owned())))
+                    .style(theme::primary_button(p)),
+            ]
+            .spacing(8),
+        ]
+        .spacing(12),
+    )
+    .width(440)
+    .padding(16)
+    .style(theme::rounded_bg(p.bg_panel, 8.0));
+    iced::widget::opaque(
+        iced::widget::mouse_area(
+            container(iced::widget::opaque(card))
+                .center(Length::Fill)
+                .style(theme::bg(iced::Color {
+                    a: 0.7,
+                    ..iced::Color::BLACK
+                })),
+        )
+        .on_press(ui(Ui::CancelLink)),
+    )
 }
 
 fn splash(t: &FerroTheme) -> El<'static> {

@@ -449,7 +449,8 @@ fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
                 p.header_text
             });
         if let Some(u) = &e.url {
-            sp = sp.link(Ui::OpenUrl(u.clone()));
+            // The title is arbitrary text: confirm the real target.
+            sp = sp.link(Ui::ConfirmLink(u.clone()));
         }
         col = col.push(rich_text(vec![sp]).on_link_click(Message::Ui));
     }

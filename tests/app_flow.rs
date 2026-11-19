@@ -90,3 +90,20 @@ fn views_render_without_panicking() {
     let _ = a.update(Message::Ui(Ui::Logout));
     let _ = ferrocord::ui::view(&a);
 }
+
+#[test]
+fn masked_links_need_confirmation() {
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::ConfirmLink(
+        "https://example.com/real".into(),
+    )));
+    assert_eq!(a.pending_link.as_deref(), Some("https://example.com/real"));
+    let _ = ferrocord::ui::view(&a);
+    let _ = a.update(Message::Ui(Ui::CancelLink));
+    assert!(a.pending_link.is_none());
+    let _ = a.update(Message::Ui(Ui::ConfirmLink(
+        "https://example.com/real".into(),
+    )));
+    let _ = a.update(Message::Ui(Ui::OpenUrl("https://example.com/real".into())));
+    assert!(a.pending_link.is_none());
+}
