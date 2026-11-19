@@ -17,6 +17,8 @@ use super::types::{
 use crate::auth::secrets::Secret;
 use crate::error::{Error, Result};
 
+mod ext;
+
 const MAX_RETRIES: u32 = 3;
 /// Hard cap for downloaded media.
 pub const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
@@ -175,6 +177,16 @@ impl RestClient {
             }
             let text = resp.text().await?;
             if !status.is_success() {
+                // Discord answers "captcha required" with a body that has
+                // `captcha_key` instead of `message`. Ferrocord never tries
+                // to solve it; the caller shows a clear message.
+                if status == StatusCode::BAD_REQUEST
+                    && serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .is_some_and(|v| v.get("captcha_key").is_some())
+                {
+                    return Err(Error::CaptchaRequired);
+                }
                 // The error body has a `message` field; it is a server
                 // description, not user content.
                 let message = serde_json::from_str::<Value>(&text)

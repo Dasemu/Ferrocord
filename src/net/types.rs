@@ -264,6 +264,18 @@ pub struct WireRole {
     pub color: u32,
     #[serde(default)]
     pub position: i32,
+    #[serde(default, deserialize_with = "de_permissions")]
+    pub permissions: u64,
+}
+
+/// Permission bits arrive as a decimal string (older payloads: a number).
+fn de_permissions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    use serde::Deserialize;
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => s.parse().unwrap_or(0),
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -318,6 +330,7 @@ impl WireGuild {
                     name: r.name,
                     color: r.color,
                     position: r.position,
+                    permissions: r.permissions,
                 })
                 .collect(),
             owner_id: self.owner_id.or(props.owner_id),
@@ -690,6 +703,30 @@ pub struct WireChannelOverride {
     pub channel_id: Snowflake,
     #[serde(default)]
     pub muted: bool,
+    #[serde(default)]
+    pub message_notifications: Option<i64>,
+    #[serde(default)]
+    pub mute_config: Option<WireMuteConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireMuteConfig {
+    #[serde(default)]
+    pub end_time: Option<String>,
+}
+
+impl WireChannelOverride {
+    pub fn notify(&self) -> super::extras::ChannelNotify {
+        super::extras::ChannelNotify {
+            level: super::extras::NotifyLevel::from_wire(self.message_notifications),
+            muted: self.muted,
+            mute_end_ms: self
+                .mute_config
+                .as_ref()
+                .and_then(|c| c.end_time.as_deref())
+                .and_then(super::extras::parse_iso_ms),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -726,6 +763,23 @@ impl Default for WireGuildSettings {
 pub struct WireGuildFolder {
     #[serde(default)]
     pub guild_ids: Vec<Snowflake>,
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub color: Option<u64>,
+}
+
+impl From<WireGuildFolder> for GuildFolder {
+    fn from(f: WireGuildFolder) -> Self {
+        Self {
+            id: f.id,
+            name: f.name.filter(|n| !n.is_empty()),
+            color: f.color.map(|c| (c & 0xFF_FFFF) as u32),
+            guild_ids: f.guild_ids,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -856,6 +910,8 @@ impl WireReady {
         let mut muted_channels = Vec::new();
         let mut suppress_everyone = Vec::new();
         let mut suppress_roles = Vec::new();
+        let mut channel_notify = Vec::new();
+        let now = unix_ms();
         for e in settings_entries {
             if let Some(g) = e.guild_id {
                 if e.suppress_everyone {
@@ -870,22 +926,29 @@ impl WireReady {
             {
                 muted_guilds.push(g);
             }
-            muted_channels.extend(
-                e.channel_overrides
-                    .iter()
-                    .filter(|o| o.muted)
-                    .map(|o| o.channel_id),
-            );
+            for o in &e.channel_overrides {
+                let n = o.notify();
+                if n.is_muted(now) {
+                    muted_channels.push(o.channel_id);
+                }
+                if !n.is_default() {
+                    channel_notify.push((o.channel_id, n));
+                }
+            }
         }
 
-        let guild_order = match self.user_settings {
-            Some(s) if !s.guild_folders.is_empty() => s
-                .guild_folders
-                .into_iter()
-                .flat_map(|f| f.guild_ids)
-                .collect(),
-            Some(s) => s.guild_positions,
-            None => vec![],
+        let (guild_order, guild_folders) = match self.user_settings {
+            Some(s) if !s.guild_folders.is_empty() => {
+                let folders: Vec<GuildFolder> =
+                    s.guild_folders.into_iter().map(GuildFolder::from).collect();
+                let order = folders
+                    .iter()
+                    .flat_map(|f| f.guild_ids.iter().copied())
+                    .collect();
+                (order, folders)
+            }
+            Some(s) => (s.guild_positions, vec![]),
+            None => (vec![], vec![]),
         };
 
         ReadyData {
@@ -905,8 +968,18 @@ impl WireReady {
             presences,
             my_status,
             premium_type,
+            guild_folders,
+            channel_notify,
         }
     }
+}
+
+/// Current Unix time in milliseconds.
+pub fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1136,6 +1209,28 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
                 }
             }
             Event::MemberRoles(roles)
+        }
+        "USER_SETTINGS_UPDATE" => {
+            // Legacy settings: only the server folders matter here (the
+            // status echo is handled through presence).
+            match d.get("guild_folders") {
+                Some(v) => {
+                    let f: Vec<WireGuildFolder> = serde_json::from_value(v.clone())?;
+                    Event::GuildFolders(f.into_iter().map(GuildFolder::from).collect())
+                }
+                None => return Ok(None),
+            }
+        }
+        "USER_GUILD_SETTINGS_UPDATE" => {
+            let e: WireGuildSettingsEntry = serde_json::from_value(d)?;
+            Event::NotifySettings {
+                guild: e.guild_id,
+                channels: e
+                    .channel_overrides
+                    .iter()
+                    .map(|o| (o.channel_id, o.notify()))
+                    .collect(),
+            }
         }
         "RESUMED" => Event::Resumed,
         "MESSAGE_CREATE" => {

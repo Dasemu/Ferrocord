@@ -126,6 +126,7 @@ fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
         name: name.into(),
         color,
         position,
+        permissions: 0,
     }
 }
 
@@ -279,6 +280,8 @@ pub fn ready() -> ReadyData {
         ],
         my_status: Some(Presence::Online),
         premium_type: 0,
+        guild_folders: vec![],
+        channel_notify: vec![],
     }
 }
 

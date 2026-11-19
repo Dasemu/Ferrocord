@@ -1,0 +1,14 @@
+{
+  "type": 0,
+  "code": "rust-lang",
+  "guild": {
+    "id": "55",
+    "name": "Rustaceans",
+    "icon": "abc123"
+  },
+  "channel": {
+    "id": "1",
+    "name": "welcome",
+    "type": 0
+  }
+}

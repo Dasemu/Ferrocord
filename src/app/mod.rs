@@ -4,6 +4,7 @@
 pub mod actions;
 mod background;
 pub mod emoji;
+pub mod folders;
 pub mod images;
 pub mod input;
 pub mod jump;

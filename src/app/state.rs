@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::net::Event;
+use crate::net::extras::ChannelNotify;
 use crate::net::model::*;
 
 /// Messages kept in memory for the open conversation.
@@ -171,6 +172,11 @@ pub struct ChatState {
     pub member_roles: HashMap<(GuildId, UserId), Vec<RoleId>>,
     pub muted_guilds: HashSet<GuildId>,
     pub muted_channels: HashSet<ChannelId>,
+    /// Notification overrides per channel (level, timed mutes). Mutes in
+    /// here are mirrored in `muted_channels`.
+    pub channel_notify: HashMap<ChannelId, ChannelNotify>,
+    /// The server rail: folders and ungrouped servers in display order.
+    pub folders: super::folders::Folders,
     /// Servers where @everyone/@here do not count as mentions.
     pub suppress_everyone: HashSet<GuildId>,
     /// Servers where role mentions do not count.
@@ -211,16 +217,11 @@ impl ChatState {
     /// Loads READY (or the boot snapshot) wholesale.
     pub fn load_ready(&mut self, r: &ReadyData) {
         self.me = r.me.clone();
-        let mut guilds = r.guilds.clone();
-        if !r.guild_order.is_empty() {
-            guilds.sort_by_key(|g| {
-                r.guild_order
-                    .iter()
-                    .position(|x| *x == g.id)
-                    .unwrap_or(usize::MAX)
-            });
-        }
-        self.guilds = guilds;
+        self.guilds = r.guilds.clone();
+        let mut folders = super::folders::Folders::from_settings(&r.guild_folders, &r.guild_order);
+        folders.sync(&self.guilds.iter().map(|g| g.id).collect::<Vec<_>>());
+        self.folders = folders;
+        self.resort_guilds();
         self.channels = r.channels.iter().map(|c| (c.id, c.clone())).collect();
         for u in r.users.iter().chain(r.me.iter()) {
             self.users.insert(u.id, u.clone());
@@ -229,6 +230,7 @@ impl ChatState {
         self.my_roles = r.my_roles.iter().cloned().collect();
         self.muted_guilds = r.muted_guilds.iter().copied().collect();
         self.muted_channels = r.muted_channels.iter().copied().collect();
+        self.channel_notify = r.channel_notify.iter().copied().collect();
         self.suppress_everyone = r.suppress_everyone.iter().copied().collect();
         self.suppress_roles = r.suppress_roles.iter().copied().collect();
         // Presences from READY replace what we knew (stale after a
@@ -245,6 +247,68 @@ impl ChatState {
             w.synced = false;
         }
         self.messages.retain(|c, _| self.channels.contains_key(c));
+    }
+
+    /// Keeps `guilds` in rail order.
+    pub fn resort_guilds(&mut self) {
+        let order = self.folders.flat_order();
+        self.guilds
+            .sort_by_key(|g| order.iter().position(|x| *x == g.id).unwrap_or(usize::MAX));
+    }
+
+    /// Whether `c` is muted right now (timed mutes expire).
+    pub fn is_channel_muted(&self, c: ChannelId) -> bool {
+        self.muted_channels.contains(&c)
+            && self
+                .channel_notify
+                .get(&c)
+                .is_none_or(|n| n.is_muted(crate::mock::now_ms()))
+    }
+
+    pub fn channel_notify(&self, c: ChannelId) -> ChannelNotify {
+        self.channel_notify.get(&c).copied().unwrap_or_default()
+    }
+
+    /// Stores a channel's notification override (and mirrors its mute).
+    pub fn set_channel_notify(&mut self, c: ChannelId, n: ChannelNotify) {
+        if n.is_default() {
+            self.channel_notify.remove(&c);
+        } else {
+            self.channel_notify.insert(c, n);
+        }
+        if n.is_muted(crate::mock::now_ms()) {
+            self.muted_channels.insert(c);
+        } else {
+            self.muted_channels.remove(&c);
+        }
+    }
+
+    /// Whether the current user may pin and unpin in `c`: always in DMs; in
+    /// servers for the owner, administrators and roles with Manage
+    /// Messages. Channel overwrites are not applied, so a 403 from the
+    /// server is still possible and is reported when it happens.
+    pub fn can_manage_messages(&self, c: ChannelId) -> bool {
+        const ADMINISTRATOR: u64 = 1 << 3;
+        const MANAGE_MESSAGES: u64 = 1 << 13;
+        let Some(ch) = self.channels.get(&c) else {
+            return false;
+        };
+        let Some(g) = ch.guild_id else {
+            return true;
+        };
+        let Some(guild) = self.guild(g) else {
+            return false;
+        };
+        if guild.owner_id.is_some() && guild.owner_id == self.me_id() {
+            return true;
+        }
+        let mine = self.my_roles.get(&g);
+        let bits = guild
+            .roles
+            .iter()
+            .filter(|r| r.id == g || mine.is_some_and(|m| m.contains(&r.id)))
+            .fold(0, |acc, r| acc | r.permissions);
+        bits & (ADMINISTRATOR | MANAGE_MESSAGES) != 0
     }
 
     /// Applies one gateway event. Returns effects for the app to run.
@@ -337,9 +401,24 @@ impl ChatState {
                     Some(g) => *g = (**guild).clone(),
                     None => self.guilds.push((**guild).clone()),
                 }
+                self.folders
+                    .sync(&self.guilds.iter().map(|g| g.id).collect::<Vec<_>>());
+                self.resort_guilds();
+            }
+            Event::GuildFolders(list) => {
+                self.folders = super::folders::Folders::from_settings(list, &[]);
+                self.folders
+                    .sync(&self.guilds.iter().map(|g| g.id).collect::<Vec<_>>());
+                self.resort_guilds();
+            }
+            Event::NotifySettings { channels, .. } => {
+                for (c, n) in channels {
+                    self.set_channel_notify(*c, *n);
+                }
             }
             Event::GuildDelete(id) => {
                 self.guilds.retain(|g| g.id != *id);
+                self.folders.forget(*id);
                 let gone: Vec<ChannelId> = self
                     .channels
                     .values()
@@ -668,7 +747,7 @@ impl ChatState {
             }
             return;
         }
-        let muted = self.muted_channels.contains(&m.channel_id)
+        let muted = self.is_channel_muted(m.channel_id)
             || m.guild_id.is_some_and(|g| self.muted_guilds.contains(&g));
         // Like the official client: a direct @mention (or a DM) always
         // badges and notifies, even in a muted channel/server; @everyone,
@@ -844,7 +923,7 @@ impl ChatState {
                 continue;
             }
             b.mentions += self.mention_count(c.id);
-            if !muted_guild && !self.muted_channels.contains(&c.id) && self.is_unread(c.id) {
+            if !muted_guild && !self.is_channel_muted(c.id) && self.is_unread(c.id) {
                 b.unread = true;
             }
         }
@@ -1583,5 +1662,113 @@ mod tests {
         s.apply_event(&Event::GuildDelete(g.id), &ctx());
         assert!(s.guild(g.id).is_none());
         assert!(!s.channels.contains_key(&ch.id));
+    }
+
+    // -- notification overrides, permissions, folders -----------------------------
+
+    #[test]
+    fn channel_notify_mirrors_mutes_and_forgets_defaults() {
+        use crate::net::extras::{MuteDuration, NotifyLevel};
+        let mut s = loaded();
+        let c = mock::CH_RANDOM;
+        let now = crate::mock::now_ms();
+        s.set_channel_notify(c, MuteDuration::Hour1.apply(NotifyLevel::Mentions, now));
+        assert!(s.is_channel_muted(c));
+        assert_eq!(s.channel_notify(c).level, NotifyLevel::Mentions);
+        // An expired timed mute no longer counts.
+        s.set_channel_notify(
+            c,
+            ChannelNotify {
+                level: NotifyLevel::Default,
+                muted: true,
+                mute_end_ms: Some(now.saturating_sub(1)),
+            },
+        );
+        assert!(!s.is_channel_muted(c));
+        s.set_channel_notify(c, ChannelNotify::default());
+        assert!(s.channel_notify.is_empty());
+        assert!(!s.muted_channels.contains(&c));
+    }
+
+    #[test]
+    fn notify_settings_events_update_state() {
+        use crate::net::extras::{MuteDuration, NotifyLevel};
+        let mut s = loaded();
+        let n = MuteDuration::Forever.apply(NotifyLevel::Nothing, 0);
+        s.apply_event(
+            &Event::NotifySettings {
+                guild: Some(mock::GUILD_RUST),
+                channels: vec![(mock::CH_HELP, n)],
+            },
+            &ctx(),
+        );
+        assert!(s.is_channel_muted(mock::CH_HELP));
+        assert_eq!(s.channel_notify(mock::CH_HELP).level, NotifyLevel::Nothing);
+    }
+
+    #[test]
+    fn manage_messages_depends_on_roles_owner_and_dms() {
+        let mut s = loaded();
+        // DMs: always.
+        assert!(s.can_manage_messages(mock::DM_ALICE));
+        // Server channel, plain member: no.
+        assert!(!s.can_manage_messages(mock::CH_GENERAL));
+        // A role with Manage Messages.
+        if let Some(g) = s.guilds.iter_mut().find(|g| g.id == mock::GUILD_RUST)
+            && let Some(r) = g.roles.iter_mut().find(|r| r.id == mock::ROLE_MEMBER)
+        {
+            r.permissions = 1 << 13;
+        }
+        assert!(s.can_manage_messages(mock::CH_GENERAL));
+        // Owner.
+        let mut s = loaded();
+        if let Some(g) = s.guilds.iter_mut().find(|g| g.id == mock::GUILD_RUST) {
+            g.owner_id = s.me.as_ref().map(|u| u.id);
+        }
+        assert!(s.can_manage_messages(mock::CH_GENERAL));
+        // Unknown channel.
+        assert!(!s.can_manage_messages(Snowflake(999_999)));
+    }
+
+    #[test]
+    fn folders_follow_ready_and_guild_events() {
+        let mut r = mock::ready();
+        r.guild_folders = vec![
+            GuildFolder {
+                id: Some(5),
+                name: Some("Dev".into()),
+                color: Some(0xff0000),
+                guild_ids: vec![mock::GUILD_ICED, mock::GUILD_RUST],
+            },
+            GuildFolder::single(mock::GUILD_CAFE),
+        ];
+        let mut s = ChatState::default();
+        s.load_ready(&r);
+        // Folder members first, then the single, then servers the settings
+        // did not mention (appended).
+        let order: Vec<GuildId> = s.guilds.iter().map(|g| g.id).collect();
+        assert_eq!(
+            order,
+            vec![
+                mock::GUILD_ICED,
+                mock::GUILD_RUST,
+                mock::GUILD_CAFE,
+                mock::GUILD_LINUX,
+                mock::GUILD_GAMES
+            ]
+        );
+        assert_eq!(s.folders.folder(5).unwrap().name.as_deref(), Some("Dev"));
+        // Leaving a server removes it from its folder too.
+        s.apply_event(&Event::GuildDelete(mock::GUILD_RUST), &ctx());
+        assert_eq!(
+            s.folders.folder(5).unwrap().guild_ids,
+            vec![mock::GUILD_ICED]
+        );
+        // Another session changes the folders.
+        s.apply_event(
+            &Event::GuildFolders(vec![GuildFolder::single(mock::GUILD_GAMES)]),
+            &ctx(),
+        );
+        assert_eq!(s.guilds.first().map(|g| g.id), Some(mock::GUILD_GAMES));
     }
 }

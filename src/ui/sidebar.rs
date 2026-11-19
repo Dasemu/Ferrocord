@@ -97,7 +97,7 @@ fn edge_pill<'a>(app: &App, show: bool) -> El<'a> {
 fn channel_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
     let p = app.theme.palette;
     let unread =
-        app.chat.is_unread(c.id) && !app.chat.muted_channels.contains(&c.id) && c.kind.is_textual();
+        app.chat.is_unread(c.id) && !app.chat.is_channel_muted(c.id) && c.kind.is_textual();
     let mentions = app.chat.mention_count(c.id);
     let bright = selected || unread || mentions > 0;
     let color = if bright {
