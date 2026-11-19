@@ -1,5 +1,5 @@
-//! Popups drawn over the main view: message context menu, emoji picker,
-//! delete confirmation and the status menu.
+//! Popups drawn over the main view: message context menu, emoji and GIF
+//! pickers, delete confirmation and the status menu.
 
 use iced::widget::{
     Space, button, column, container, image, mouse_area, opaque, row, scrollable, text, text_input,
@@ -50,10 +50,126 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
             Ui::CloseEmojiPicker,
         ));
     }
+    if let Some(gp) = &app.gif_picker {
+        let size = Size::new(GIF_PICKER_W, GIF_PICKER_H);
+        // Above and to the left of the composer button, like the emoji one.
+        let at = input::clamp_popup(
+            Point::new(gp.at.x - size.width + 16.0, gp.at.y - size.height - 12.0),
+            size,
+            window,
+        );
+        out.push(popup_layer(
+            app,
+            gif_picker(app, gp),
+            at,
+            Ui::CloseGifPicker,
+        ));
+    }
     if let Some((c, m)) = app.pending_delete {
         out.push(delete_dialog(app, c, m));
     }
     out
+}
+
+const GIF_PICKER_W: f32 = 424.0;
+const GIF_PICKER_H: f32 = 440.0;
+
+fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
+    let p = app.theme.palette;
+    let search = text_input("Search Tenor", &gp.query)
+        .id(iced::widget::Id::new("gif-search"))
+        .on_input(|s| Message::Ui(Ui::GifQuery(s)))
+        .size(14)
+        .font(INTER)
+        .padding(Padding::from([8, 10]))
+        .style(theme::input(p, p.bg_app));
+    let title = if gp.query.trim().is_empty() {
+        "Trending GIFs"
+    } else {
+        "Search results"
+    };
+
+    // Two columns, each GIF going to the shorter one (masonry).
+    const GAP: f32 = 6.0;
+    let tile_w = (GIF_PICKER_W - 16.0 - GAP) / 2.0;
+    let mut cols: [Vec<El<'a>>; 2] = [Vec::new(), Vec::new()];
+    let mut heights = [0.0f32; 2];
+    for g in &gp.results {
+        let h = (tile_w * g.height as f32 / g.width as f32).clamp(60.0, 320.0);
+        let face: El<'a> = match app.image(&g.preview) {
+            Some(handle) => image(handle.clone())
+                .width(tile_w)
+                .height(h)
+                .content_fit(iced::ContentFit::Cover)
+                .into(),
+            None => container(icon(Icon::Image, 24.0, p.text_muted))
+                .center_x(tile_w)
+                .center_y(h)
+                .style(theme::rounded_bg(p.bg_app, 4.0))
+                .into(),
+        };
+        let tile = button(face)
+            .padding(0)
+            .on_press(ui(Ui::PickGif(g.url.clone())))
+            .style(theme::icon_button(p));
+        let i = usize::from(heights[1] < heights[0]);
+        heights[i] += h + GAP;
+        cols[i].push(tile.into());
+    }
+    let [left, right] = cols;
+    let body: El<'a> = if gp.loading && gp.results.is_empty() {
+        notice(p, "Loading…")
+    } else if let Some(e) = &gp.error {
+        notice(p, e)
+    } else if gp.results.is_empty() {
+        notice(p, "No GIFs found")
+    } else {
+        scrollable(
+            container(
+                row![
+                    iced::widget::Column::with_children(left)
+                        .spacing(GAP)
+                        .width(tile_w),
+                    iced::widget::Column::with_children(right)
+                        .spacing(GAP)
+                        .width(tile_w),
+                ]
+                .spacing(GAP),
+            )
+            .padding(Padding::from([0, 8])),
+        )
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new().width(4).scroller_width(4),
+        ))
+        .style(theme::thin_scrollbar(p, false))
+        .height(Length::Fill)
+        .into()
+    };
+    container(
+        column![
+            container(search).padding(8),
+            container(
+                text(title.to_uppercase())
+                    .size(12)
+                    .font(INTER_SEMIBOLD)
+                    .color(p.text_muted)
+            )
+            .padding(Padding::from([0, 12]).bottom(4)),
+            body,
+        ]
+        .spacing(4),
+    )
+    .width(GIF_PICKER_W)
+    .height(GIF_PICKER_H)
+    .style(theme::popup(p))
+    .into()
+}
+
+fn notice<'a>(p: theme::Palette, msg: &str) -> El<'a> {
+    container(text(msg.to_owned()).size(14).color(p.text_muted))
+        .padding(24)
+        .center_x(Length::Fill)
+        .into()
 }
 
 fn picker_position(open: &OpenPicker, window: Size) -> Point {

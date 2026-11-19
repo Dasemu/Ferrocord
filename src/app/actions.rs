@@ -232,6 +232,37 @@ impl App {
                 self.emoji_picker = None;
                 Task::none()
             }
+            Ui::OpenGifPicker => {
+                if self.open_chan().is_none() {
+                    return Task::none();
+                }
+                self.menu = None;
+                self.emoji_picker = None;
+                let (picker, generation) = super::gifs::GifPicker::open(input::cursor());
+                self.gif_picker = Some(picker);
+                Task::batch([
+                    focus(iced::widget::Id::new("gif-search")),
+                    self.fetch_gifs(generation, String::new()),
+                ])
+            }
+            Ui::GifQuery(q) => match self.gif_picker.as_mut() {
+                Some(p) => delayed(
+                    Done::GifSearchDue(p.set_query(q)),
+                    super::gifs::SEARCH_DEBOUNCE_MS,
+                ),
+                None => Task::none(),
+            },
+            Ui::PickGif(url) => {
+                self.gif_picker = None;
+                match self.open_chan() {
+                    Some(c) => self.send_text(c, url),
+                    None => Task::none(),
+                }
+            }
+            Ui::CloseGifPicker => {
+                self.gif_picker = None;
+                Task::none()
+            }
             Ui::PickFiles => {
                 if self.open_chan().is_none() {
                     return Task::none();
@@ -505,7 +536,10 @@ impl App {
     }
 
     fn escape(&mut self) -> Task<Message> {
-        if self.emoji_picker.take().is_some() || self.menu.take().is_some() {
+        if self.emoji_picker.take().is_some()
+            || self.gif_picker.take().is_some()
+            || self.menu.take().is_some()
+        {
             return Task::none();
         }
         if self.pending_delete.take().is_some() || self.pending_link.take().is_some() {
@@ -559,6 +593,32 @@ impl App {
                 }),
             },
         )
+    }
+
+    // -- GIF picker ------------------------------------------------------------------
+
+    pub(super) fn gif_search_due(&mut self, generation: u64) -> Task<Message> {
+        match self.gif_picker.as_mut().and_then(|p| p.due(generation)) {
+            Some(q) => self.fetch_gifs(generation, q),
+            None => Task::none(),
+        }
+    }
+
+    /// Trending GIFs for a blank `query`, else search results.
+    fn fetch_gifs(&mut self, generation: u64, query: String) -> Task<Message> {
+        if self.cfg.mock {
+            if let Some(p) = self.gif_picker.as_mut() {
+                p.finish(generation, Ok(crate::mock::gifs(&query)));
+            }
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        Task::perform(async move { rest.gifs(&query).await }, move |r| {
+            Message::Done(Done::Gifs {
+                generation,
+                result: r.map_err(|e| e.user_message()),
+            })
+        })
     }
 
     fn pick_emoji(&mut self, e: Emoji) -> Task<Message> {

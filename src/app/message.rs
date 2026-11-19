@@ -75,6 +75,12 @@ pub enum Ui {
     EmojiSection(Section),
     PickEmoji(Emoji),
     CloseEmojiPicker,
+    /// Composer GIF button.
+    OpenGifPicker,
+    GifQuery(String),
+    /// Sends the GIF with this Tenor URL to the open channel.
+    PickGif(String),
+    CloseGifPicker,
     // -- attachments
     PickFiles,
     FileDropped(PathBuf),
@@ -193,6 +199,12 @@ pub enum Done {
     Panel {
         generation: u64,
         result: Result<Vec<crate::net::model::Message>, String>,
+    },
+    /// The GIF search debounce timer of this generation fired.
+    GifSearchDue(u64),
+    Gifs {
+        generation: u64,
+        result: Result<Vec<crate::net::model::Gif>, String>,
     },
     /// Delay after a jump so the new rows are laid out before scrolling.
     ScrollToMessage(MessageId),

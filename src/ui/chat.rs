@@ -939,6 +939,7 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             tool(Icon::CirclePlus, Some(Ui::PickFiles)),
             input,
             tool(Icon::Gift, None),
+            tool(Icon::Gif, Some(Ui::OpenGifPicker)),
             tool(Icon::Sticker, None),
             tool(
                 Icon::Smile,

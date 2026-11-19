@@ -199,6 +199,51 @@ impl RestClient {
         )?)
     }
 
+    /// GIFs for the picker: trending when `query` is blank, else a search.
+    /// `GET /gifs/trending-gifs` / `GET /gifs/search` (Tenor via Discord).
+    pub async fn gifs(&self, query: &str) -> Result<Vec<Gif>> {
+        #[derive(serde::Deserialize)]
+        struct WireGif {
+            #[serde(default)]
+            url: String,
+            #[serde(default)]
+            gif_src: String,
+            #[serde(default)]
+            preview: String,
+            #[serde(default)]
+            width: u32,
+            #[serde(default)]
+            height: u32,
+        }
+        let q = query.trim();
+        let path = if q.is_empty() {
+            "/gifs/trending-gifs?media_format=mp4&provider=tenor&locale=en-US".to_owned()
+        } else {
+            format!(
+                "/gifs/search?q={}&media_format=mp4&provider=tenor&locale=en-US",
+                percent_encode(q)
+            )
+        };
+        let wire: Vec<WireGif> = self.get(&path).await?;
+        Ok(wire
+            .into_iter()
+            .filter(|g| !g.url.is_empty())
+            .filter_map(|g| {
+                let preview = if g.preview.is_empty() {
+                    g.gif_src
+                } else {
+                    g.preview
+                };
+                (!preview.is_empty()).then_some(Gif {
+                    url: g.url,
+                    preview,
+                    width: g.width.max(1),
+                    height: g.height.max(1),
+                })
+            })
+            .collect())
+    }
+
     /// `GET /users/@me` — validates the token.
     pub async fn me(&self) -> Result<User> {
         let u: WireUser = self.get("/users/@me").await.map_err(|e| match e {

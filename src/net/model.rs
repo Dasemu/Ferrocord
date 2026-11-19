@@ -488,6 +488,17 @@ impl Embed {
     }
 }
 
+/// A GIF offered by the GIF picker (Discord proxies Tenor).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gif {
+    /// Tenor page URL: what gets sent, Discord turns it into a `gifv` embed.
+    pub url: String,
+    /// Image shown in the picker (static preview, else the GIF itself).
+    pub preview: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,

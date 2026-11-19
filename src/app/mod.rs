@@ -4,6 +4,7 @@
 pub mod actions;
 mod background;
 pub mod emoji;
+pub mod gifs;
 pub mod images;
 pub mod input;
 pub mod jump;
@@ -101,6 +102,7 @@ pub struct App {
     pub pending_delete: Option<(ChannelId, MessageId)>,
     pub menu: Option<MessageMenu>,
     pub emoji_picker: Option<OpenPicker>,
+    pub gif_picker: Option<gifs::GifPicker>,
     pub draft: Vec<upload::DraftAttachment>,
     pub uploads: Vec<upload::ActiveUpload>,
     upload_handles: HashMap<u64, iced::task::Handle>,
@@ -198,6 +200,7 @@ impl App {
             pending_delete: None,
             menu: None,
             emoji_picker: None,
+            gif_picker: None,
             draft: Vec::new(),
             uploads: Vec::new(),
             upload_handles: HashMap::new(),
@@ -297,6 +300,14 @@ impl App {
                 }
             }
             self.chat.insert_history(c.id, h, false, true);
+        }
+        for (i, (w, h)) in mock::MOCK_GIF_SIZES.iter().enumerate() {
+            let (w, h, px) = mock::mock_image(*w, *h);
+            self.images.insert(
+                format!("mock://gif/{}", i + 1),
+                iced::widget::image::Handle::from_rgba(w, h, px),
+                (w * h * 4) as usize,
+            );
         }
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
@@ -835,6 +846,12 @@ impl App {
             return Task::none();
         }
         self.composer.clear();
+        self.send_text(c, content)
+    }
+
+    /// Sends `content` to `c` as a text message (optimistic echo, then
+    /// REST), as a reply if one is being composed.
+    pub(crate) fn send_text(&mut self, c: ChannelId, content: String) -> Task<Message> {
         let now = now_ms();
         let nonce = Snowflake::from_timestamp_ms(now, fastrand::u64(0..4096)).to_string();
         let reply = self.reply_target(c);
@@ -1280,6 +1297,13 @@ impl App {
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
             Done::Panel { generation, result } => self.on_panel_done(generation, result),
+            Done::GifSearchDue(generation) => self.gif_search_due(generation),
+            Done::Gifs { generation, result } => {
+                if let Some(p) = self.gif_picker.as_mut() {
+                    p.finish(generation, result);
+                }
+                self.request_images()
+            }
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
                 if self.highlight == Some(m) {
@@ -1387,6 +1411,9 @@ impl App {
                     urls.push(u);
                 }
             }
+        }
+        if let Some(p) = &self.gif_picker {
+            urls.extend(p.results.iter().map(|g| g.preview.clone()));
         }
         for m in self.search.results.iter().chain(&self.panel.messages) {
             if let Some(u) = self.rest.avatar_url(&m.author, 80) {

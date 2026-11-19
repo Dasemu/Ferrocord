@@ -593,3 +593,40 @@ async fn recent_mentions_hits_inbox_route() {
         "/users/@me/mentions?limit=25&roles=true&everyone=true"
     );
 }
+
+#[tokio::test]
+async fn gifs_trending_and_search() {
+    let server = http(Arc::new(|req, _| {
+        let gif = |n: u32| {
+            json!({"id": n.to_string(), "title": "", "url": format!("https://tenor.com/view/g-{n}"),
+                   "src": format!("https://media.tenor.com/{n}.mp4"),
+                   "gif_src": format!("https://media.tenor.com/{n}.gif"),
+                   "preview": if n == 2 { String::new() } else { format!("https://media.tenor.com/{n}.png") },
+                   "width": 220, "height": 120})
+        };
+        if req.path.starts_with("/gifs/trending-gifs") {
+            Response::json(200, json!([gif(1)]))
+        } else if req.path.starts_with("/gifs/search") {
+            Response::json(200, json!([gif(2), {"url": "", "gif_src": "x"}]))
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let trending = rest.gifs("  ").await.unwrap();
+    assert_eq!(trending.len(), 1);
+    assert_eq!(trending[0].url, "https://tenor.com/view/g-1");
+    assert_eq!(trending[0].preview, "https://media.tenor.com/1.png");
+    // No preview: falls back to the GIF; entries without a URL are dropped.
+    let found = rest.gifs("happy cat").await.unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].preview, "https://media.tenor.com/2.gif");
+    let rec = server.recorded();
+    assert!(rec[0].path.starts_with("/gifs/trending-gifs?"));
+    assert!(
+        rec[1].path.starts_with("/gifs/search?q=happy%20cat&"),
+        "{}",
+        rec[1].path
+    );
+}

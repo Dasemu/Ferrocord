@@ -772,3 +772,29 @@ mod tray_flow {
         assert!(!a.settings_open);
     }
 }
+
+#[test]
+fn gif_picker_opens_searches_and_sends() {
+    use ferrocord::app::Done;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let p = a.gif_picker.as_ref().expect("picker open");
+    assert_eq!(p.results.len(), 8, "trending loaded");
+    // Typing only searches once the debounce timer of the last keystroke fires.
+    let _ = a.update(Message::Ui(Ui::GifQuery("ca".into())));
+    let _ = a.update(Message::Ui(Ui::GifQuery("cat".into())));
+    let last = a.gif_picker.as_ref().unwrap().generation;
+    let _ = a.update(Message::Done(Done::GifSearchDue(last - 1)));
+    assert_eq!(a.gif_picker.as_ref().unwrap().results.len(), 8);
+    let _ = a.update(Message::Done(Done::GifSearchDue(last)));
+    assert_eq!(a.gif_picker.as_ref().unwrap().results.len(), 4);
+    // Picking sends the Tenor URL as a message and closes the picker,
+    // leaving the composer alone.
+    let _ = a.update(Message::Ui(Ui::ComposerChanged("draft".into())));
+    let url = a.gif_picker.as_ref().unwrap().results[0].url.clone();
+    let _ = a.update(Message::Ui(Ui::PickGif(url.clone())));
+    assert!(a.gif_picker.is_none());
+    assert_eq!(a.composer, "draft");
+    let last_msg = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
+    assert_eq!(last_msg.content, url);
+}

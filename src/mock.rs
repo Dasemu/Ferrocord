@@ -751,6 +751,34 @@ pub fn mock_emoji(rgb: [u8; 3]) -> (u32, Vec<u8>) {
     (n, px)
 }
 
+/// Sizes of the mock GIF previews (`mock://gif/<n>`, n from 1).
+pub const MOCK_GIF_SIZES: [(u32, u32); 8] = [
+    (220, 124),
+    (200, 200),
+    (240, 135),
+    (180, 240),
+    (220, 165),
+    (240, 120),
+    (200, 150),
+    (160, 160),
+];
+
+/// Mock GIF picker results: eight "trending" GIFs, four for any search.
+pub fn gifs(query: &str) -> Vec<Gif> {
+    let n = if query.trim().is_empty() { 8 } else { 4 };
+    MOCK_GIF_SIZES
+        .iter()
+        .take(n)
+        .enumerate()
+        .map(|(i, (w, h))| Gif {
+            url: format!("https://tenor.example/view/mock-{}", i + 1),
+            preview: format!("mock://gif/{}", i + 1),
+            width: *w,
+            height: *h,
+        })
+        .collect()
+}
+
 /// Procedurally generated RGBA image (a stylised landscape) used as the
 /// mock attachment preview. Returns (width, height, pixels).
 pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
