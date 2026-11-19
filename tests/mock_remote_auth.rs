@@ -94,8 +94,10 @@ async fn full_qr_login_flow() {
             URL_SAFE_NO_PAD.encode(Sha256::digest(nonce))
         );
 
+        // The fingerprint is base64url(SHA-256(SPKI DER)) of the client key.
+        let fp = URL_SAFE_NO_PAD.encode(Sha256::digest(&der));
         ws.send(Ws::text(
-            json!({"op": "pending_remote_init", "fingerprint": "fp-xyz"}).to_string(),
+            json!({"op": "pending_remote_init", "fingerprint": fp}).to_string(),
         ))
         .await
         .unwrap();
@@ -121,7 +123,10 @@ async fn full_qr_login_flow() {
             .unwrap()
     };
     match next().await {
-        RaEvent::QrReady(u) => assert_eq!(u, "https://discord.com/ra/fp-xyz"),
+        RaEvent::QrReady(u) => assert!(
+            u.starts_with("https://discord.com/ra/") && u.len() > 30,
+            "{u}"
+        ),
         other => panic!("{other:?}"),
     }
     match next().await {

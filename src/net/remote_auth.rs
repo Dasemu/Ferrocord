@@ -82,6 +82,7 @@ pub enum RaAction {
 pub struct RemoteAuth {
     key: RsaPrivateKey,
     fingerprint: Option<String>,
+    awaiting_ack: bool,
 }
 
 impl RemoteAuth {
@@ -92,6 +93,7 @@ impl RemoteAuth {
         Ok(Self {
             key,
             fingerprint: None,
+            awaiting_ack: false,
         })
     }
 
@@ -99,6 +101,7 @@ impl RemoteAuth {
         Self {
             key,
             fingerprint: None,
+            awaiting_ack: false,
         }
     }
 
@@ -112,6 +115,26 @@ impl RemoteAuth {
             .to_public_key_der()
             .map_err(|e| Error::Auth(format!("could not encode public key: {e}")))?;
         Ok(STANDARD.encode(der.as_bytes()))
+    }
+
+    /// The fingerprint the server must announce for our key:
+    /// base64url(SHA-256(SPKI DER)), unpadded.
+    pub fn expected_fingerprint(&self) -> Result<String> {
+        let der = self
+            .public_key()
+            .to_public_key_der()
+            .map_err(|e| Error::Auth(format!("could not encode public key: {e}")))?;
+        Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(der.as_bytes())))
+    }
+
+    /// Next client heartbeat, or `None` if the previous one was never
+    /// acknowledged (the connection is dead).
+    pub fn heartbeat(&mut self) -> Option<String> {
+        if self.awaiting_ack {
+            return None;
+        }
+        self.awaiting_ack = true;
+        Some(r#"{"op":"heartbeat"}"#.into())
     }
 
     pub fn decrypt(&self, b64: &str) -> Result<Vec<u8>> {
@@ -147,6 +170,14 @@ impl RemoteAuth {
                 )]
             }
             ServerMsg::PendingRemoteInit { fingerprint } => {
+                // The fingerprint binds the QR code to our key; a mismatch
+                // means the server (or something in between) is not
+                // talking about our session.
+                if fingerprint != self.expected_fingerprint()? {
+                    return Err(Error::Protocol(
+                        "remote auth: fingerprint does not match our key".into(),
+                    ));
+                }
                 let url = format!("{QR_URL_PREFIX}{fingerprint}");
                 self.fingerprint = Some(fingerprint);
                 vec![RaAction::Emit(RaEvent::QrReady(url))]
@@ -154,10 +185,18 @@ impl RemoteAuth {
             ServerMsg::PendingTicket {
                 encrypted_user_payload,
             } => {
-                let raw = self.decrypt(&encrypted_user_payload)?;
-                let s = String::from_utf8_lossy(&raw);
-                // id:discriminator:avatar:username (username may contain ':')
-                let username = s.splitn(4, ':').nth(3).unwrap_or("").to_owned();
+                // Only cosmetic: a bad payload must not abort the login.
+                let username = match self.decrypt(&encrypted_user_payload) {
+                    Ok(raw) => {
+                        let s = String::from_utf8_lossy(&raw);
+                        // id:discriminator:avatar:username (username may contain ':')
+                        s.splitn(4, ':').nth(3).unwrap_or("").to_owned()
+                    }
+                    Err(_) => {
+                        tracing::warn!("remote auth: undecodable user payload");
+                        String::new()
+                    }
+                };
                 vec![RaAction::Emit(RaEvent::Scanned { username })]
             }
             ServerMsg::PendingLogin { ticket } => vec![RaAction::ExchangeTicket(ticket)],
@@ -166,7 +205,10 @@ impl RemoteAuth {
                 vec![RaAction::Emit(RaEvent::Token(token)), RaAction::Close]
             }
             ServerMsg::Cancel => vec![RaAction::Emit(RaEvent::Cancelled), RaAction::Close],
-            ServerMsg::HeartbeatAck => vec![],
+            ServerMsg::HeartbeatAck => {
+                self.awaiting_ack = false;
+                vec![]
+            }
         })
     }
 
@@ -218,7 +260,15 @@ async fn run(url: &str, rest: RestClient, tx: &mpsc::Sender<RaEvent>) -> Result<
             }
             _ = tokio::time::sleep_until(next) => {
                 next = tokio::time::Instant::now() + interval;
-                ws.send(WsMessage::text(r#"{"op":"heartbeat"}"#)).await?;
+                match state.heartbeat() {
+                    Some(hb) => ws.send(WsMessage::text(hb)).await?,
+                    None => {
+                        tracing::warn!("remote auth heartbeat not acknowledged");
+                        let _ = ws.close(None).await;
+                        let _ = tx.send(RaEvent::Expired).await;
+                        return Ok(());
+                    }
+                }
             }
             frame = ws.next() => {
                 let text = match frame {
@@ -333,11 +383,19 @@ mod tests {
     #[test]
     fn fingerprint_ticket_and_cancel() {
         let mut s = test_state();
+        assert!(
+            s.on_message(r#"{"op":"pending_remote_init","fingerprint":"abc123"}"#)
+                .is_err(),
+            "foreign fingerprint must be rejected"
+        );
+        let fp = s.expected_fingerprint().unwrap();
         let a = s
-            .on_message(r#"{"op":"pending_remote_init","fingerprint":"abc123"}"#)
+            .on_message(&format!(
+                r#"{{"op":"pending_remote_init","fingerprint":"{fp}"}}"#
+            ))
             .unwrap();
         assert!(
-            matches!(&a[0], RaAction::Emit(RaEvent::QrReady(u)) if u == "https://discord.com/ra/abc123")
+            matches!(&a[0], RaAction::Emit(RaEvent::QrReady(u)) if *u == format!("https://discord.com/ra/{fp}"))
         );
         let enc = encrypt(&s.public_key(), b"42:0:avhash:alice:x");
         let a = s
@@ -354,6 +412,24 @@ mod tests {
         assert!(matches!(&a[0], RaAction::ExchangeTicket(t) if t == "T"));
         let a = s.on_message(r#"{"op":"cancel"}"#).unwrap();
         assert!(matches!(a[0], RaAction::Emit(RaEvent::Cancelled)));
+    }
+
+    #[test]
+    fn heartbeat_zombie_and_recoverable_payload() {
+        let mut s = test_state();
+        assert!(s.heartbeat().is_some());
+        assert!(s.heartbeat().is_none(), "no ACK -> dead");
+        s.awaiting_ack = false;
+        assert!(s.heartbeat().is_some());
+        s.on_message(r#"{"op":"heartbeat_ack"}"#).unwrap();
+        assert!(s.heartbeat().is_some());
+        // Garbage user payload: still reports the scan.
+        let a = s
+            .on_message(r#"{"op":"pending_ticket","encrypted_user_payload":"AAAA"}"#)
+            .unwrap();
+        assert!(
+            matches!(&a[0], RaAction::Emit(RaEvent::Scanned { username }) if username.is_empty())
+        );
     }
 
     #[test]
