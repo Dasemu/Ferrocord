@@ -193,8 +193,42 @@ fn is_list_item(line: &str) -> bool {
 
 type Ctor = fn(Vec<Inline>) -> Inline;
 
+/// Maximum nesting of inline formatting; deeper input is kept as text.
+const MAX_DEPTH: usize = 12;
+
+/// Remembers delimiters that have no closing match in the rest of the
+/// input. Searching again from a later position cannot succeed either, so
+/// pathological input like 4000 × `[` or `**` stays linear.
+#[derive(Default)]
+struct Memo {
+    failed: Vec<&'static str>,
+    no_gt: bool,
+}
+
+impl Memo {
+    fn close(&mut self, s: &str, from: usize, delim: &'static str) -> Option<usize> {
+        if self.failed.contains(&delim) {
+            return None;
+        }
+        let r = find_closing(s, from, delim);
+        if r.is_none() {
+            self.failed.push(delim);
+        }
+        r
+    }
+}
+
 /// Parses inline markdown. Newlines become [`Inline::LineBreak`].
 pub fn parse_inline(src: &str) -> Vec<Inline> {
+    parse_inline_depth(src, 0)
+}
+
+fn parse_inline_depth(src: &str, depth: usize) -> Vec<Inline> {
+    if depth > MAX_DEPTH {
+        return vec![Inline::Text(src.to_owned())];
+    }
+    let parse_inline = |s: &str| parse_inline_depth(s, depth + 1);
+    let mut memo = Memo::default();
     let mut out = Vec::new();
     let mut text = String::new();
     let b = src.as_bytes();
@@ -239,7 +273,11 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
             }
         }
         // Angle-bracket constructs.
+        if c == b'<' && !memo.no_gt && !rest.contains('>') {
+            memo.no_gt = true;
+        }
         if c == b'<'
+            && !memo.no_gt
             && let Some((node, len)) = angle(rest)
         {
             push!(node);
@@ -261,7 +299,7 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         }
         // Paired delimiters, longest first.
         if rest.starts_with("***")
-            && let Some(end) = find_closing(rest, 3, "***")
+            && let Some(end) = memo.close(rest, 3, "***")
         {
             push!(Inline::Bold(vec![Inline::Italic(parse_inline(
                 &rest[3..end]
@@ -269,7 +307,7 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
             i += end + 3;
             continue;
         }
-        let pairs: [(&str, Ctor); 4] = [
+        let pairs: [(&'static str, Ctor); 4] = [
             ("||", Inline::Spoiler),
             ("**", Inline::Bold),
             ("__", Inline::Underline),
@@ -278,7 +316,7 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         let mut matched = false;
         for (d, ctor) in pairs {
             if rest.starts_with(d)
-                && let Some(end) = find_closing(rest, 2, d)
+                && let Some(end) = memo.close(rest, 2, d)
             {
                 push!(ctor(parse_inline(&rest[2..end])));
                 i += end + 2;
@@ -291,7 +329,7 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         }
         if c == b'*'
             && b.get(i + 1).is_some_and(|n| !n.is_ascii_whitespace())
-            && let Some(end) = find_closing(rest, 1, "*")
+            && let Some(end) = memo.close(rest, 1, "*")
             && !rest[..end].ends_with(char::is_whitespace)
         {
             push!(Inline::Italic(parse_inline(&rest[1..end])));
@@ -300,7 +338,7 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         }
         if c == b'_'
             && (i == 0 || !b[i - 1].is_ascii_alphanumeric())
-            && let Some(end) = find_closing(rest, 1, "_")
+            && let Some(end) = memo.close(rest, 1, "_")
         {
             let after = rest.as_bytes().get(end + 1);
             if after.is_none_or(|a| !a.is_ascii_alphanumeric()) {
@@ -311,7 +349,8 @@ pub fn parse_inline(src: &str) -> Vec<Inline> {
         }
         // Masked links.
         if c == b'['
-            && let Some((node, len)) = masked_link(rest)
+            && let Some(close) = memo.close(rest, 1, "]")
+            && let Some((node, len)) = masked_link(rest, close, depth)
         {
             push!(node);
             i += len;
@@ -349,7 +388,10 @@ fn find_closing(s: &str, from: usize, delim: &str) -> Option<usize> {
     let mut j = from;
     while j < b.len() {
         if b[j] == b'\\' {
-            j += 2;
+            // Skip the backslash and the whole (possibly multi-byte) char
+            // after it.
+            j += 1;
+            j += s[j..].chars().next().map_or(0, char::len_utf8);
             continue;
         }
         if b[j] == b'`'
@@ -389,7 +431,11 @@ fn parse_snowflake(s: &str) -> Option<Snowflake> {
 
 /// `<...>` constructs. Returns the node and the consumed length.
 fn angle(s: &str) -> Option<(Inline, usize)> {
-    let end = s.find('>')?;
+    // Mentions, emoji and timestamps are short; `<url>` is bounded too.
+    const MAX_ANGLE: usize = 2048;
+    let window = &s.as_bytes()[..s.len().min(MAX_ANGLE)];
+    // `>` is ASCII, so its byte index is always a char boundary.
+    let end = window.iter().position(|b| *b == b'>')?;
     let inner = &s[1..end];
     let len = end + 1;
     if let Some(r) = inner.strip_prefix("@&") {
@@ -447,8 +493,7 @@ fn angle(s: &str) -> Option<(Inline, usize)> {
     None
 }
 
-fn masked_link(s: &str) -> Option<(Inline, usize)> {
-    let close = find_closing(s, 1, "]")?;
+fn masked_link(s: &str, close: usize, depth: usize) -> Option<(Inline, usize)> {
     let rest = &s[close + 1..];
     let after = rest.strip_prefix('(')?;
     let end = after.find(')')?;
@@ -461,7 +506,7 @@ fn masked_link(s: &str) -> Option<(Inline, usize)> {
     Some((
         Inline::Link {
             url: url.to_owned(),
-            label: parse_inline(label),
+            label: parse_inline_depth(label, depth + 1),
         },
         close + 1 + 1 + end + 1,
     ))
@@ -802,6 +847,114 @@ mod tests {
         assert_eq!(to_plain(&b, &|_| None), "hi [spoiler] :a:");
         assert!(is_emoji_only(&parse("<:a:1> <:b:2>")));
         assert!(!is_emoji_only(&parse("text <:a:1>")));
+    }
+
+    /// Regression: a backslash before a multi-byte char used to step into
+    /// the middle of it and panic on slicing.
+    #[test]
+    fn escape_before_multibyte_char() {
+        assert_eq!(parse_inline("**a\\éb**"), vec![Bold(vec![t("a\\éb")])]);
+        let _ = parse("**a\\éb**");
+        let _ = parse("*x\\🦀*");
+        let _ = parse("||\\é||");
+        let _ = parse("[a\\é](https://x.y)");
+        let _ = parse("__\\ß__ ~~\\€~~ _\\é_");
+        assert_eq!(parse_inline("\\é"), vec![t("\\é")]);
+    }
+
+    /// Deterministic fuzz: random mixes of markup characters, escapes and
+    /// multi-byte characters must never panic and must keep all text.
+    #[test]
+    fn fuzz_mixed_markup_and_multibyte() {
+        const ALPHABET: &[&str] = &[
+            "*",
+            "**",
+            "_",
+            "__",
+            "~",
+            "~~",
+            "|",
+            "||",
+            "`",
+            "```",
+            "\\",
+            "<",
+            ">",
+            "@",
+            "#",
+            "&",
+            ":",
+            "[",
+            "]",
+            "(",
+            ")",
+            "!",
+            "a",
+            "1",
+            " ",
+            "\n",
+            "> ",
+            ">>> ",
+            "# ",
+            "-# ",
+            "- ",
+            "é",
+            "ß",
+            "€",
+            "🦀",
+            "日本",
+            "<@1>",
+            "<:e:2>",
+            "<t:3:R>",
+            "https://x.y/",
+            "<https://a.b>",
+            "[l](https://c.d)",
+            "\u{200b}",
+            "\u{301}",
+        ];
+        let mut seed: u64 = 0x5eed_1234_abcd_ef01;
+        let mut next = || {
+            // xorshift64*
+            seed ^= seed >> 12;
+            seed ^= seed << 25;
+            seed ^= seed >> 27;
+            seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        for _ in 0..5_000 {
+            let len = (next() % 40) as usize;
+            let s: String = (0..len)
+                .map(|_| ALPHABET[(next() % ALPHABET.len() as u64) as usize])
+                .collect();
+            let blocks = parse(&s);
+            let _ = to_plain(&blocks, &|_| None);
+            let _ = parse_inline(&s);
+        }
+    }
+
+    /// Pathological input must stay fast (no quadratic rescans, no deep
+    /// recursion).
+    #[test]
+    fn pathological_input_is_bounded() {
+        let start = std::time::Instant::now();
+        for s in [
+            "[".repeat(4000),
+            "**".repeat(2000),
+            "<".repeat(4000),
+            "||".repeat(2000),
+            "_".repeat(4000),
+            "*a".repeat(2000),
+            "\\".repeat(4000),
+            "`".repeat(4000),
+            format!("{}x{}", "**".repeat(500), "**".repeat(500)),
+            format!("{}x{}", "<".repeat(3000), ">"),
+        ] {
+            let _ = parse(&s);
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
