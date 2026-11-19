@@ -1,0 +1,193 @@
+# Protocol
+
+Ferrocord talks to Discord the way a browser session of the official client
+does: a user-account **Gateway** WebSocket for real-time events, the **REST
+API** for history and actions, and the **remote-auth gateway** for QR login.
+There is no official SDK for user accounts; everything below is implemented in
+`src/net/` on top of `tokio-tungstenite` and `reqwest`.
+
+> Third-party clients break Discord's Terms of Service. See the README warning.
+
+## 1. Library choice
+
+| Need | Choice | Why |
+|---|---|---|
+| WebSocket | `tokio-tungstenite` (native-tls) | Mandated by the brief; mature, tokio-native. |
+| HTTP | `reqwest` (native-tls, JSON) | Mandated by the brief; connection pooling, timeouts. |
+| zlib-stream | `flate2` | One shared inflate context per connection. |
+| QR login crypto | `rsa` (OAEP/SHA-256), `sha2`, `base64` | Required by the remote-auth handshake. |
+| QR rendering | `qrcode` | Module matrix → RGBA image in the login view. |
+
+Bot libraries (serenity, twilight) were not used: they target bot accounts,
+intents and sharding, and do not model user-account READY payloads, read
+states or remote auth.
+
+## 2. Gateway (`net/gateway.rs`)
+
+* URL: `wss://gateway.discord.gg/?v=10&encoding=json&compress=zlib-stream`
+  (`FERROCORD_GATEWAY_URL` overrides the host; `FERROCORD_ZLIB=0` disables
+  compression).
+* Architecture: a pure state machine `Session` (`on_payload`, `heartbeat`,
+  `connect_url`) returns `Action`s; the async runner owns the socket, timers
+  and reconnect loop. The stream returned by `gateway::spawn` *is* the
+  connection: dropping it (logout, quit) closes the socket with code 1000.
+
+### Opcodes handled
+
+| Op | Name | Direction | Handling |
+|---|---|---|---|
+| 0 | DISPATCH | ← | Tracks `s`; parsed by `types::parse_dispatch`. |
+| 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
+| 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`), presence. |
+| 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
+| 7 | RECONNECT | ← | Close with 4000 and resume. |
+| 9 | INVALID_SESSION | ← | `d = true` → resume; `false` → reset session, wait 1–5 s, identify. |
+| 10 | HELLO | ← | Start heartbeating (first beat after `interval × random[0,1)`), then IDENTIFY or RESUME. |
+| 11 | HEARTBEAT_ACK | ← | Clears the pending flag, measures latency. |
+
+### Heartbeat, zombies, reconnect
+
+* If a heartbeat is due while the previous one was never acknowledged the
+  connection is a zombie: close with a non-1000 code and resume.
+* Reconnect delay: first retry after a healthy session within 0.1–1 s,
+  then exponential backoff `1 s · 2^(n-1)`, capped at 60 s, with jitter
+  factor `[0.5, 1)` (`gateway::backoff`). A successful READY/RESUMED resets
+  the attempt counter. The UI shows `Reconnecting { attempt, delay_ms }`.
+* Close codes: 4004 → `AuthFailed` (session cleared, back to login);
+  4010–4014 → fatal; 4007/4009 → new session; everything else → resume if a
+  session exists.
+
+### zlib-stream (`net/zlib.rs`)
+
+Binary frames are fragments of a single zlib stream. They are buffered until
+the `00 00 ff ff` suffix, then inflated with `FlushDecompress::Sync` on the
+shared `Decompress` context. The buffer is capped at 64 MiB.
+
+### Dispatch events consumed
+
+`READY`, `READY_SUPPLEMENTAL`, `RESUMED`, `MESSAGE_CREATE`, `MESSAGE_UPDATE`
+(partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
+`MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
+`GUILD_CREATE/UPDATE/DELETE`. Unknown events are ignored; a malformed known
+event is logged (without its payload) and the connection stays up.
+
+### User-account READY quirks
+
+The parser (`WireReady::into_domain`) accepts both layouts that the
+capability flags produce:
+
+* guild name/icon either top-level or under `properties`;
+* `users` (deduplicated) plus inline `recipients`, and `recipient_ids`;
+* `read_state` as a plain array or `{ entries, partial, version }`;
+  only `read_state_type == 0` (channels) is used; `last_message_id: 0` means
+  never read;
+* `user_guild_settings` (muted guilds / channel overrides) and
+  `user_settings.guild_folders` / `guild_positions` for the rail order;
+* `merged_members[i]` aligned with `guilds[i]` for the current user's roles
+  (role mentions, author colours). `READY_SUPPLEMENTAL` adds other members.
+* Unavailable guilds are skipped until their `GUILD_CREATE`.
+
+Message timestamps come from the snowflake id (`id >> 22` + Discord epoch),
+so no ISO-8601 parsing is needed on the hot path.
+
+## 3. REST (`net/rest.rs`, `net/ratelimit.rs`)
+
+Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
+`Authorization: <token>` (user tokens have no `Bot ` prefix) and an honest
+`User-Agent: Ferrocord/<version>`.
+
+| Call | Endpoint |
+|---|---|
+| Validate token | `GET /users/@me` |
+| History | `GET /channels/{id}/messages?limit=50[&before=]` |
+| Send | `POST /channels/{id}/messages` `{ content, nonce, tts }` |
+| Typing | `POST /channels/{id}/typing` (at most every 8 s while typing) |
+| Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
+| QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
+| Media | CDN `avatars/`, `icons/`, `emojis/`, attachment `proxy_url?width=&height=` |
+
+### Rate limits
+
+* Route key = method + path with major parameters (`channels/`, `guilds/`,
+  `webhooks/` ids) kept and other ids replaced by `:id`
+  (`ratelimit::route_key`).
+* `X-RateLimit-Bucket` maps a route to a bucket; bucket state is
+  `remaining` + reset instant (`X-RateLimit-Reset-After`), keyed by
+  `hash:major`. A request with `remaining == 0` waits until the reset.
+* 429: wait `retry_after` from the JSON body (falling back to the
+  `Retry-After` header), global if `X-RateLimit-Global` or `global: true`;
+  retry up to 3 times.
+* The limiter takes the clock as a parameter and is unit-tested; the mock
+  REST tests check real waiting behaviour.
+
+### Optimistic sending
+
+The composer creates a pending message with a snowflake `nonce`; the
+`MESSAGE_CREATE` echo (or the REST response) with the same nonce replaces
+it. Failures turn it red with "Message could not be delivered.".
+
+## 4. QR login / remote auth (`net/remote_auth.rs`)
+
+`wss://remote-auth-gateway.discord.gg/?v=2` with `Origin: https://discord.com`.
+
+1. ← `hello { heartbeat_interval, timeout_ms }`
+2. → `init { encoded_public_key }` — fresh RSA-2048 key, SPKI DER, base64
+3. ← `nonce_proof { encrypted_nonce }` (RSA-OAEP, SHA-256)
+4. → `nonce_proof { proof }` = base64url-no-pad(SHA-256(nonce))
+5. ← `pending_remote_init { fingerprint }` → QR of `https://discord.com/ra/<fingerprint>`
+6. ← `pending_ticket { encrypted_user_payload }` → `id:discriminator:avatar:username`
+7. ← `pending_login { ticket }` → REST ticket exchange → `encrypted_token` → decrypt
+8. ← `cancel` when declined on the phone; the socket closes at `timeout_ms`.
+
+Client heartbeats are `{ "op": "heartbeat" }`. The protocol is implemented
+and tested end to end against a local mock (`tests/mock_remote_auth.rs`);
+it has **not** been verified against the real service (no account here),
+and Discord may require a captcha for the ticket exchange in some regions.
+
+## 5. Read states, unread and mentions (`app/state.rs`)
+
+* A channel is unread when `channel.last_message_id > read_state.last_read`
+  (or it has messages and no read state).
+* `mention_count` comes from READY and is incremented locally for messages
+  that mention the user, their roles, `@everyone`/`@here`, or any DM message
+  from someone else. `MESSAGE_ACK` from other sessions updates both.
+* Opening a channel (or receiving a message while it is open and the window
+  focused) marks it read locally and ACKs it over REST.
+* Muted guilds/channels do not show the unread pill, but mention badges
+  still count — like the official client.
+* Desktop notifications (`notify-rust`, D-Bus) fire for mentions and DMs
+  unless the conversation is open and focused. `FERROCORD_NOTIFY_PREVIEW=0`
+  shows "New message" instead of the text.
+
+## 6. Local cache (`store/`)
+
+SQLite (`cache.sqlite3`, WAL). Tables: `meta` (selected guild/channel,
+`me`), `users`, `guilds`, `channels`, `messages` (≤ 1000 per channel),
+`read_states`. Domain objects are stored as JSON next to indexed ids.
+Pending/failed local messages and credentials are never written. The
+database is plain text (not encrypted); the data directory is `0700` and the
+database, `-wal`/`-shm` and log files are `0600`.
+
+## 7. UI reference
+
+Measurements of the official dark theme reproduced in `ui/theme.rs`:
+
+| Element | Value |
+|---|---|
+| Server rail | 72 px wide, `#1e1f22`, icons 48 px, 8 px gap, circle → 16 px radius on hover/selection |
+| Rail pill | 4 px wide white; 8 px tall unread, 40 px selected |
+| Channel sidebar | 240 px, `#2b2d31`; header 48 px with drop shadow |
+| Category | 12 px semibold uppercase `#949ba4`, chevron |
+| Channel row | 32 px tall, radius 4, name 16 px medium; muted `#80848e`, unread white semibold, selected `rgba(78,80,88,.6)` |
+| Mention badge | `#f23f43`, 16 px tall, 12 px bold white |
+| Main pane | `#313338`; header 48 px, 16 px semibold title, topic `#b5bac1` |
+| Message group | avatar 40 px at 16 px inset, name 16 px medium (role colour), timestamp 12 px `#949ba4`, 16 px top gap, grouped within 7 min |
+| Mention row | background `rgba(240,177,50,.08)`, 2 px `#f0b132` left bar |
+| Mention chip | `rgba(88,101,242,.3)` / `#c9cdfb` |
+| Embed | `#2b2d31`, 4 px colour bar, max 520 px, 16 px padding |
+| Composer | `#383a40`, radius 8, 44 px; typing indicator 24 px below |
+| User panel | 52 px, `#232428` |
+| Accent | `#5865f2`, links `#00a8fc` |
+
+Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
+(ISC). No Discord logos, fonts or artwork are used.
