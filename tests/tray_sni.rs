@@ -53,6 +53,8 @@ async fn next(stream: &mut (impl futures::Stream<Item = Event> + Unpin)) -> Even
         .expect("tray stream open")
 }
 
+type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
+type ToolTip = (String, Pixmaps, String, String);
 type Layout = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
 
 fn label(props: &HashMap<String, OwnedValue>) -> Option<String> {
@@ -118,7 +120,7 @@ async fn tray_registers_updates_and_reports_clicks() {
     assert_eq!(category, "Communications");
     let status: String = item.get_property("Status").await.unwrap();
     assert_eq!(status, "Active");
-    let pixmaps: Vec<(i32, i32, Vec<u8>)> = item.get_property("IconPixmap").await.unwrap();
+    let pixmaps: Pixmaps = item.get_property("IconPixmap").await.unwrap();
     assert_eq!(pixmaps.len(), 3);
     assert_eq!(
         pixmaps[0].2.len(),
@@ -141,15 +143,13 @@ async fn tray_registers_updates_and_reports_clicks() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(attention, "status becomes NeedsAttention");
-    let attention_icons: Vec<(i32, i32, Vec<u8>)> =
-        item.get_property("AttentionIconPixmap").await.unwrap();
+    let attention_icons: Pixmaps = item.get_property("AttentionIconPixmap").await.unwrap();
     assert_eq!(attention_icons.len(), 3);
     assert_ne!(
         attention_icons[2].2, pixmaps[2].2,
         "badge differs from icon"
     );
-    let tip: (String, Vec<(i32, i32, Vec<u8>)>, String, String) =
-        item.get_property("ToolTip").await.unwrap();
+    let tip: ToolTip = item.get_property("ToolTip").await.unwrap();
     assert!(tip.2.contains("3 unread mentions"), "tooltip: {}", tip.2);
 
     // Reading everything returns to the normal state.
