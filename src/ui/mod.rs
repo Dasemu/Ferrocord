@@ -493,11 +493,6 @@ mod tests {
         assert_eq!(human_size(500), "500 bytes");
         assert_eq!(human_size(1_532_211), "1.46 MB");
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     fn est(s: &str, size: f32, semibold: bool) -> f32 {
         s.chars().map(glyph_em).sum::<f32>() * size * if semibold { 1.06 } else { 1.0 }
