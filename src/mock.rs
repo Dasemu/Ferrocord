@@ -146,6 +146,7 @@ fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
         name: name.into(),
         color,
         position,
+        permissions: 0,
     }
 }
 
@@ -299,6 +300,8 @@ pub fn ready() -> ReadyData {
         ],
         my_status: Some(Presence::Online),
         premium_type: 0,
+        guild_folders: vec![],
+        channel_notify: vec![],
     }
 }
 
@@ -830,40 +833,158 @@ pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     (w, h, px)
 }
 
-/// Mock inbox: every loaded message that mentions the current user, newest
-/// first.
-pub fn recent_mentions(chat: &crate::app::state::ChatState) -> Vec<Message> {
-    let mut out: Vec<Message> = chat
-        .messages
-        .values()
-        .flat_map(|w| w.messages.iter())
-        .filter(|m| chat.mentions_me(m))
-        .cloned()
-        .collect();
-    out.sort_by_key(|m| std::cmp::Reverse(m.id));
-    // Mock channels share their sample history; list each text once.
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|m| seen.insert(m.content.clone()));
-    out
+/// (id, name, description, category, members, online, verified, partnered)
+type DiscoverRow = (u64, &'static str, &'static str, u32, u32, u32, bool, bool);
+
+// -- add a server / discover (mock mode) ----------------------------------------------
+
+/// Preview for an invite code in mock mode: any code but `invalid` works.
+pub fn invite_preview(code: &str) -> Option<crate::net::extras::InvitePreview> {
+    if code.eq_ignore_ascii_case("invalid") {
+        return None;
+    }
+    Some(crate::net::extras::InvitePreview {
+        code: code.into(),
+        guild_id: Snowflake(910_001),
+        name: "Rustaceans".into(),
+        icon: None,
+        description: Some("Crabs, compilers and friendly help.".into()),
+        members: Some(48_213),
+        online: Some(9_870),
+        inviter: Some("Ferris".into()),
+        channel: Some("welcome".into()),
+        verified: true,
+        partnered: false,
+    })
 }
 
-/// Mock pins of `channel`: its two oldest loaded text messages, most
-/// recently pinned (newest) first.
-pub fn pinned(chat: &crate::app::state::ChatState, channel: ChannelId) -> Vec<Message> {
-    let mut out: Vec<Message> = chat
-        .messages
-        .get(&channel)
-        .map(|w| {
-            w.messages
-                .iter()
-                .filter(|m| !m.content.is_empty())
-                .take(2)
-                .cloned()
-                .collect()
+pub fn discover_categories() -> Vec<crate::net::extras::DiscoverCategory> {
+    [
+        (0, "Home"),
+        (1, "Gaming"),
+        (2, "Music"),
+        (3, "Education"),
+        (5, "Science & Tech"),
+        (6, "Content Creator"),
+        (4, "Entertainment"),
+    ]
+    .into_iter()
+    .map(|(id, name)| crate::net::extras::DiscoverCategory {
+        id,
+        name: name.into(),
+    })
+    .collect()
+}
+
+pub fn discover_page(query: &str, category: Option<u32>) -> crate::net::extras::DiscoverPage {
+    use crate::net::extras::{DiscoverGuild, DiscoverPage};
+    let all: [DiscoverRow; 8] = [
+        (
+            910_101,
+            "Rust Community",
+            "Everything Rust: help, crates, jobs and the occasional crab pun.",
+            5,
+            48_213,
+            9_870,
+            true,
+            true,
+        ),
+        (
+            910_102,
+            "Iced Users",
+            "Building native GUIs with iced. Show off your widgets.",
+            5,
+            2_410,
+            388,
+            false,
+            false,
+        ),
+        (
+            910_103,
+            "Linux Desktop",
+            "KDE, GNOME, tiling window managers and dotfiles.",
+            5,
+            31_020,
+            5_212,
+            true,
+            false,
+        ),
+        (
+            910_104,
+            "Study Together",
+            "Quiet focus rooms and weekly accountability sessions.",
+            3,
+            12_300,
+            1_940,
+            false,
+            false,
+        ),
+        (
+            910_105,
+            "Lo-fi Lounge",
+            "Chill beats to code to. Share what you are listening to.",
+            2,
+            8_870,
+            1_103,
+            false,
+            true,
+        ),
+        (
+            910_106,
+            "Board Game Night",
+            "Weekly sessions of Catan, Wingspan and more.",
+            1,
+            5_432,
+            702,
+            false,
+            false,
+        ),
+        (
+            910_107,
+            "Open Source Café",
+            "Maintainers and contributors swapping stories.",
+            5,
+            3_980,
+            611,
+            false,
+            false,
+        ),
+        (
+            910_108,
+            "Pixel Artists",
+            "Share sprites, get feedback, join jams.",
+            6,
+            14_760,
+            2_233,
+            true,
+            false,
+        ),
+    ];
+    let q = query.trim().to_lowercase();
+    let guilds: Vec<DiscoverGuild> = all
+        .into_iter()
+        .filter(|g| category.is_none_or(|c| c == 0 || g.3 == c))
+        .filter(|g| {
+            q.is_empty() || g.1.to_lowercase().contains(&q) || g.2.to_lowercase().contains(&q)
         })
-        .unwrap_or_default();
-    out.reverse();
-    out
+        .map(
+            |(id, name, desc, _, members, online, verified, partnered)| DiscoverGuild {
+                id: Snowflake(id),
+                name: name.into(),
+                description: Some(desc.into()),
+                icon: None,
+                splash: None,
+                members: Some(members),
+                online: Some(online),
+                verified,
+                partnered,
+            },
+        )
+        .collect();
+    DiscoverPage {
+        total: Some(guilds.len() as u32),
+        guilds,
+    }
 }
 
 #[cfg(test)]

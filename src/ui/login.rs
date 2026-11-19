@@ -1,7 +1,7 @@
 //! Login screen: token login on the left, QR login on the right, on a
 //! blurple backdrop (original artwork-free recreation).
 
-use iced::widget::image::{FilterMethod, Handle};
+use iced::widget::image::FilterMethod;
 use iced::widget::{Space, button, column, container, row, rule, text, text_input};
 use iced::{Alignment, Background, Border, Color, Gradient, Length, Padding, Radians, gradient};
 
@@ -146,7 +146,7 @@ fn qr_panel(app: &App) -> El<'_> {
     let p = app.theme.palette;
     let (code, title, sub): (El<'_>, &str, String) = match &app.qr {
         Some(QrState::Ready { size, modules, .. }) => (
-            qr_image(*size, modules),
+            qr_image(app, *size, modules),
             "Log in with QR Code",
             "Scan this with the Discord mobile app to log in instantly.".into(),
         ),
@@ -197,15 +197,20 @@ fn qr_panel(app: &App) -> El<'_> {
     .into()
 }
 
-fn qr_image<'a>(size: usize, modules: &[bool]) -> El<'a> {
-    let mut px = Vec::with_capacity(size * size * 4);
-    for m in modules {
-        let v = if *m { 0u8 } else { 255u8 };
-        px.extend_from_slice(&[v, v, v, 255]);
-    }
-    iced::widget::image(Handle::from_rgba(size as u32, size as u32, px))
+fn qr_image<'a>(app: &App, size: usize, modules: &[bool]) -> El<'a> {
+    iced::widget::image(app.qr_handle(size, modules))
         .width(160)
         .height(160)
         .filter_method(FilterMethod::Nearest)
         .into()
+}
+
+/// RGBA pixels of a QR matrix (black modules on white).
+pub fn qr_pixels(modules: &[bool]) -> Vec<u8> {
+    let mut px = Vec::with_capacity(modules.len() * 4);
+    for m in modules {
+        let v = if *m { 0u8 } else { 255u8 };
+        px.extend_from_slice(&[v, v, v, 255]);
+    }
+    px
 }

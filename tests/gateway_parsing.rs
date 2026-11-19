@@ -2,8 +2,10 @@
 
 use ferrocord::app::state::{ChatState, Ctx, Effect};
 use ferrocord::net::Event;
+use ferrocord::net::extras::NotifyLevel;
 use ferrocord::net::model::*;
 use ferrocord::net::types::parse_dispatch;
+use serde_json::json;
 
 fn fixture(name: &str) -> serde_json::Value {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -103,6 +105,23 @@ fn ready_read_states_settings_and_roles() {
     assert_eq!(r.suppress_everyone, vec![sf("2000000000000000002")]);
     assert!(r.suppress_roles.is_empty());
     assert_eq!(r.muted_channels, vec![sf("4000000000000000003")]);
+    // Overrides with a level are kept even when not muted; defaults are not.
+    let mentions_only = r
+        .channel_notify
+        .iter()
+        .find(|(c, _)| *c == sf("4000000000000000002"))
+        .unwrap()
+        .1;
+    assert_eq!(mentions_only.level, NotifyLevel::Mentions);
+    assert!(!mentions_only.muted);
+    assert_eq!(r.channel_notify.len(), 2);
+    // Folders keep id, name and colour; a null id is a single server.
+    assert_eq!(r.guild_folders.len(), 2);
+    assert_eq!(r.guild_folders[0].id, None);
+    assert_eq!(r.guild_folders[1].id, Some(12345));
+    assert_eq!(r.guild_folders[1].name.as_deref(), Some("Dev"));
+    assert_eq!(r.guild_folders[1].color, Some(5_793_266));
+    assert_eq!(r.guild_folders[1].guild_ids.len(), 2);
     assert_eq!(
         r.guild_order,
         vec![
@@ -567,6 +586,47 @@ fn malformed_new_events_do_not_panic() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn user_settings_update_carries_folders() {
+    let ev = ferrocord::net::types::parse_dispatch(
+        "USER_SETTINGS_UPDATE",
+        json!({"guild_folders": [{"id": 7, "name": "Work", "color": null, "guild_ids": ["1", "2"]}]}),
+    )
+    .unwrap()
+    .unwrap();
+    let Event::GuildFolders(f) = ev else {
+        panic!("wrong event")
+    };
+    assert_eq!(f[0].id, Some(7));
+    assert_eq!(f[0].color, None);
+    // Status-only updates are not folder updates.
+    assert!(
+        ferrocord::net::types::parse_dispatch("USER_SETTINGS_UPDATE", json!({"status": "dnd"}))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn user_guild_settings_update_carries_channel_overrides() {
+    let ev = ferrocord::net::types::parse_dispatch(
+        "USER_GUILD_SETTINGS_UPDATE",
+        json!({"guild_id": "9", "channel_overrides": [
+            {"channel_id": "5", "muted": true, "message_notifications": 2,
+             "mute_config": {"selected_time_window": 900, "end_time": "2099-01-01T00:00:00Z"}}
+        ]}),
+    )
+    .unwrap()
+    .unwrap();
+    let Event::NotifySettings { guild, channels } = ev else {
+        panic!("wrong event")
+    };
+    assert_eq!(guild, Some(sf("9")));
+    assert_eq!(channels[0].1.level, NotifyLevel::Nothing);
+    assert!(channels[0].1.is_muted(0));
+    assert!(channels[0].1.mute_end_ms.is_some());
 }
 
 #[test]

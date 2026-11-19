@@ -12,7 +12,6 @@ use iced::{Point, Task};
 
 use super::emoji::{EmojiPicker, PickerTarget};
 use super::members::MemberListState;
-use super::panel::PanelKind;
 use super::state::ReactionChange;
 use super::upload::{self, ActiveUpload, Clipboard, UploadEvent};
 use super::{App, Done, Message, PAGE, Ui, View, input, now_ms};
@@ -79,7 +78,7 @@ fn focus(id: iced::widget::Id) -> Task<Message> {
 
 impl App {
     /// Whether a channel the user can act in is open.
-    fn open_chan(&self) -> Option<ChannelId> {
+    pub(super) fn open_chan(&self) -> Option<ChannelId> {
         self.open_channel()
             .filter(|c| self.chat.channels.contains_key(c))
     }
@@ -417,14 +416,9 @@ impl App {
                 self.search.close();
                 self.sync_members()
             }
-            Ui::TogglePins => match self.open_chan() {
-                Some(c) => self.toggle_panel(PanelKind::Pins(c)),
-                None => Task::none(),
-            },
-            Ui::ToggleInbox => self.toggle_panel(PanelKind::Inbox),
             Ui::OpenChannel(c) => self.open_from_notification(c),
             // Handled in `mod.rs`.
-            _ => Task::none(),
+            other => self.update_extras(other),
         }
     }
 
@@ -572,6 +566,15 @@ impl App {
             || self.gif_picker.take().is_some()
             || self.sticker_picker.take().is_some()
             || self.menu.take().is_some()
+        {
+            return Task::none();
+        }
+        if self.rail.menu.take().is_some() || self.panels.open.take().is_some() {
+            return Task::none();
+        }
+        if self.rail.folder_dialog.take().is_some()
+            || self.server_dialog.take().is_some()
+            || self.discover.take().is_some()
         {
             return Task::none();
         }
@@ -907,15 +910,22 @@ impl App {
         let Some((generation, scope, query, offset)) = self.search.begin(scope, offset) else {
             return Task::none();
         };
-        self.panel.close();
+        // `from:name`, `has:image`, `in:#channel` become API filters.
+        let parsed = match self.parse_search(&query) {
+            Ok(q) => q,
+            Err(e) => {
+                self.search.finish(generation, Err(e));
+                return Task::none();
+            }
+        };
         if self.cfg.mock {
-            let page = mock_search(&self.chat, scope, &query, offset);
+            let page = mock_search(&self.chat, scope, &parsed, offset);
             self.search.finish(generation, Ok(page));
             return Task::none();
         }
         let rest = self.rest.clone();
         Task::perform(
-            async move { rest.search(scope, &query, offset).await },
+            async move { rest.search_query(scope, &parsed, offset).await },
             move |r| {
                 Message::Done(Done::Search {
                     generation,
@@ -942,67 +952,14 @@ impl App {
         self.request_search_images()
     }
 
-    // -- pins and inbox panel --------------------------------------------------------
-
-    /// Opens the message panel on `kind`, or closes it if it already shows
-    /// that. It takes the search panel's place.
-    fn toggle_panel(&mut self, kind: PanelKind) -> Task<Message> {
-        if self.panel.is_open(kind) {
-            self.panel.close();
-            return Task::none();
-        }
-        if self.search.panel_visible() {
-            self.search.close();
-        }
-        let generation = self.panel.open(kind);
-        if self.cfg.mock {
-            let msgs = match kind {
-                PanelKind::Pins(c) => crate::mock::pinned(&self.chat, c),
-                PanelKind::Inbox => crate::mock::recent_mentions(&self.chat),
-            };
-            self.panel.finish(generation, Ok(msgs));
-            return Task::none();
-        }
-        let rest = self.rest.clone();
-        Task::perform(
-            async move {
-                match kind {
-                    PanelKind::Pins(c) => rest.pins(c).await,
-                    PanelKind::Inbox => rest.recent_mentions().await,
-                }
-            },
-            move |r| {
-                Message::Done(Done::Panel {
-                    generation,
-                    result: r.map_err(|e| e.user_message()),
-                })
-            },
-        )
-    }
-
-    pub(super) fn on_panel_done(
-        &mut self,
-        generation: u64,
-        result: Result<Vec<Msg>, String>,
-    ) -> Task<Message> {
-        if let Ok(ms) = &result {
-            for m in ms {
-                self.chat
-                    .users
-                    .entry(m.author.id)
-                    .or_insert_with(|| m.author.clone());
-            }
-        }
-        self.panel.finish(generation, result);
-        self.request_images()
-    }
-
     /// Avatars for the search results.
     fn request_search_images(&mut self) -> Task<Message> {
         self.request_images()
     }
 
     pub(super) fn jump_to(&mut self, channel: ChannelId, message: MessageId) -> Task<Message> {
+        // Popovers (pins, inbox) and the Discover page close on a jump.
+        self.panels.open = None;
         let mut tasks = Vec::new();
         if self.open_channel() != Some(channel) {
             tasks.push(self.update_ui(Ui::SelectChannel(channel)));
@@ -1308,10 +1265,10 @@ fn mock_upload_stream(
 pub(super) fn mock_search(
     chat: &super::state::ChatState,
     scope: SearchScope,
-    query: &str,
+    query: &crate::net::extras::SearchQuery,
     offset: u32,
 ) -> SearchPage {
-    let q = query.to_lowercase();
+    let q = query.content.to_lowercase();
     let mut hits: Vec<Msg> = chat
         .messages
         .iter()
@@ -1321,6 +1278,17 @@ pub(super) fn mock_search(
         })
         .flat_map(|(_, w)| w.messages.iter())
         .filter(|m| !m.pending && m.content.to_lowercase().contains(&q))
+        .filter(|m| query.authors.is_empty() || query.authors.contains(&m.author.id))
+        .filter(|m| query.channels.is_empty() || query.channels.contains(&m.channel_id))
+        .filter(|m| {
+            query.has.iter().all(|h| match *h {
+                "image" => m.attachments.iter().any(|a| a.is_image()),
+                "file" | "video" | "sound" => !m.attachments.is_empty(),
+                "link" => m.content.contains("http://") || m.content.contains("https://"),
+                "embed" => !m.embeds.is_empty(),
+                _ => false,
+            })
+        })
         .cloned()
         .collect();
     hits.sort_by_key(|m| std::cmp::Reverse(m.id));

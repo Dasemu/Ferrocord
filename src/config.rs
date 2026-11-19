@@ -30,11 +30,42 @@ pub enum ScreenshotScreen {
     Search,
     Compose,
     Settings,
+    /// Long display name and status in the user panel.
+    Panel,
+    /// Right-click menu on a message.
+    Menu,
+    Bell,
     Pins,
     Inbox,
+    AddServer,
+    CreateServer,
+    JoinServer,
+    Discover,
+    Folders,
+    FolderMenu,
+    FolderSettings,
+    SearchFilters,
 }
 
 impl ScreenshotScreen {
+    /// Screens added with the header popovers, server dialogs and folders.
+    pub fn is_round3(self) -> bool {
+        matches!(
+            self,
+            Self::Bell
+                | Self::Pins
+                | Self::Inbox
+                | Self::AddServer
+                | Self::CreateServer
+                | Self::JoinServer
+                | Self::Discover
+                | Self::Folders
+                | Self::FolderMenu
+                | Self::FolderSettings
+                | Self::SearchFilters
+        )
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "login" => Some(Self::Login),
@@ -44,8 +75,19 @@ impl ScreenshotScreen {
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
+            "panel" | "userpanel" => Some(Self::Panel),
+            "menu" | "context-menu" => Some(Self::Menu),
+            "bell" | "notifications" => Some(Self::Bell),
             "pins" => Some(Self::Pins),
             "inbox" => Some(Self::Inbox),
+            "add-server" => Some(Self::AddServer),
+            "create-server" => Some(Self::CreateServer),
+            "join-server" => Some(Self::JoinServer),
+            "discover" => Some(Self::Discover),
+            "folders" => Some(Self::Folders),
+            "folder-menu" => Some(Self::FolderMenu),
+            "folder-settings" => Some(Self::FolderSettings),
+            "search-filters" => Some(Self::SearchFilters),
             _ => None,
         }
     }
@@ -140,7 +182,7 @@ impl Config {
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings|pins|inbox> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }

@@ -194,6 +194,9 @@ pub struct Role {
     /// RGB colour, 0 = no colour.
     pub color: u32,
     pub position: i32,
+    /// Permission bits (server-wide; channel overwrites are not applied).
+    #[serde(default)]
+    pub permissions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -642,6 +645,28 @@ pub struct ReadState {
     pub mention_count: u32,
 }
 
+/// One entry of the user's server list: a folder, or (with `id == None`) a
+/// single ungrouped server.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GuildFolder {
+    pub id: Option<u64>,
+    pub name: Option<String>,
+    /// RGB colour.
+    pub color: Option<u32>,
+    pub guild_ids: Vec<GuildId>,
+}
+
+impl GuildFolder {
+    pub fn single(g: GuildId) -> Self {
+        Self {
+            id: None,
+            name: None,
+            color: None,
+            guild_ids: vec![g],
+        }
+    }
+}
+
 /// Everything the client needs from READY (+ READY_SUPPLEMENTAL).
 #[derive(Debug, Clone, Default)]
 pub struct ReadyData {
@@ -668,6 +693,11 @@ pub struct ReadyData {
     pub my_status: Option<Presence>,
     /// Nitro type of the current user (0 none, 1 classic, 2 nitro, 3 basic).
     pub premium_type: u8,
+    /// Server folders from the user settings (empty when only the legacy
+    /// `guild_positions` order exists).
+    pub guild_folders: Vec<GuildFolder>,
+    /// Per-channel notification overrides (level and timed mutes).
+    pub channel_notify: Vec<(ChannelId, super::extras::ChannelNotify)>,
 }
 
 /// A member shown in the member list.

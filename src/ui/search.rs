@@ -7,7 +7,7 @@ use super::icons::{Icon, icon};
 use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, format_timestamp, ui};
 use crate::app::{App, Ui, now_ms};
-use crate::net::model::Message as Msg;
+use crate::net::model::{self as model, Message as Msg};
 
 pub const WIDTH: f32 = 420.0;
 
@@ -65,7 +65,7 @@ pub fn view(app: &App) -> El<'_> {
         );
     }
     for m in &s.results {
-        col = col.push(result_card(app, m, now, true));
+        col = col.push(result_card(app, m, now));
     }
     let pager = row![
         pager_button(app, "Previous", s.has_prev(), Ui::SearchPage(false)),
@@ -107,9 +107,7 @@ fn pager_button<'a>(app: &App, label: &'static str, enabled: bool, msg: Ui) -> E
     if enabled { b.on_press(ui(msg)) } else { b }.into()
 }
 
-/// A message as a clickable card that jumps to it; `show_place` adds the
-/// channel name above (search and the inbox span channels, pins do not).
-pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bool) -> El<'a> {
+fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64) -> El<'a> {
     let p = app.theme.palette;
     let channel = app.chat.channels.get(&m.channel_id);
     let place = match channel {
@@ -117,17 +115,12 @@ pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bo
         Some(c) => format!("#{}", c.name.as_deref().unwrap_or("channel")),
         None => "unknown channel".to_owned(),
     };
-    // Rendered like in the chat so mentions, channels and emoji show by
-    // name instead of as raw `<@id>` markup.
-    let snippet: El<'a> = if !m.content.is_empty() {
-        super::markdown::render(app, m.id, &m.content, p.text_normal, 14.0)
-    } else if !m.attachments.is_empty() {
-        text("Sent an attachment")
-            .size(14)
-            .color(p.text_muted)
-            .into()
+    let snippet =
+        model::truncate_chars(&super::plain_text(app, &m.content).replace('\n', " "), 260);
+    let snippet = if snippet.is_empty() && !m.attachments.is_empty() {
+        "Sent an attachment".to_owned()
     } else {
-        Space::new().into()
+        snippet
     };
     let body = column![
         row![
@@ -141,36 +134,32 @@ pub(super) fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64, show_place: bo
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        snippet,
+        text(snippet).size(14).color(p.text_normal),
     ]
     .spacing(2)
     .width(Length::Fill);
-    let card = button(
-        container(
-            row![avatar(app, &m.author, 32.0), body]
-                .spacing(12)
-                .align_y(Alignment::Start),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .style(theme::rounded_bg(p.bg_panel, 6.0)),
-    )
-    .padding(0)
-    .width(Length::Fill)
-    .on_press(ui(Ui::JumpTo {
-        channel: m.channel_id,
-        message: m.id,
-    }))
-    .style(theme::link_button(p));
-    if !show_place {
-        return card.into();
-    }
     column![
         text(place)
             .size(12)
             .font(INTER_SEMIBOLD)
             .color(p.text_muted),
-        card,
+        button(
+            container(
+                row![avatar(app, &m.author, 32.0), body]
+                    .spacing(12)
+                    .align_y(Alignment::Start)
+            )
+            .padding(10)
+            .width(Length::Fill)
+            .style(theme::rounded_bg(p.bg_panel, 6.0)),
+        )
+        .padding(0)
+        .width(Length::Fill)
+        .on_press(ui(Ui::JumpTo {
+            channel: m.channel_id,
+            message: m.id,
+        }))
+        .style(theme::link_button(p)),
     ]
     .spacing(4)
     .into()

@@ -5,10 +5,11 @@ pub mod icons;
 pub mod login;
 pub mod markdown;
 pub mod members;
-pub mod panel;
+pub mod popovers;
 pub mod popups;
 pub mod rail;
 pub mod search;
+pub mod servers;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
@@ -38,8 +39,6 @@ pub fn view(app: &App) -> El<'_> {
             let mut r = row![rail::view(app), sidebar::view(app), chat::view(app)];
             if app.search.panel_visible() {
                 r = r.push(search::view(app));
-            } else if let Some(kind) = app.panel.visible(app.open_channel()) {
-                r = r.push(panel::view(app, kind));
             } else if app.members_open {
                 match app.view {
                     crate::app::View::Guild {
@@ -56,27 +55,146 @@ pub fn view(app: &App) -> El<'_> {
             r.height(Length::Fill).into()
         }
     };
-    let banner = banner(app);
-    let mut content: El<'_> = match banner {
-        Some(b) => column![b, body].into(),
-        None => body,
-    };
-    if app.screen() == Screen::Main {
-        for layer in popups::layers(app) {
-            content = stack![content, layer].into();
-        }
+    // The widget tree must have the SAME shape whether or not a banner, a
+    // popup, the settings dialog or the link dialog is showing. iced diffs
+    // widget state by position and widget type: wrapping the body in a new
+    // `stack` (or a `column`) only while a popup is open makes every
+    // scrollable, hover and text-input state under it be thrown away, which
+    // jumped the message list and caused the "flicker" on right-click. Each
+    // optional layer therefore has a fixed slot that holds an empty `Space`
+    // while it is closed.
+    let banner: El<'_> = banner(app).unwrap_or_else(empty);
+    let content: El<'_> = column![banner, body].into();
+    if app.screen() != Screen::Main {
+        return container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::bg(t.palette.bg_app))
+            .into();
     }
-    if app.settings_open && app.screen() == Screen::Main {
-        content = stack![content, settings::view(app)].into();
-    }
-    if let Some(url) = &app.pending_link {
-        content = stack![content, leave_dialog(t, url)].into();
-    }
-    container(content)
+    let mut layers: Vec<El<'_>> = Vec::with_capacity(LAYER_SLOTS);
+    layers.push(content);
+    layers.push(servers::discover(app).unwrap_or_else(empty));
+    layers.extend(popups::layers(app));
+    layers.push(servers::add_server(app).unwrap_or_else(empty));
+    layers.push(servers::folder_dialog(app).unwrap_or_else(empty));
+    layers.push(if app.settings_open {
+        settings::view(app)
+    } else {
+        empty()
+    });
+    layers.push(match &app.pending_link {
+        Some(url) => leave_dialog(t, url),
+        None => empty(),
+    });
+    container(stack(layers))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::bg(t.palette.bg_app))
         .into()
+}
+
+/// Base content + discover page + popup slots + add-server dialog + folder
+/// dialog + settings + link dialog.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 4;
+
+/// Approximate advance width of `c` in Inter, in em.
+fn glyph_em(c: char) -> f32 {
+    match c {
+        'i' | 'l' | 'j' | 'I' | '.' | ',' | ':' | ';' | '\'' | '!' | '|' => 0.30,
+        ' ' | 't' | 'f' | 'r' | '(' | ')' | '[' | ']' | '-' | '/' => 0.40,
+        'm' | 'w' | 'M' | 'W' | '@' => 0.92,
+        c if c.is_ascii_uppercase() => 0.70,
+        c if c.is_ascii() => 0.57,
+        // Wide scripts and emoji.
+        _ => 1.05,
+    }
+}
+
+/// Shortens `s` with a trailing `…` so that it is estimated to fit in
+/// `max_px` at `size` (semi-bold text is a little wider). iced has no text
+/// ellipsis, so views use this inside fixed-width areas (and clip as a
+/// safety net). The estimate errs on the short side.
+pub fn ellipsize(s: &str, max_px: f32, size: f32, semibold: bool) -> String {
+    let scale = size * if semibold { 1.06 } else { 1.0 };
+    let width = |s: &str| s.chars().map(glyph_em).sum::<f32>() * scale;
+    if width(s) <= max_px {
+        return s.to_owned();
+    }
+    let ellipsis = glyph_em('\u{2026}').max(0.9) * scale;
+    let mut out = String::new();
+    let mut used = ellipsis;
+    for c in s.chars() {
+        used += glyph_em(c) * scale;
+        if used > max_px {
+            break;
+        }
+        out.push(c);
+    }
+    let out = out.trim_end().to_owned();
+    format!("{out}\u{2026}")
+}
+
+/// Message text for one-line previews (popovers, search results): mention
+/// and emoji tokens become readable names.
+pub fn plain_text(app: &App, content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let Some(end) = tail.find('>') else {
+            out.push_str(tail);
+            return out;
+        };
+        let tok = &tail[1..end];
+        let id = |s: &str| s.parse::<u64>().ok().map(crate::net::model::Snowflake);
+        let rep = if let Some(r) = tok.strip_prefix("@&") {
+            id(r).and_then(|id| {
+                app.chat
+                    .guilds
+                    .iter()
+                    .flat_map(|g| g.roles.iter())
+                    .find(|ro| ro.id == id)
+                    .map(|ro| format!("@{}", ro.name))
+            })
+        } else if let Some(r) = tok.strip_prefix("@!").or_else(|| tok.strip_prefix('@')) {
+            id(r).map(|id| format!("@{}", app.chat.user_name(id).unwrap_or("unknown-user")))
+        } else if let Some(r) = tok.strip_prefix('#') {
+            id(r).map(|id| {
+                format!(
+                    "#{}",
+                    app.chat
+                        .channels
+                        .get(&id)
+                        .and_then(|c| c.name.as_deref())
+                        .unwrap_or("deleted-channel")
+                )
+            })
+        } else {
+            let t2 = tok.strip_prefix("a:").or_else(|| tok.strip_prefix(':'));
+            t2.and_then(|r| r.split(':').next())
+                .filter(|n| !n.is_empty() && tok.matches(':').count() >= 2)
+                .map(|n| format!(":{n}:"))
+        };
+        match rep {
+            Some(r) => {
+                out.push_str(&r);
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('<');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Placeholder for a closed layer.
+pub fn empty<'a>() -> El<'a> {
+    iced::widget::Space::new().into()
 }
 
 /// "Leaving Ferrocord" confirmation for masked links: shows the real URL.
@@ -439,5 +557,57 @@ mod tests {
     fn sizes() {
         assert_eq!(human_size(500), "500 bytes");
         assert_eq!(human_size(1_532_211), "1.46 MB");
+    }
+
+    fn est(s: &str, size: f32, semibold: bool) -> f32 {
+        s.chars().map(glyph_em).sum::<f32>() * size * if semibold { 1.06 } else { 1.0 }
+    }
+
+    #[test]
+    fn plain_text_resolves_mentions_and_emoji() {
+        let a = crate::app::App::boot(crate::config::Config::for_tests()).0;
+        let s = plain_text(
+            &a,
+            "hi <@2> in <#132> <:ferris:1001> <a:x:5> <not a token> a < b",
+        );
+        assert!(s.starts_with("hi @"), "{s}");
+        assert!(!s.contains("<@2>") && !s.contains("<#132>"), "{s}");
+        assert!(s.contains(":ferris:") && s.contains(":x:"), "{s}");
+        assert!(s.contains("<not a token>") && s.ends_with("a < b"), "{s}");
+        assert_eq!(plain_text(&a, "no tokens"), "no tokens");
+        assert_eq!(plain_text(&a, "unterminated <@2"), "unterminated <@2");
+    }
+
+    #[test]
+    fn short_text_is_left_alone() {
+        assert_eq!(ellipsize("Ferris", 120.0, 14.0, true), "Ferris");
+        assert_eq!(ellipsize("", 10.0, 14.0, false), "");
+    }
+
+    #[test]
+    fn long_text_gets_an_ellipsis_and_fits() {
+        for (s, w) in [
+            ("bronze age romantic", 88.0),
+            ("Do Not Disturb", 60.0),
+            ("an extremely long display name that goes on and on", 88.0),
+            ("日本語の非常に長い表示名です", 88.0),
+        ] {
+            let out = ellipsize(s, w, 14.0, true);
+            assert!(out.ends_with('\u{2026}'), "{out}");
+            assert!(out.chars().count() < s.chars().count());
+            assert!(est(&out, 14.0, true) <= w + 1.0, "{out} too wide for {w}");
+        }
+    }
+
+    #[test]
+    fn degenerate_widths_do_not_panic() {
+        assert_eq!(ellipsize("abc", 0.0, 14.0, false), "\u{2026}");
+        assert_eq!(ellipsize("abc", -5.0, 14.0, false), "\u{2026}");
+    }
+
+    #[test]
+    fn user_panel_text_area_never_goes_negative() {
+        assert!(sidebar::panel_text_width(240.0) > 60.0);
+        assert_eq!(sidebar::panel_text_width(10.0), 0.0);
     }
 }

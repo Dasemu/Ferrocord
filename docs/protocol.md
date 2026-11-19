@@ -124,11 +124,9 @@ Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 | Status | `PATCH /users/@me/settings {status}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
-| Pins | `GET /channels/{id}/messages/pins?limit=50` (`items[].message`); on 404 the legacy `GET /channels/{id}/pins` |
-| Inbox | `GET /users/@me/mentions?limit=25&roles=true&everyone=true` |
-| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US`; picking sends the Tenor `url` as text |
+| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US`; picking sends the Tenor `url` as text (shown back as a `gifv` embed) |
 | Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
-| Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (no token) |
+| Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (HTTPS, never with the token) |
 
 ### Rate limits
 
@@ -200,7 +198,7 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 |---|---|
 | Server rail | 72 px wide, `#1e1f22`, icons 48 px, 8 px gap, circle → 16 px radius on hover/selection |
 | Rail pill | 4 px wide white; 8 px tall unread, 40 px selected |
-| Channel sidebar | 240 px, `#2b2d31`; header 48 px with drop shadow |
+| Channel sidebar | 240 px, `#2b2d31`; header 48 px with a darker bottom edge (gradient, see below) |
 | Category | 12 px semibold uppercase `#949ba4`, chevron |
 | Channel row | 32 px tall, radius 4, name 16 px medium; muted `#80848e`, unread white semibold, selected `rgba(78,80,88,.6)` |
 | Mention badge | `#f23f43`, 16 px tall, 12 px bold white |
@@ -213,8 +211,13 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 | User panel | 52 px, `#232428` |
 | Accent | `#5865f2`, links `#00a8fc` |
 
+No style uses `container::Style::shadow`: tiny-skia draws a quad's shadow
+unclipped by the damage region, so on partial redraws (scrolling, hover; the
+norm on Windows) it piles up over unrepainted areas until they turn black.
+Header "shadows" are a gradient on the bar itself; popups rely on their border.
+
 Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
-(ISC). No Discord logos, fonts or artwork are used.
+(ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
 
@@ -231,3 +234,25 @@ Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
 * **Desktop helpers**: file dialog via `rfd` (xdg-portal, no GTK); Ctrl+V reads
   copied files or an image through `arboard` (X11 and Wayland data-control),
   encoded to PNG with a pixel and byte cap.
+
+## 9. Round 3: header buttons, servers, discovery, folders
+
+All calls go through `RestClient::request` (per-route buckets, 429 retry);
+pure parsing/payloads live in `net/extras.rs`, calls in `net/rest/ext.rs`.
+
+| Feature | Calls |
+|---|---|
+| Bell | `PATCH /users/@me/guilds/{guild\|@me}/settings` with `channel_overrides.{id}`: `message_notifications` (0 all, 1 mentions, 2 nothing, 3 inherit), `muted` + `mute_config {selected_time_window, end_time}` (`-1`/`null` = until turned back on). READY `user_guild_settings` and `USER_GUILD_SETTINGS_UPDATE` feed `ChatState::channel_notify`; expired timed mutes are dropped. |
+| Pins | `GET /channels/{id}/pins` (array, or the paginated `{items:[{message}]}` shape); `DELETE /channels/{c}/pins/{m}`. The unpin button shows for DMs, the owner, Administrator and Manage Messages (server-wide role bits; channel overwrites are not applied, a 403 is reported). |
+| Inbox | `GET /users/@me/mentions?limit=25&roles=true&everyone=true[&before=][&guild_id=]` (Mentions tab, "This Server" filter, load more). |
+| Help | opens `https://support.discord.com/` in the browser. |
+| Search | `GET /guilds/{id}/messages/search` / `/channels/{id}/messages/search`; `from:name` -> `author_id`, `has:image\|video\|sound\|file\|link\|embed\|sticker` -> `has`, `in:#channel` -> `channel_id` (servers only). Names resolve against known users/channels; an unknown one is an error shown in the panel. |
+| Create server | `POST /guilds {name, icon?, channels: [], system_channel_id: null}`; icon is a PNG/JPEG/GIF/WebP `data:` URI (4 MB cap, no cropping). No `guild_template_code` is sent (see PR: template codes are unverified). |
+| Join | `GET /invites/{code}?with_counts=true&with_expiration=true` (preview card) then `POST /invites/{code} {session_id}`. A 400 body with `captcha_key` becomes `Error::CaptchaRequired`: a clear message, one attempt, **no solving**. |
+| Discover | `GET /discovery/categories`, `GET /discoverable-guilds?offset&limit[&category_id]`, `GET /discovery/search?query&offset&limit[&category_id]`, join with `PUT /guilds/{id}/members/@me {session_id}`. "Details" is a card from the listing (no lurking). Endpoint shapes are tolerant (`guilds`/`hits`/array). |
+| Folders | READY `user_settings.guild_folders` (`id`, `name`, `color`, `guild_ids`; `id: null` = single server). Saved with `PATCH /users/@me/settings {guild_folders: [...]}` (the same legacy settings endpoint that stores the status). Ferrocord identifies with `capabilities: 0`, so the server keeps sending legacy JSON settings; the official client's `PATCH /users/@me/settings-proto/1` (base64 protobuf `GuildFolders`) would need the proto capability and an encoder, and is not implemented. `USER_SETTINGS_UPDATE` with `guild_folders` keeps other sessions in sync; a failed save rolls back. The list is cached in `meta("guild_folders")`. |
+
+Rail gestures (`app/rail.rs`): press on a server, release on another -> new
+folder in place; release on a folder -> joins it; release on the same item ->
+click; a release anywhere else (`DragEnd`) cancels. Folders open/closed state
+is local only.

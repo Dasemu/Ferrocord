@@ -3,7 +3,7 @@
 
 use iced::widget::{
     Space, button, column, container, hover, mouse_area, progress_bar, rich_text, row, rule,
-    scrollable, span, text, text_input,
+    scrollable, span, text, text_input, tooltip,
 };
 use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 
@@ -15,7 +15,7 @@ use super::{
 };
 use crate::app::actions::{composer_id, edit_id, search_id};
 use crate::app::emoji::PickerTarget;
-use crate::app::panel::PanelKind;
+use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind, Embed};
@@ -65,10 +65,6 @@ fn channel_title(app: &App, c: &Channel) -> String {
     }
 }
 
-/// Where the header's help button leads (Discord's Help Center, as in the
-/// official client).
-const HELP_URL: &str = "https://support.discord.com";
-
 fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     let t = &app.theme;
     let p = t.palette;
@@ -107,22 +103,58 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
                     .wrapping(text::Wrapping::None),
             );
     }
-    let tool = |i: Icon| icon(i, 24.0, p.text_secondary);
+    // Header buttons with a tooltip; `active` lights the icon while its
+    // popover or panel is open.
+    let tip = |content: El<'a>, label: &'static str| -> El<'a> {
+        tooltip(
+            content,
+            container(
+                text(label)
+                    .size(13)
+                    .font(INTER_SEMIBOLD)
+                    .color(p.header_text),
+            )
+            .padding(Padding::from([6, 10]))
+            .style(theme::rounded_bg(p.bg_elevated, 5.0)),
+            tooltip::Position::Bottom,
+        )
+        .gap(8)
+        .into()
+    };
+    let tool = |i: Icon, label: &'static str, msg: Ui, active: bool| -> El<'a> {
+        tip(
+            button(icon(
+                i,
+                24.0,
+                if active {
+                    p.header_text
+                } else {
+                    p.text_secondary
+                },
+            ))
+            .padding(0)
+            .on_press(ui(msg))
+            .style(theme::link_button(p))
+            .into(),
+            label,
+        )
+    };
     // Guilds show the member list; DMs show the participants (or, in a 1:1
     // DM, the other person's profile).
-    let members: El<'a> = button(icon(
+    let in_guild = matches!(app.view, View::Guild { .. });
+    let members: El<'a> = tool(
         Icon::Users,
-        24.0,
-        if app.members_open {
-            p.header_text
-        } else {
-            p.text_secondary
+        match (in_guild, app.members_open) {
+            (true, true) => "Hide Member List",
+            (true, false) => "Show Member List",
+            (false, true) => "Hide User Profile",
+            (false, false) => "Show User Profile",
         },
-    ))
-    .padding(0)
-    .on_press(ui(Ui::ToggleMembers))
-    .style(theme::link_button(p))
-    .into();
+        Ui::ToggleMembers,
+        app.members_open,
+    );
+    let open = app.panels.open;
+    let muted = app.chat.is_channel_muted(c.id);
     let searching = app.search.open || app.search.panel_visible();
     let search_input = text_input("Search", &app.search.input)
         .id(search_id())
@@ -152,37 +184,27 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     .align_y(Alignment::Center)
     .style(theme::rounded_bg(p.bg_app, 4.0));
     let tools = row![
-        tool(Icon::Bell),
-        button(icon(
+        tool(
+            if muted { Icon::BellOff } else { Icon::Bell },
+            "Notification Settings",
+            Ui::TogglePopover(Popover::Bell),
+            open == Some(Popover::Bell),
+        ),
+        tool(
             Icon::Pin,
-            24.0,
-            if app.panel.is_open(PanelKind::Pins(c.id)) {
-                p.header_text
-            } else {
-                p.text_secondary
-            },
-        ))
-        .padding(0)
-        .on_press(ui(Ui::TogglePins))
-        .style(theme::link_button(p)),
+            "Pinned Messages",
+            Ui::TogglePopover(Popover::Pins),
+            open == Some(Popover::Pins),
+        ),
         members,
         search,
-        button(icon(
+        tool(
             Icon::Inbox,
-            24.0,
-            if app.panel.is_open(PanelKind::Inbox) {
-                p.header_text
-            } else {
-                p.text_secondary
-            },
-        ))
-        .padding(0)
-        .on_press(ui(Ui::ToggleInbox))
-        .style(theme::link_button(p)),
-        button(tool(Icon::CircleHelp))
-            .padding(0)
-            .on_press(ui(Ui::OpenUrl(HELP_URL.to_owned())))
-            .style(theme::link_button(p))
+            "Inbox",
+            Ui::TogglePopover(Popover::Inbox),
+            open == Some(Popover::Inbox),
+        ),
+        tool(Icon::CircleHelp, "Help", Ui::OpenHelp, false),
     ]
     .spacing(16)
     .align_y(Alignment::Center);

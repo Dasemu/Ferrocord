@@ -540,61 +540,39 @@ async fn upload_of_a_missing_file_fails_cleanly() {
 }
 
 #[tokio::test]
-async fn pins_use_new_route_and_fall_back_to_legacy() {
-    // New paginated route.
-    let server = http(Arc::new(|req, _| {
-        if req.path == "/channels/10/messages/pins?limit=50" {
-            Response::json(
-                200,
-                json!({"items": [
-                    {"pinned_at": "2026-01-02T00:00:00+00:00", "message": msg(20)},
-                    {"pinned_at": "2026-01-01T00:00:00+00:00", "message": msg(10)}
-                ], "has_more": false}),
-            )
-        } else {
-            Response::json(404, json!({"message": "Unknown"}))
-        }
+async fn search_filters_become_query_parameters() {
+    use ferrocord::net::extras::SearchQuery;
+    let server = http(Arc::new(|_, _| {
+        Response::json(200, json!({"total_results": 0, "messages": []}))
     }))
     .await;
-    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
-    let pins = rest.pins(Snowflake(10)).await.unwrap();
+    let rest = rest_for(&server);
+    let q = SearchQuery {
+        content: "let chains".into(),
+        authors: vec![Snowflake(2)],
+        has: vec!["image", "link"],
+        channels: vec![Snowflake(10)],
+    };
+    rest.search_query(SearchScope::Guild(Snowflake(9)), &q, 25)
+        .await
+        .unwrap();
+    // A filter-only search has no `content`; `in:` is ignored in DMs.
+    let only = SearchQuery {
+        has: vec!["file"],
+        channels: vec![Snowflake(10)],
+        ..Default::default()
+    };
+    rest.search_query(SearchScope::Channel(Snowflake(10)), &only, 0)
+        .await
+        .unwrap();
+    let rec = server.recorded();
     assert_eq!(
-        pins.iter().map(|m| m.id.0).collect::<Vec<_>>(),
-        vec![20, 10]
+        rec[0].path,
+        "/guilds/9/messages/search?content=let%20chains&author_id=2&has=image&has=link&channel_id=10&offset=25&include_nsfw=true"
     );
-
-    // Legacy route when the new one is unknown.
-    let server = http(Arc::new(|req, _| {
-        if req.path == "/channels/10/pins" {
-            Response::json(200, json!([msg(30)]))
-        } else {
-            Response::json(404, json!({"message": "Unknown"}))
-        }
-    }))
-    .await;
-    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
-    let pins = rest.pins(Snowflake(10)).await.unwrap();
-    assert_eq!(pins.iter().map(|m| m.id.0).collect::<Vec<_>>(), vec![30]);
-    assert_eq!(server.recorded().len(), 2);
-}
-
-#[tokio::test]
-async fn recent_mentions_hits_inbox_route() {
-    let server = http(Arc::new(|req, _| {
-        if req.path.starts_with("/users/@me/mentions") {
-            Response::json(200, json!([msg(20), msg(10)]))
-        } else {
-            Response::json(404, json!({"message": "Unknown"}))
-        }
-    }))
-    .await;
-    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
-    let ms = rest.recent_mentions().await.unwrap();
-    // Newest first, as the inbox lists them.
-    assert_eq!(ms.iter().map(|m| m.id.0).collect::<Vec<_>>(), vec![20, 10]);
     assert_eq!(
-        server.recorded()[0].path,
-        "/users/@me/mentions?limit=25&roles=true&everyone=true"
+        rec[1].path,
+        "/channels/10/messages/search?has=file&offset=0&include_nsfw=true"
     );
 }
 

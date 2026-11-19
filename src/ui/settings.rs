@@ -72,6 +72,31 @@ pub fn view(app: &App) -> El<'_> {
     if let Some(note) = tray_note {
         rows = rows.push(text(note).size(t.metrics.font_s).color(p.text_muted));
     }
+    rows = rows
+        .push(
+            text("Account")
+                .size(t.metrics.font_s)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_secondary),
+        )
+        .push(
+            row![
+                column![
+                    text("Log out").size(t.metrics.font_m).color(p.text_normal),
+                    text("Removes the saved session from this computer.")
+                        .size(t.metrics.font_s)
+                        .color(p.text_muted),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                button(text("Log Out").size(14).color(p.accent_text))
+                    .padding(Padding::from([8, 16]))
+                    .on_press(ui(Ui::Logout))
+                    .style(theme::danger_button(p)),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        );
     let card = container(
         column![
             rows,

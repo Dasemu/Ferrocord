@@ -19,71 +19,92 @@ const PICKER_W: f32 = 352.0;
 const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
-/// Every overlay that is currently open, bottom to top.
+/// Number of popup slots [`layers`] always returns.
+pub const SLOTS: usize = 8;
+
+/// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
+/// popup is an empty placeholder so the widget tree keeps its shape (see
+/// `ui::view`).
 pub fn layers(app: &App) -> Vec<El<'_>> {
-    let mut out = Vec::new();
     let window = input::window_size();
-    if app.status_menu {
+    let status = if app.status_menu {
         let size = Size::new(240.0, 188.0);
         let at = Point::new(
             8.0,
             window.height - app.theme.metrics.user_panel_height - size.height - 8.0,
         );
-        out.push(popup_layer(app, status_menu(app), at, Ui::ToggleStatusMenu));
-    }
-    if let Some(mn) = &app.menu {
-        let h = menu_height(app, mn.message);
-        let at = input::clamp_popup(mn.at, Size::new(MENU_W, h), window);
-        out.push(popup_layer(
-            app,
-            context_menu(app, mn.message),
-            at,
-            Ui::CloseMenu,
-        ));
-    }
-    if let Some(open) = &app.emoji_picker {
-        let at = picker_position(open, window);
-        out.push(popup_layer(
-            app,
-            emoji_picker(app, open),
-            at,
-            Ui::CloseEmojiPicker,
-        ));
-    }
-    if let Some(gp) = &app.gif_picker {
-        let size = Size::new(GIF_PICKER_W, GIF_PICKER_H);
-        // Above and to the left of the composer button, like the emoji one.
-        let at = input::clamp_popup(
-            Point::new(gp.at.x - size.width + 16.0, gp.at.y - size.height - 12.0),
-            size,
-            window,
-        );
-        out.push(popup_layer(
-            app,
-            gif_picker(app, gp),
-            at,
-            Ui::CloseGifPicker,
-        ));
-    }
-    if let Some(sp) = &app.sticker_picker {
-        let size = Size::new(STICKER_PICKER_W, STICKER_PICKER_H);
-        // Above and to the left of the composer button, like the emoji one.
-        let at = input::clamp_popup(
-            Point::new(sp.at.x - size.width + 16.0, sp.at.y - size.height - 12.0),
-            size,
-            window,
-        );
-        out.push(popup_layer(
-            app,
-            sticker_picker(app, sp),
-            at,
-            Ui::CloseStickerPicker,
-        ));
-    }
-    if let Some((c, m)) = app.pending_delete {
-        out.push(delete_dialog(app, c, m));
-    }
-    out
+        popup_layer(app, status_menu(app), at, Ui::ToggleStatusMenu)
+    } else {
+        super::empty()
+    };
+    let menu = match &app.menu {
+        Some(mn) => {
+            let h = menu_height(app, mn.message);
+            let at = input::clamp_popup(mn.at, Size::new(MENU_W, h), window);
+            popup_layer(app, context_menu(app, mn.message), at, Ui::CloseMenu)
+        }
+        None => super::empty(),
+    };
+    let picker = match &app.emoji_picker {
+        Some(open) => {
+            let at = picker_position(open, window);
+            popup_layer(app, emoji_picker(app, open), at, Ui::CloseEmojiPicker)
+        }
+        None => super::empty(),
+    };
+    let gif = match &app.gif_picker {
+        Some(gp) => {
+            let size = Size::new(GIF_PICKER_W, GIF_PICKER_H);
+            // Above and to the left of the composer button, like the emoji one.
+            let at = input::clamp_popup(
+                Point::new(gp.at.x - size.width + 16.0, gp.at.y - size.height - 12.0),
+                size,
+                window,
+            );
+            popup_layer(app, gif_picker(app, gp), at, Ui::CloseGifPicker)
+        }
+        None => super::empty(),
+    };
+    let sticker = match &app.sticker_picker {
+        Some(sp) => {
+            let size = Size::new(STICKER_PICKER_W, STICKER_PICKER_H);
+            // Above and to the left of the composer button, like the emoji one.
+            let at = input::clamp_popup(
+                Point::new(sp.at.x - size.width + 16.0, sp.at.y - size.height - 12.0),
+                size,
+                window,
+            );
+            popup_layer(app, sticker_picker(app, sp), at, Ui::CloseStickerPicker)
+        }
+        None => super::empty(),
+    };
+    let delete = match app.pending_delete {
+        Some((c, m)) => delete_dialog(app, c, m),
+        None => super::empty(),
+    };
+    let popover = match app.panels.open {
+        Some(kind) => {
+            let size = super::popovers::size_of(app, kind);
+            let at = super::popovers::position(app, size);
+            // The backdrop starts under the header so its buttons stay
+            // clickable (switching from one popover to another).
+            popup_layer_from(
+                app,
+                super::popovers::view(app, kind),
+                at,
+                Ui::ClosePopover,
+                app.theme.metrics.header_height,
+            )
+        }
+        None => super::empty(),
+    };
+    let rail_menu = match super::rail::menu(app) {
+        Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
+        None => super::empty(),
+    };
+    vec![
+        status, menu, picker, gif, sticker, delete, popover, rail_menu,
+    ]
 }
 
 const GIF_PICKER_W: f32 = 424.0;
@@ -274,10 +295,27 @@ fn picker_position(open: &OpenPicker, window: Size) -> Point {
 
 /// A click-away backdrop plus the popup at `at`.
 fn popup_layer<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui) -> El<'a> {
+    popup_layer_from(app, card, at, close, 0.0)
+}
+
+/// Like [`popup_layer`], but the backdrop leaves the top `top` pixels
+/// (the channel header) alone.
+fn popup_layer_from<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui, top: f32) -> El<'a> {
     let _ = app;
-    let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-        .on_press(ui(close.clone()))
-        .on_right_press(ui(close));
+    // `Idle` makes the layers below see a "levitating" cursor while the
+    // popup is open: no row under the backdrop reacts to hover. Without it
+    // the message row under the pointer toggled its hover toolbar every
+    // time the pointer crossed the menu's edge (the menu opens exactly at
+    // the pointer), which showed as flicker.
+    let backdrop = container(
+        mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(ui(close.clone()))
+            .on_right_press(ui(close))
+            .interaction(iced::mouse::Interaction::Idle),
+    )
+    .padding(Padding::ZERO.top(top))
+    .width(Length::Fill)
+    .height(Length::Fill);
     let positioned = container(opaque(card))
         .padding(Padding::ZERO.top(at.y).left(at.x))
         .width(Length::Fill)

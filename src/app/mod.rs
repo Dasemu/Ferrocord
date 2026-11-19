@@ -4,6 +4,8 @@
 pub mod actions;
 mod background;
 pub mod emoji;
+pub mod features;
+pub mod folders;
 pub mod gifs;
 pub mod images;
 pub mod input;
@@ -11,8 +13,10 @@ pub mod jump;
 pub mod markdown;
 pub mod members;
 pub mod message;
-pub mod panel;
+pub mod panels;
+pub mod rail;
 pub mod search;
+pub mod servers;
 pub mod state;
 pub mod stickers;
 pub mod upload;
@@ -96,6 +100,11 @@ pub struct App {
     /// Parsed markdown per (message, content hash), so `view()` does not
     /// re-parse every message on every frame.
     md_cache: std::cell::RefCell<MarkdownCache>,
+    /// QR image handle for the login screen. An `image::Handle` built in
+    /// `view()` gets a new id each frame, so the renderer re-uploads the
+    /// texture on every redraw (visible blinking); it is built once per
+    /// code instead.
+    qr_cache: std::cell::RefCell<Option<(Vec<bool>, iced::widget::image::Handle)>>,
     pub window_focused: bool,
     gateway: GatewayHandle,
     pub reply: Option<ReplyDraft>,
@@ -113,8 +122,17 @@ pub struct App {
     member_rows_wanted: usize,
     pub status_menu: bool,
     pub search: search::SearchState,
-    /// Pins / inbox side panel.
-    pub panel: panel::MessagePanel,
+    /// Channel-header popovers (bell, pins, inbox).
+    pub panels: features::Panels,
+    pub server_dialog: Option<servers::ServerDialog>,
+    pub discover: Option<servers::DiscoverState>,
+    /// Server rail interaction (folders, drag and drop, menus).
+    pub rail: rail::RailUi,
+    /// A server we created or joined, to open once the gateway has it.
+    pending_select: Option<GuildId>,
+    /// Gateway session id (sent when joining servers, like the official
+    /// client).
+    session_id: String,
     /// Message flashed after a jump.
     pub highlight: Option<MessageId>,
     pub toast: Option<String>,
@@ -195,6 +213,7 @@ impl App {
             revealed_spoilers: HashSet::new(),
             images: images::ImageCache::default(),
             md_cache: std::cell::RefCell::new(HashMap::new()),
+            qr_cache: std::cell::RefCell::new(None),
             window_focused: true,
             gateway: GatewayHandle::default(),
             reply: None,
@@ -212,7 +231,12 @@ impl App {
             member_rows_wanted: members::RANGE_SIZE,
             status_menu: false,
             search: search::SearchState::default(),
-            panel: panel::MessagePanel::default(),
+            panels: features::Panels::default(),
+            server_dialog: None,
+            discover: None,
+            rail: rail::RailUi::default(),
+            pending_select: None,
+            session_id: String::new(),
             highlight: None,
             toast: None,
             pending_link: None,
@@ -432,13 +456,44 @@ impl App {
                     });
                 }
             }
-            Some(
-                ScreenshotScreen::Guild
-                | ScreenshotScreen::Settings
-                | ScreenshotScreen::Pins
-                | ScreenshotScreen::Inbox,
-            )
-            | None => {
+            Some(s @ (ScreenshotScreen::Panel | ScreenshotScreen::Menu)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+                if s == ScreenshotScreen::Panel {
+                    if let Some(me) = self.chat.me.as_mut() {
+                        me.global_name = Some("bronze age romantic of the northern coast".into());
+                    }
+                } else if let Some(id) = self
+                    .chat
+                    .messages
+                    .get(&mock::CH_GENERAL)
+                    .and_then(|w| w.messages.iter().find(|m| m.author.id == Snowflake(2)))
+                    .map(|m| m.id)
+                {
+                    let _ = self.update_ui(Ui::ContextMenu(id));
+                    if let Some(mn) = self.menu.as_mut() {
+                        mn.at = iced::Point::new(640.0, 300.0);
+                    }
+                }
+            }
+            Some(s) if s.is_round3() => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+                self.mock_round3_screen(s);
+            }
+            Some(_) | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
                 };
@@ -450,19 +505,90 @@ impl App {
             }
         }
         self.settings_open = screen == Some(ScreenshotScreen::Settings);
-        match screen {
-            Some(ScreenshotScreen::Pins) => {
-                let _ = self.update_ui(Ui::TogglePins);
-            }
-            Some(ScreenshotScreen::Inbox) => {
-                let _ = self.update_ui(Ui::ToggleInbox);
-            }
-            _ => {}
-        }
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        if screen == Some(ScreenshotScreen::Panel) {
+            // After the member list: it carries our own (online) presence.
+            self.chat.my_status = Presence::Dnd;
+        }
+    }
+
+    /// Opens the popover / dialog / page a round-3 screenshot shows.
+    fn mock_round3_screen(&mut self, s: ScreenshotScreen) {
+        use ScreenshotScreen as S;
+        use panels::Popover;
+        let folders = |app: &mut App| {
+            app.chat.folders.items = vec![
+                crate::net::model::GuildFolder {
+                    id: Some(11),
+                    name: Some("Dev".into()),
+                    color: Some(0x3BA55D),
+                    guild_ids: vec![mock::GUILD_RUST, mock::GUILD_ICED],
+                },
+                crate::net::model::GuildFolder {
+                    id: Some(12),
+                    name: None,
+                    color: Some(0xED4245),
+                    guild_ids: vec![mock::GUILD_LINUX, mock::GUILD_GAMES],
+                },
+                crate::net::model::GuildFolder::single(mock::GUILD_CAFE),
+            ];
+            app.chat.resort_guilds();
+            app.rail.expanded.insert(11);
+        };
+        match s {
+            S::Bell => {
+                let _ = self.update_ui(Ui::TogglePopover(Popover::Bell));
+            }
+            S::Pins => {
+                let _ = self.update_ui(Ui::TogglePopover(Popover::Pins));
+            }
+            S::Inbox => {
+                let _ = self.update_ui(Ui::TogglePopover(Popover::Inbox));
+            }
+            S::AddServer => {
+                let _ = self.update_ui(Ui::OpenAddServer);
+            }
+            S::CreateServer => {
+                let _ = self.update_ui(Ui::OpenAddServer);
+                let _ = self.update_ui(Ui::AddServerCreate);
+            }
+            S::JoinServer => {
+                let _ = self.update_ui(Ui::OpenAddServer);
+                let _ = self.update_ui(Ui::AddServerJoin);
+                let _ = self.update_ui(Ui::JoinInputChanged("https://discord.gg/rust-lang".into()));
+                let _ = self.update_ui(Ui::SubmitJoin);
+                if let (Some(servers::ServerDialog::Join(f)), Some(p)) = (
+                    self.server_dialog.as_ref(),
+                    mock::invite_preview("rust-lang"),
+                ) {
+                    let g = f.generation();
+                    let _ = self.on_invite(g, Ok(p));
+                }
+            }
+            S::Discover => {
+                let _ = self.update_ui(Ui::OpenDiscover);
+            }
+            S::Folders => folders(self),
+            S::FolderMenu => {
+                folders(self);
+                self.rail.menu = Some(rail::RailMenu {
+                    item: rail::RailItem::Guild(mock::GUILD_LINUX),
+                    at: iced::Point::new(76.0, 330.0),
+                });
+            }
+            S::FolderSettings => {
+                folders(self);
+                let _ = self.update_ui(Ui::OpenFolderSettings(11));
+            }
+            S::SearchFilters => {
+                let _ = self.update_ui(Ui::SearchChanged("from:alice has:link".into()));
+                let _ = self.update_ui(Ui::SubmitSearch);
+            }
+            _ => {}
+        }
     }
 
     pub fn screen(&self) -> Screen {
@@ -932,6 +1058,7 @@ impl App {
     }
 
     fn logout(&mut self) -> Task<Message> {
+        self.settings_open = false;
         self.token = None;
         self.gateway_generation += 1;
         self.auth = self.auth.apply(AuthEvent::LoggedOut);
@@ -969,6 +1096,7 @@ impl App {
                 self.toast = Some(format!("Disconnected: {reason}"));
             }
             Event::Ready(r) => {
+                self.session_id.clone_from(&r.session_id);
                 if let Some(me) = &r.me {
                     self.auth = self.auth.apply(AuthEvent::Validated(me.clone()));
                 }
@@ -1056,6 +1184,15 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
+            self.cache_folders();
+        }
+        if let Event::GuildUpsert { guild, .. } = &ev
+            && self.pending_select == Some(guild.id)
+        {
+            self.pending_select = None;
+            tasks.push(self.update_ui(Ui::SelectGuild(guild.id)));
+        }
         if matches!(ev, Event::Ready(_)) {
             // Re-sync the open channel after (re)connect.
             if let Some(c) = self.open_channel() {
@@ -1315,7 +1452,6 @@ impl App {
             } => self.on_around(channel, target, result),
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
-            Done::Panel { generation, result } => self.on_panel_done(generation, result),
             Done::GifSearchDue(generation) => self.gif_search_due(generation),
             Done::Gifs { generation, result } => {
                 if let Some(p) = self.gif_picker.as_mut() {
@@ -1330,6 +1466,31 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Pins { generation, result } => self.on_pins(generation, result),
+            Done::Mentions { generation, result } => self.on_mentions(generation, result),
+            Done::NotifySaved {
+                channel,
+                previous,
+                result,
+            } => self.on_notify_saved(channel, previous, result),
+            Done::Unpinned {
+                channel,
+                message,
+                result,
+            } => self.on_unpinned(channel, message, result),
+            Done::Invite { generation, result } => self.on_invite(generation, result),
+            Done::Joined { generation, result } => self.on_joined(generation, result),
+            Done::Created(r) => self.on_created(r),
+            Done::IconPicked(r) => self.on_icon_picked(r),
+            Done::DiscoverCategories(r) => {
+                if let (Some(d), Ok(c)) = (self.discover.as_mut(), r) {
+                    d.categories = c;
+                }
+                Task::none()
+            }
+            Done::DiscoverPage { generation, result } => self.on_discover_page(generation, result),
+            Done::DiscoverJoined { guild, result } => self.on_discover_joined(guild, result),
+            Done::FoldersSaved { previous, result } => self.on_folders_saved(previous, result),
             Done::StatusSaved(r) => {
                 if let Err(e) = r {
                     self.toast = Some(format!("Could not save your status: {e}"));
@@ -1379,6 +1540,32 @@ impl App {
         let mut urls: Vec<String> = Vec::new();
         for g in &self.chat.guilds {
             if let Some(u) = self.rest.guild_icon_url(g, 96) {
+                urls.push(u);
+            }
+        }
+        // Discover cards and the invite preview.
+        if let Some(d) = &self.discover {
+            urls.extend(
+                d.guilds
+                    .iter()
+                    .filter_map(|g| g.icon_url(&self.cfg.cdn_url)),
+            );
+        }
+        if let Some(servers::ServerDialog::Join(f)) = &self.server_dialog
+            && let servers::JoinStep::Preview(p) | servers::JoinStep::Joining(p) = &f.step
+            && let Some(u) = p.icon_url(&self.cfg.cdn_url)
+        {
+            urls.push(u);
+        }
+        // Authors in the pins / inbox popovers.
+        for m in self
+            .panels
+            .pins
+            .items
+            .iter()
+            .chain(self.panels.inbox.items.iter())
+        {
+            if let Some(u) = self.rest.avatar_url(&m.author, 80) {
                 urls.push(u);
             }
         }
@@ -1448,7 +1635,7 @@ impl App {
                 );
             }
         }
-        for m in self.search.results.iter().chain(&self.panel.messages) {
+        for m in self.search.results.iter() {
             if let Some(u) = self.rest.avatar_url(&m.author, 80) {
                 urls.push(u);
             }
@@ -1526,6 +1713,23 @@ impl App {
             .or_else(|| self.rest.avatar_url(user, 64))
     }
 
+    /// The login QR as an image handle, built once per distinct code.
+    pub fn qr_handle(&self, size: usize, modules: &[bool]) -> iced::widget::image::Handle {
+        let mut cache = self.qr_cache.borrow_mut();
+        if let Some((m, h)) = cache.as_ref()
+            && m == modules
+        {
+            return h.clone();
+        }
+        let h = iced::widget::image::Handle::from_rgba(
+            size as u32,
+            size as u32,
+            crate::ui::login::qr_pixels(modules),
+        );
+        *cache = Some((modules.to_vec(), h.clone()));
+        h
+    }
+
     pub fn avatar_handle(&self, user: &User) -> Option<&iced::widget::image::Handle> {
         let a = self.rest.avatar_url(user, 80)?;
         self.images.get(&a).or_else(|| {
@@ -1599,6 +1803,9 @@ impl App {
 fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message> {
     use iced::keyboard::{Event as Key, Key as K, key::Named};
     match e {
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::Ui(Ui::DragEnd))
+        }
         iced::Event::Window(iced::window::Event::Focused) => {
             Some(Message::Ui(Ui::WindowFocus(true)))
         }

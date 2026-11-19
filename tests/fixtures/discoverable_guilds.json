@@ -1,0 +1,32 @@
+{
+  "guilds": [
+    {
+      "id": "501",
+      "name": "Rust Community",
+      "description": "Everything Rust",
+      "icon": "i501",
+      "splash": null,
+      "approximate_member_count": 50123,
+      "approximate_presence_count": 9000,
+      "features": [
+        "VERIFIED",
+        "PARTNERED",
+        "DISCOVERABLE"
+      ]
+    },
+    {
+      "id": "502",
+      "name": "Iced Users",
+      "description": "GUI in Rust",
+      "icon": null,
+      "approximate_member_count": 812,
+      "approximate_presence_count": 120,
+      "features": [
+        "DISCOVERABLE"
+      ]
+    }
+  ],
+  "total": 2,
+  "offset": 0,
+  "limit": 24
+}
