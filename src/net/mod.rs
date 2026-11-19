@@ -1,6 +1,7 @@
 //! Discord protocol client: Gateway (WebSocket), REST API, remote-auth (QR
 //! login). Owns sockets; never touches UI types.
 
+pub mod extras;
 pub mod gateway;
 pub mod model;
 pub mod ratelimit;
@@ -66,6 +67,15 @@ pub enum Event {
         status: Presence,
     },
     MemberList(Box<MemberListUpdate>),
+    /// USER_SETTINGS_UPDATE carrying `guild_folders` (another session or
+    /// our own PATCH echoed back).
+    GuildFolders(Vec<GuildFolder>),
+    /// USER_GUILD_SETTINGS_UPDATE: channel overrides of one server (or of
+    /// DMs when `guild` is `None`).
+    NotifySettings {
+        guild: Option<GuildId>,
+        channels: Vec<(ChannelId, extras::ChannelNotify)>,
+    },
     /// GUILD_EMOJIS_UPDATE.
     GuildEmojis {
         guild_id: GuildId,

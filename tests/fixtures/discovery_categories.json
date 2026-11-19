@@ -1,0 +1,15 @@
+[
+  {
+    "id": 0,
+    "name": "Featured",
+    "name_localizations": {}
+  },
+  {
+    "id": 1,
+    "name": "Gaming"
+  },
+  {
+    "id": 5,
+    "name": "Science & Tech"
+  }
+]

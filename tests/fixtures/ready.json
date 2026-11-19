@@ -53,13 +53,13 @@
     "partial": false,
     "entries": [
       { "guild_id": "2000000000000000002", "muted": true, "suppress_everyone": true, "suppress_roles": false, "channel_overrides": [] },
-      { "guild_id": "2000000000000000001", "muted": false, "channel_overrides": [ { "channel_id": "4000000000000000003", "muted": true } ] }
+      { "guild_id": "2000000000000000001", "muted": false, "channel_overrides": [ { "channel_id": "4000000000000000003", "muted": true, "message_notifications": 3, "mute_config": null }, { "channel_id": "4000000000000000002", "muted": false, "message_notifications": 1 } ] }
     ]
   },
   "user_settings": {
     "guild_folders": [
       { "guild_ids": ["2000000000000000002"], "id": null },
-      { "guild_ids": ["2000000000000000001", "2000000000000000003"], "id": 12345, "name": "Dev" }
+      { "guild_ids": ["2000000000000000001", "2000000000000000003"], "id": 12345, "name": "Dev", "color": 5793266 }
     ]
   },
   "relationships": [],
