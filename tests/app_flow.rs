@@ -622,3 +622,154 @@ fn live_messages_are_not_appended_to_a_detached_window() {
     )));
     assert_eq!(a.chat.messages[&mock::CH_GENERAL].messages.len(), before);
 }
+
+// -- tray and background mode ----------------------------------------------------
+
+mod tray_flow {
+    use std::sync::Arc;
+
+    use ferrocord::app::{App, Message, Ui};
+    use ferrocord::config::Config;
+    use ferrocord::mock;
+    use ferrocord::net::model::Presence;
+    use ferrocord::tray::{self, Command, TrayModel};
+    use tokio::sync::watch;
+
+    fn app_with_tray() -> (App, watch::Receiver<TrayModel>) {
+        let mut a = App::boot(Config::for_tests()).0;
+        let (tx, rx) = watch::channel(TrayModel::default());
+        let control = tray::Control::new(Arc::new(tx));
+        let _ = a.update(Message::Tray(tray::Event::Ready(control)));
+        (a, rx)
+    }
+
+    fn command(a: &mut App, c: Command) {
+        let _ = a.update(Message::Tray(tray::Event::Command(c)));
+    }
+
+    #[test]
+    fn closing_hides_to_the_tray_once_registered() {
+        let (mut a, _rx) = app_with_tray();
+        assert!(a.win.visible);
+        let _ = a.update(Message::Ui(Ui::CloseRequested));
+        assert!(!a.win.visible, "close hides while a tray exists");
+        // Notifications must not be suppressed for a window nobody sees.
+        let _ = a.update(Message::Ui(Ui::ShowWindow));
+        assert!(a.win.visible);
+    }
+
+    #[test]
+    fn left_click_toggles_the_window() {
+        let (mut a, _rx) = app_with_tray();
+        command(&mut a, Command::Toggle);
+        assert!(!a.win.visible);
+        command(&mut a, Command::Toggle);
+        assert!(a.win.visible);
+        command(&mut a, Command::Hide);
+        assert!(!a.win.visible);
+        command(&mut a, Command::Show);
+        assert!(a.win.visible);
+    }
+
+    #[test]
+    fn without_a_tray_closing_does_not_hide() {
+        let mut a = App::boot(Config::for_tests()).0;
+        let _ = a.update(Message::Ui(Ui::CloseRequested));
+        // `iced::exit()` was requested; the window state keeps "visible".
+        assert!(a.win.visible);
+        let _ = a.update(Message::Ui(Ui::HideWindow));
+        assert!(a.win.visible, "hiding needs a tray host");
+    }
+
+    #[test]
+    fn losing_the_tray_restores_a_hidden_window() {
+        let (mut a, _rx) = app_with_tray();
+        command(&mut a, Command::Hide);
+        assert!(!a.win.visible);
+        let _ = a.update(Message::Tray(tray::Event::Unavailable));
+        assert!(a.win.visible);
+        let _ = a.update(Message::Ui(Ui::CloseRequested));
+        assert!(a.win.visible, "no tray any more: close quits");
+    }
+
+    #[test]
+    fn minimized_start_waits_for_the_tray() {
+        let mut cfg = Config::for_tests();
+        cfg.tray = true;
+        cfg.minimized = true;
+        let mut a = App::boot(cfg.clone()).0;
+        assert!(!a.win.visible, "--minimized opens no window");
+        let _ = a.update(Message::Tray(tray::Event::Unavailable));
+        assert!(a.win.visible, "no tray host: show the window");
+        // --minimized is ignored without a tray at all.
+        cfg.tray = false;
+        assert!(App::boot(cfg).0.win.visible);
+    }
+
+    #[test]
+    fn menu_status_uses_the_status_setter() {
+        let (mut a, rx) = app_with_tray();
+        command(&mut a, Command::SetStatus(Presence::Dnd));
+        assert_eq!(a.chat.my_status, Presence::Dnd);
+        assert_eq!(rx.borrow().status, Presence::Dnd);
+        assert!(rx.borrow().logged_in);
+    }
+
+    #[test]
+    fn menu_toggles_update_prefs_and_tray() {
+        let (mut a, rx) = app_with_tray();
+        assert!(!a.prefs.muted);
+        command(&mut a, Command::ToggleMute);
+        assert!(a.prefs.muted);
+        assert!(rx.borrow().muted);
+        command(&mut a, Command::ToggleStartMinimized);
+        assert!(a.prefs.start_minimized && rx.borrow().start_minimized);
+        command(&mut a, Command::ToggleMute);
+        assert!(!rx.borrow().muted);
+    }
+
+    #[test]
+    fn tray_shows_the_unread_mention_count() {
+        let (mut a, rx) = app_with_tray();
+        // The mock account has unread mentions and DMs.
+        let n = a.chat.attention_count();
+        assert!(n > 0);
+        assert_eq!(rx.borrow().mentions, n);
+        assert!(rx.borrow().needs_attention());
+        assert!(rx.borrow().tooltip_title().contains(&n.to_string()));
+        // Reading a mention-carrying channel lowers it.
+        let (c, k) = [mock::DM_ALICE, mock::CH_HELP]
+            .into_iter()
+            .map(|c| (c, a.chat.mention_count(c)))
+            .find(|(_, k)| *k > 0)
+            .unwrap();
+        let _ = a.update(Message::Ui(Ui::SelectChannel(c)));
+        assert_eq!(rx.borrow().mentions, n - k);
+    }
+
+    #[test]
+    fn clicking_a_notification_shows_the_hidden_window_on_that_chat() {
+        let (mut a, _rx) = app_with_tray();
+        command(&mut a, Command::Hide);
+        assert!(!a.win.visible);
+        let _ = a.update(Message::Ui(Ui::OpenChannel(mock::CH_HELP)));
+        assert!(a.win.visible);
+        assert_eq!(a.open_channel(), Some(mock::CH_HELP));
+    }
+
+    #[test]
+    fn settings_toggles_flip_preferences() {
+        let mut a = App::boot(Config::for_tests()).0;
+        assert!(a.prefs.close_to_tray);
+        let _ = a.update(Message::Ui(Ui::OpenSettings));
+        assert!(a.settings_open);
+        let _ = a.update(Message::Ui(Ui::ToggleCloseToTray));
+        assert!(!a.prefs.close_to_tray);
+        assert!(!a.win.close_to_tray);
+        // Mock mode flips the autostart toggle without touching the disk.
+        let _ = a.update(Message::Ui(Ui::ToggleAutostart));
+        assert!(a.autostart);
+        let _ = a.update(Message::Ui(Ui::Escape));
+        assert!(!a.settings_open);
+    }
+}

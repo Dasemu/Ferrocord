@@ -823,6 +823,15 @@ impl ChatState {
         }
     }
 
+    /// Unread mentions plus unread DMs over every known channel: the number
+    /// on the tray badge.
+    pub fn attention_count(&self) -> u32 {
+        self.read_states
+            .iter()
+            .filter(|(c, _)| self.channels.contains_key(c))
+            .fold(0u32, |n, (_, r)| n.saturating_add(r.mention_count))
+    }
+
     pub fn mention_count(&self, c: ChannelId) -> u32 {
         self.read_states.get(&c).map_or(0, |r| r.mention_count)
     }
@@ -1111,6 +1120,31 @@ mod tests {
             window_focused: true,
             notification_preview: true,
         }
+    }
+
+    #[test]
+    fn attention_count_is_unread_mentions_and_dms() {
+        let mut s = loaded();
+        let expected: u32 = s
+            .read_states
+            .iter()
+            .filter(|(c, _)| s.channels.contains_key(c))
+            .map(|(_, r)| r.mention_count)
+            .sum();
+        assert!(expected > 0, "mock data has unread mentions");
+        assert_eq!(s.attention_count(), expected);
+        // Reading a channel removes its mentions from the badge.
+        let (c, n) = s
+            .read_states
+            .iter()
+            .find(|(_, r)| r.mention_count > 0)
+            .map(|(c, r)| (*c, r.mention_count))
+            .unwrap();
+        s.read_states.get_mut(&c).unwrap().mention_count = 0;
+        assert_eq!(s.attention_count(), expected - n);
+        // Read states of channels we no longer know do not count.
+        s.channels.clear();
+        assert_eq!(s.attention_count(), 0);
     }
 
     fn loaded() -> ChatState {

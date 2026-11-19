@@ -12,4 +12,5 @@ pub mod error;
 pub mod mock;
 pub mod net;
 pub mod store;
+pub mod tray;
 pub mod ui;

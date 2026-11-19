@@ -353,6 +353,7 @@ fn user_panel(app: &App) -> El<'_> {
             identity,
             small(Icon::Mic, None),
             small(Icon::Headphones, None),
+            small(Icon::Settings, Some(Ui::OpenSettings)),
             small(Icon::LogOut, Some(Ui::Logout)),
         ]
         .spacing(8)

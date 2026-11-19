@@ -505,6 +505,10 @@ impl App {
         if self.pending_delete.take().is_some() || self.pending_link.take().is_some() {
             return Task::none();
         }
+        if self.settings_open {
+            self.settings_open = false;
+            return Task::none();
+        }
         if self.status_menu {
             self.status_menu = false;
             return Task::none();
@@ -953,16 +957,13 @@ impl App {
         }
     }
 
+    /// A notification was clicked: open the chat and bring the window
+    /// back, re-opening it if it was hidden to the tray.
     fn open_from_notification(&mut self, c: ChannelId) -> Task<Message> {
         let nav = self.update_ui(Ui::SelectChannel(c));
-        // Raise the window; Wayland compositors may only flash the task
-        // bar when the app has no activation token.
-        let raise = iced::window::latest().and_then(|id| {
-            Task::batch([
-                iced::window::minimize(id, false),
-                iced::window::gain_focus(id),
-            ])
-        });
+        // Wayland compositors may only flash the task bar when the app has
+        // no activation token.
+        let raise = self.show_window();
         Task::batch([nav, raise])
     }
 }
