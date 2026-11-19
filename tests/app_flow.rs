@@ -107,3 +107,29 @@ fn masked_links_need_confirmation() {
     let _ = a.update(Message::Ui(Ui::OpenUrl("https://example.com/real".into())));
     assert!(a.pending_link.is_none());
 }
+
+#[test]
+fn markdown_is_parsed_once_per_message() {
+    let a = app();
+    let id = ferrocord::net::model::Snowflake(42);
+    let first = a.parsed_markdown(id, "**hi**");
+    let second = a.parsed_markdown(id, "**hi**");
+    assert!(std::rc::Rc::ptr_eq(&first, &second));
+    // Edited content gets a fresh parse.
+    let edited = a.parsed_markdown(id, "**hi** there");
+    assert!(!std::rc::Rc::ptr_eq(&first, &edited));
+}
+
+#[test]
+fn inline_custom_emoji_render_as_images_when_loaded() {
+    let mut a = app();
+    // The mock #general history ends with inline `<:ferris:1001>`.
+    let key = ferrocord::app::emoji_url(&a.cfg.cdn_url, ferrocord::net::model::Snowflake(1001));
+    a.images.insert(
+        key.clone(),
+        iced::widget::image::Handle::from_rgba(1, 1, vec![255, 0, 0, 255]),
+        4,
+    );
+    assert!(a.image(&key).is_some());
+    let _ = ferrocord::ui::view(&a);
+}

@@ -6,7 +6,7 @@ use iced::{Background, Border, Color, Font, Length, Padding, font};
 
 use super::El;
 use super::theme::{self, INTER, MONO};
-use crate::app::markdown::{Block, Inline, is_emoji_only, parse};
+use crate::app::markdown::{Block, Inline, is_emoji_only};
 use crate::app::{App, Message, Ui};
 use crate::net::model::MessageId;
 
@@ -29,14 +29,15 @@ struct Ctx<'a> {
 
 /// Renders a message body. `base` is the normal text colour.
 pub fn render<'a>(app: &'a App, msg: MessageId, content: &str, base: Color, size: f32) -> El<'a> {
-    let blocks = parse(content);
+    let blocks = app.parsed_markdown(msg, content);
+    let blocks: &[Block] = &blocks;
     let ctx = Ctx {
         app,
         msg,
         revealed: app.revealed_spoilers.contains(&msg),
     };
-    if is_emoji_only(&blocks) {
-        return jumbo(&ctx, &blocks);
+    if is_emoji_only(blocks) {
+        return jumbo(&ctx, blocks);
     }
     let style = Style {
         bold: false,
@@ -47,7 +48,7 @@ pub fn render<'a>(app: &'a App, msg: MessageId, content: &str, base: Color, size
         color: base,
         spoiler_hidden: false,
     };
-    blocks_view(&ctx, &blocks, style)
+    blocks_view(&ctx, blocks, style)
 }
 
 fn blocks_view<'a>(ctx: &Ctx<'a>, blocks: &[Block], style: Style) -> El<'a> {
@@ -123,6 +124,15 @@ fn blocks_view<'a>(ctx: &Ctx<'a>, blocks: &[Block], style: Style) -> El<'a> {
 }
 
 fn para<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
+    // Rich text cannot embed images, so a paragraph with custom emoji whose
+    // image is loaded is laid out as a wrapping flow of word widgets.
+    let has_emoji_image = v.iter().any(|i| {
+        matches!(i, Inline::Emoji { id, .. }
+            if ctx.app.image(&crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id)).is_some())
+    });
+    if has_emoji_image {
+        return flow(ctx, v, style);
+    }
     let mut spans: Vec<Span<'a, Ui, Font>> = Vec::new();
     inline(ctx, v, style, None, &mut spans);
     rich_text(spans)
@@ -130,6 +140,63 @@ fn para<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
         .on_link_click(Message::Ui)
         .width(Length::Fill)
         .into()
+}
+
+/// Inline flow: text split into words, custom emoji as small images,
+/// one wrapping row per line.
+fn flow<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
+    let emoji_size = style.size * 1.375;
+    let mut lines = column![].spacing(2).width(Length::Fill);
+    let mut line: Vec<El<'a>> = Vec::new();
+    let finish = |line: &mut Vec<El<'a>>| -> El<'a> {
+        iced::widget::Row::with_children(std::mem::take(line))
+            .align_y(iced::Alignment::Center)
+            .wrap()
+            .into()
+    };
+    let chunk = |spans: Vec<Span<'a, Ui, Font>>| -> El<'a> {
+        rich_text(spans)
+            .size(style.size)
+            .on_link_click(Message::Ui)
+            .into()
+    };
+    for i in v {
+        match i {
+            Inline::LineBreak => lines = lines.push(finish(&mut line)),
+            Inline::Emoji { name, id, .. } => {
+                let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
+                match ctx.app.image(&key) {
+                    Some(h) => line.push(
+                        iced::widget::image(h.clone())
+                            .width(emoji_size)
+                            .height(emoji_size)
+                            .into(),
+                    ),
+                    None => {
+                        let mut spans = Vec::new();
+                        inline(ctx, std::slice::from_ref(i), style, None, &mut spans);
+                        let _ = name;
+                        line.push(chunk(spans));
+                    }
+                }
+            }
+            Inline::Text(t) => {
+                // Keep the trailing space with each word so spacing matches
+                // normal text.
+                for word in t.split_inclusive(' ') {
+                    let mut spans = Vec::new();
+                    push_text(&mut spans, word.to_owned(), &style, None, ctx);
+                    line.push(chunk(spans));
+                }
+            }
+            other => {
+                let mut spans = Vec::new();
+                inline(ctx, std::slice::from_ref(other), style, None, &mut spans);
+                line.push(chunk(spans));
+            }
+        }
+    }
+    lines.push(finish(&mut line)).into()
 }
 
 fn font_for(s: &Style) -> Font {

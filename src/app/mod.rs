@@ -36,6 +36,9 @@ const TYPING_INTERVAL_MS: u64 = 8_000;
 /// Messages fetched per history page.
 const PAGE: u8 = 50;
 
+/// Parsed markdown keyed by (message id, content hash).
+type MarkdownCache = HashMap<(MessageId, u64), std::rc::Rc<Vec<markdown::Block>>>;
+
 /// What the main area shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -75,6 +78,9 @@ pub struct App {
     pub collapsed: HashSet<ChannelId>,
     pub revealed_spoilers: HashSet<MessageId>,
     pub images: images::ImageCache,
+    /// Parsed markdown per (message, content hash), so `view()` does not
+    /// re-parse every message on every frame.
+    md_cache: std::cell::RefCell<MarkdownCache>,
     pub window_focused: bool,
     pub toast: Option<String>,
     /// Masked link waiting for confirmation ("Leaving Ferrocord").
@@ -139,6 +145,7 @@ impl App {
             collapsed: HashSet::new(),
             revealed_spoilers: HashSet::new(),
             images: images::ImageCache::default(),
+            md_cache: std::cell::RefCell::new(HashMap::new()),
             window_focused: true,
             toast: None,
             pending_link: None,
@@ -219,6 +226,14 @@ impl App {
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
+        for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
+            let (n, px) = mock::mock_emoji(rgb);
+            self.images.insert(
+                emoji_url(&self.cfg.cdn_url, Snowflake(id)),
+                iced::widget::image::Handle::from_rgba(n, n, px),
+                (n * n * 4) as usize,
+            );
+        }
         self.chat.typing.insert(
             mock::CH_GENERAL,
             vec![state::Typing {
@@ -1082,17 +1097,9 @@ impl App {
                 for a in m.attachments.iter().filter(|a| a.is_image()) {
                     urls.push(attachment_preview_url(a));
                 }
-                if m.content.contains('<') {
-                    let blocks = markdown::parse(&m.content);
-                    if markdown::is_emoji_only(&blocks)
-                        && let Some(markdown::Block::Paragraph(v)) = blocks.first()
-                    {
-                        for i in v {
-                            if let markdown::Inline::Emoji { id, .. } = i {
-                                urls.push(emoji_url(&self.cfg.cdn_url, *id));
-                            }
-                        }
-                    }
+                if m.content.contains("<:") || m.content.contains("<a:") {
+                    let blocks = self.parsed_markdown(m.id, &m.content);
+                    collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
                 }
                 for e in &m.embeds {
                     if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
@@ -1140,6 +1147,28 @@ impl App {
             })
             .collect();
         Task::batch(tasks)
+    }
+
+    /// Parsed markdown for a message body (cached, bounded).
+    pub fn parsed_markdown(
+        &self,
+        msg: MessageId,
+        content: &str,
+    ) -> std::rc::Rc<Vec<markdown::Block>> {
+        const MAX_ENTRIES: usize = 4096;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut h);
+        let key = (msg, h.finish());
+        if let Some(b) = self.md_cache.borrow().get(&key) {
+            return b.clone();
+        }
+        let blocks = std::rc::Rc::new(markdown::parse(content));
+        let mut cache = self.md_cache.borrow_mut();
+        if cache.len() >= MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, blocks.clone());
+        blocks
     }
 
     pub fn image(&self, key: &str) -> Option<&iced::widget::image::Handle> {
@@ -1231,6 +1260,33 @@ impl<T> Hash for Keyed<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::any::type_name::<T>().hash(state);
         self.id.hash(state);
+    }
+}
+
+/// Collects custom emoji image URLs from parsed markdown.
+fn collect_emoji(blocks: &[markdown::Block], cdn: &str, out: &mut Vec<String>) {
+    fn walk(v: &[markdown::Inline], cdn: &str, out: &mut Vec<String>) {
+        use markdown::Inline as I;
+        for i in v {
+            match i {
+                I::Emoji { id, .. } => out.push(emoji_url(cdn, *id)),
+                I::Bold(c) | I::Italic(c) | I::Underline(c) | I::Strike(c) | I::Spoiler(c) => {
+                    walk(c, cdn, out)
+                }
+                I::Link { label, .. } => walk(label, cdn, out),
+                _ => {}
+            }
+        }
+    }
+    for b in blocks {
+        match b {
+            markdown::Block::Paragraph(v)
+            | markdown::Block::Heading(_, v)
+            | markdown::Block::Subtext(v) => walk(v, cdn, out),
+            markdown::Block::Quote(inner) => collect_emoji(inner, cdn, out),
+            markdown::Block::List(items) => items.iter().for_each(|v| walk(v, cdn, out)),
+            markdown::Block::CodeBlock { .. } => {}
+        }
     }
 }
 
