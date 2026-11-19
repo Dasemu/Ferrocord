@@ -81,7 +81,7 @@ shared `Decompress` context. The buffer is capped at 64 MiB.
 (partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
 `MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
 `GUILD_CREATE/UPDATE/DELETE`, `MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI`,
-`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`. Unknown events are ignored; a malformed known
+`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`, `GUILD_STICKERS_UPDATE`. Unknown events are ignored; a malformed known
 event is logged (without its payload) and the connection stays up.
 
 ### User-account READY quirks
@@ -124,7 +124,11 @@ Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 | Status | `PATCH /users/@me/settings {status}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
-| Media | CDN `avatars/`, `icons/`, `emojis/`, attachment `proxy_url?width=&height=` |
+| Pins | `GET /channels/{id}/messages/pins?limit=50` (`items[].message`); on 404 the legacy `GET /channels/{id}/pins` |
+| Inbox | `GET /users/@me/mentions?limit=25&roles=true&everyone=true` |
+| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US`; picking sends the Tenor `url` as text |
+| Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
+| Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (no token) |
 
 ### Rate limits
 
