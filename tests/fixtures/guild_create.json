@@ -1,0 +1,2 @@
+{ "id": "2000000000000000009", "name": "New Guild", "icon": null, "roles": [],
+  "channels": [ { "id": "4000000000000000090", "type": 0, "name": "welcome", "position": 0 } ], "threads": [] }

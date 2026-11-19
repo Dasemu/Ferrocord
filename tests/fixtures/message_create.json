@@ -1,0 +1,27 @@
+{
+  "id": "5000000000000000010",
+  "channel_id": "4000000000000000002",
+  "guild_id": "2000000000000000001",
+  "type": 19,
+  "content": "hey <@1000000000000000001>, look at **this**",
+  "timestamp": "2026-11-18T12:00:00.000000+00:00",
+  "edited_timestamp": null,
+  "tts": false,
+  "mention_everyone": false,
+  "mentions": [ { "id": "1000000000000000001", "username": "ferris_fan", "global_name": "Ferris Fan" } ],
+  "mention_roles": [],
+  "attachments": [
+    { "id": "7000000000000000001", "filename": "cat.png", "size": 12345, "url": "https://cdn.discordapp.com/attachments/1/2/cat.png", "proxy_url": "https://media.discordapp.net/attachments/1/2/cat.png", "content_type": "image/png", "width": 800, "height": 600 }
+  ],
+  "embeds": [
+    { "type": "rich", "title": "Title", "description": "Desc", "url": "https://example.com", "color": 16711680,
+      "author": { "name": "Author" }, "provider": { "name": "Provider" }, "footer": { "text": "Footer" },
+      "fields": [ { "name": "A", "value": "1", "inline": true } ],
+      "thumbnail": { "url": "https://example.com/t.png", "proxy_url": "https://images-ext-1.discordapp.net/t.png", "width": 80, "height": 80 } }
+  ],
+  "author": { "id": "1000000000000000002", "username": "alice.dev", "global_name": "Alice", "avatar": null },
+  "member": { "roles": ["3000000000000000001"], "nick": null },
+  "message_reference": { "message_id": "5000000000000000009", "channel_id": "4000000000000000002" },
+  "nonce": 1234567890123,
+  "pinned": false
+}
