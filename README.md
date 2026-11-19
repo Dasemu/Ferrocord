@@ -44,6 +44,22 @@ tar xzf ferrocord-*-linux-x86_64.tar.gz
 The tarball also has `packaging/dev.ferro.ferrocord.desktop` and `.svg` if you want
 a menu entry. Releases are built on Ubuntu 22.04 (glibc 2.35).
 
+### Windows
+
+Windows x86_64: download `ferrocord-vX.Y.Z-windows-x86_64.zip` and its
+`.sha256` from the Releases page, check the hash and unzip anywhere:
+
+```powershell
+(Get-FileHash ferrocord-*-windows-x86_64.zip).Hash.ToLower()   # compare with the .sha256
+Expand-Archive ferrocord-*-windows-x86_64.zip .
+.errocord-*-windows-x86_64errocord.exe
+```
+
+The token is stored in Windows Credential Manager. The Windows build has no
+tray icon, single-instance lock or autostart yet, and notification clicks do
+not open the channel. To build it yourself install Rust (MSVC toolchain) and
+run `cargo build --release`.
+
 ## Features
 
 - Token login (token stored only in the OS keyring) and QR-code login

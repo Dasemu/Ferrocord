@@ -1,0 +1,28 @@
+{
+  "type": 0,
+  "code": "rust-lang",
+  "expires_at": null,
+  "guild": {
+    "id": "55",
+    "name": "Rustaceans",
+    "icon": "abc123",
+    "description": "Crabs and compilers",
+    "features": [
+      "VERIFIED",
+      "COMMUNITY"
+    ],
+    "verification_level": 1
+  },
+  "channel": {
+    "id": "1",
+    "name": "welcome",
+    "type": 0
+  },
+  "inviter": {
+    "id": "9",
+    "username": "ferris",
+    "global_name": "Ferris"
+  },
+  "approximate_member_count": 1200,
+  "approximate_presence_count": 300
+}

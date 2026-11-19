@@ -279,6 +279,7 @@ mod tests {
                 name: "Moderators".into(),
                 color: 0,
                 position: 1,
+                permissions: 0,
             }],
             owner_id: None,
             emojis: vec![],

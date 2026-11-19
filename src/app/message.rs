@@ -5,8 +5,14 @@ use iced::widget::scrollable::Viewport;
 use std::path::PathBuf;
 
 use super::emoji::{PickerTarget, Section};
+use super::folders::Folders;
+use super::panels::Popover;
+use super::rail::RailItem;
 use super::upload::UploadEvent;
 use crate::net;
+use crate::net::extras::{
+    ChannelNotify, DiscoverCategory, DiscoverPage, InvitePreview, MuteDuration, NotifyLevel,
+};
 use crate::net::model::*;
 use crate::net::remote_auth::RaEvent;
 use crate::net::rest::UploadFile;
@@ -106,6 +112,57 @@ pub enum Ui {
     /// Tray "Mute notifications" / settings toggle.
     ToggleMuted,
     ToggleAutostart,
+    // -- channel header popovers
+    TogglePopover(Popover),
+    ClosePopover,
+    SetChannelLevel(ChannelId, NotifyLevel),
+    MuteChannel(ChannelId, MuteDuration),
+    UnmuteChannel(ChannelId),
+    Unpin(ChannelId, MessageId),
+    InboxMore,
+    InboxGuildOnly(bool),
+    OpenHelp,
+    // -- add a server
+    OpenAddServer,
+    CloseAddServer,
+    AddServerBack,
+    AddServerCreate,
+    AddServerJoin,
+    CreateNameChanged(String),
+    PickServerIcon,
+    ClearServerIcon,
+    SubmitCreate,
+    JoinInputChanged(String),
+    SubmitJoin,
+    ConfirmJoin,
+    // -- discover
+    OpenDiscover,
+    CloseDiscover,
+    DiscoverInput(String),
+    DiscoverSubmit,
+    DiscoverCategory(Option<u32>),
+    DiscoverMore,
+    DiscoverJoin(GuildId),
+    DiscoverDetails(Option<GuildId>),
+    // -- server rail: folders and drag and drop
+    RailPress(RailItem),
+    RailRelease(RailItem),
+    RailEnter(RailItem),
+    RailExit,
+    /// Any left-button release: a drag that did not end on a rail item.
+    DragEnd,
+    RailMenu(RailItem),
+    CloseRailMenu,
+    ToggleFolder(u64),
+    CreateFolder(GuildId),
+    MoveToFolder(GuildId, u64),
+    RemoveFromFolder(GuildId),
+    UngroupFolder(u64),
+    OpenFolderSettings(u64),
+    FolderNameChanged(String),
+    FolderColor(Option<u32>),
+    SaveFolder,
+    CloseFolderSettings,
 }
 
 /// Completion of a `Task`.
@@ -188,6 +245,51 @@ pub enum Done {
     /// Delay after a jump so the new rows are laid out before scrolling.
     ScrollToMessage(MessageId),
     StatusSaved(Result<(), String>),
+    Pins {
+        generation: u64,
+        result: Result<Vec<crate::net::model::Message>, String>,
+    },
+    Mentions {
+        generation: u64,
+        result: Result<Vec<crate::net::model::Message>, String>,
+    },
+    /// Result of saving a channel's notification override; on failure the
+    /// previous value is restored.
+    NotifySaved {
+        channel: ChannelId,
+        previous: ChannelNotify,
+        result: Result<(), String>,
+    },
+    Unpinned {
+        channel: ChannelId,
+        message: MessageId,
+        result: Result<(), String>,
+    },
+    Invite {
+        generation: u64,
+        result: Result<InvitePreview, String>,
+    },
+    Joined {
+        generation: u64,
+        result: Result<(GuildId, String), String>,
+    },
+    Created(Result<(GuildId, String), String>),
+    /// Server icon chosen: `(path, data URI)` or the reason it was refused;
+    /// `None` when the dialog was cancelled.
+    IconPicked(Option<Result<(PathBuf, String), String>>),
+    DiscoverCategories(Result<Vec<DiscoverCategory>, String>),
+    DiscoverPage {
+        generation: u64,
+        result: Result<DiscoverPage, String>,
+    },
+    DiscoverJoined {
+        guild: GuildId,
+        result: Result<(), String>,
+    },
+    FoldersSaved {
+        previous: Folders,
+        result: Result<(), String>,
+    },
     Screenshot(iced::window::Screenshot),
     ScreenshotReady,
     Ignored,

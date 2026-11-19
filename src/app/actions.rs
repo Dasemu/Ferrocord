@@ -78,7 +78,7 @@ fn focus(id: iced::widget::Id) -> Task<Message> {
 
 impl App {
     /// Whether a channel the user can act in is open.
-    fn open_chan(&self) -> Option<ChannelId> {
+    pub(super) fn open_chan(&self) -> Option<ChannelId> {
         self.open_channel()
             .filter(|c| self.chat.channels.contains_key(c))
     }
@@ -355,7 +355,7 @@ impl App {
             }
             Ui::OpenChannel(c) => self.open_from_notification(c),
             // Handled in `mod.rs`.
-            _ => Task::none(),
+            other => self.update_extras(other),
         }
     }
 
@@ -500,6 +500,15 @@ impl App {
 
     fn escape(&mut self) -> Task<Message> {
         if self.emoji_picker.take().is_some() || self.menu.take().is_some() {
+            return Task::none();
+        }
+        if self.rail.menu.take().is_some() || self.panels.open.take().is_some() {
+            return Task::none();
+        }
+        if self.rail.folder_dialog.take().is_some()
+            || self.server_dialog.take().is_some()
+            || self.discover.take().is_some()
+        {
             return Task::none();
         }
         if self.pending_delete.take().is_some() || self.pending_link.take().is_some() {
@@ -772,14 +781,22 @@ impl App {
         let Some((generation, scope, query, offset)) = self.search.begin(scope, offset) else {
             return Task::none();
         };
+        // `from:name`, `has:image`, `in:#channel` become API filters.
+        let parsed = match self.parse_search(&query) {
+            Ok(q) => q,
+            Err(e) => {
+                self.search.finish(generation, Err(e));
+                return Task::none();
+            }
+        };
         if self.cfg.mock {
-            let page = mock_search(&self.chat, scope, &query, offset);
+            let page = mock_search(&self.chat, scope, &parsed, offset);
             self.search.finish(generation, Ok(page));
             return Task::none();
         }
         let rest = self.rest.clone();
         Task::perform(
-            async move { rest.search(scope, &query, offset).await },
+            async move { rest.search_query(scope, &parsed, offset).await },
             move |r| {
                 Message::Done(Done::Search {
                     generation,
@@ -812,6 +829,8 @@ impl App {
     }
 
     pub(super) fn jump_to(&mut self, channel: ChannelId, message: MessageId) -> Task<Message> {
+        // Popovers (pins, inbox) and the Discover page close on a jump.
+        self.panels.open = None;
         let mut tasks = Vec::new();
         if self.open_channel() != Some(channel) {
             tasks.push(self.update_ui(Ui::SelectChannel(channel)));
@@ -1117,10 +1136,10 @@ fn mock_upload_stream(
 pub(super) fn mock_search(
     chat: &super::state::ChatState,
     scope: SearchScope,
-    query: &str,
+    query: &crate::net::extras::SearchQuery,
     offset: u32,
 ) -> SearchPage {
-    let q = query.to_lowercase();
+    let q = query.content.to_lowercase();
     let mut hits: Vec<Msg> = chat
         .messages
         .iter()
@@ -1130,6 +1149,17 @@ pub(super) fn mock_search(
         })
         .flat_map(|(_, w)| w.messages.iter())
         .filter(|m| !m.pending && m.content.to_lowercase().contains(&q))
+        .filter(|m| query.authors.is_empty() || query.authors.contains(&m.author.id))
+        .filter(|m| query.channels.is_empty() || query.channels.contains(&m.channel_id))
+        .filter(|m| {
+            query.has.iter().all(|h| match *h {
+                "image" => m.attachments.iter().any(|a| a.is_image()),
+                "file" | "video" | "sound" => !m.attachments.is_empty(),
+                "link" => m.content.contains("http://") || m.content.contains("https://"),
+                "embed" => !m.embeds.is_empty(),
+                _ => false,
+            })
+        })
         .cloned()
         .collect();
     hits.sort_by_key(|m| std::cmp::Reverse(m.id));

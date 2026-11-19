@@ -52,9 +52,14 @@ pub enum Icon {
     ReplySpine,
     SmilePlus,
     Trash,
+    BellOff,
+    Folder,
+    Upload,
+    ArrowLeft,
+    PinOff,
 }
 
-const ALL: [(Icon, &[u8]); 45] = [
+const ALL: [(Icon, &[u8]); 50] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -183,6 +188,26 @@ const ALL: [(Icon, &[u8]); 45] = [
     (
         Icon::Trash,
         include_bytes!("../../assets/icons/trash-2.svg"),
+    ),
+    (
+        Icon::BellOff,
+        include_bytes!("../../assets/icons/bell-off.svg"),
+    ),
+    (
+        Icon::Folder,
+        include_bytes!("../../assets/icons/folder.svg"),
+    ),
+    (
+        Icon::Upload,
+        include_bytes!("../../assets/icons/upload.svg"),
+    ),
+    (
+        Icon::ArrowLeft,
+        include_bytes!("../../assets/icons/arrow-left.svg"),
+    ),
+    (
+        Icon::PinOff,
+        include_bytes!("../../assets/icons/pin-off.svg"),
     ),
 ];
 
