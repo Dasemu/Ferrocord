@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.6.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -34,13 +34,13 @@ rand = "0.8"
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false }
 emojis = "0.9"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
-ksni = "0.3.7"
+ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
 # Renders the bundled SVG icon to ARGB pixmaps; already compiled for iced's svg.
 resvg = { version = "0.45", default-features = false }
 

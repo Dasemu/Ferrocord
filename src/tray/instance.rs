@@ -119,7 +119,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use super::{Primary, Role, SHOW_REQUESTED};
+    use super::{Primary, SHOW_REQUESTED};
 
     impl Primary {
         pub fn serve(self, _on_show: impl Fn() + Send + 'static) {}

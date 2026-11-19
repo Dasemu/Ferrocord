@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libssl-dev libdbus-1-dev libxkbcommon-dev \
-            libwayland-dev libfontconfig1-dev dbus
+            libwayland-dev libfontconfig1-dev dbus gnome-keyring
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -50,6 +50,27 @@ jobs:
       - name: cargo test tray_sni (private session bus)
         run: dbus-run-session -- cargo test --test tray_sni
 
+      # Real Secret Service: guards the zbus executor feature (tokio vs async-io)
+      # that keyring's blocking connection depends on.
+      - name: cargo test real_keyring (gnome-keyring on a private bus)
+        env:
+          FERRO_REAL_KEYRING: "1"
+        run: |
+          dbus-run-session -- sh -c 'echo | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test --test real_keyring -- --ignored'
+
       # `--all-targets` skips doctests.
       - name: cargo test --doc
         run: cargo test --doc
+
+  # The Linux job cannot see `cfg(windows)` breakage; build and test on Windows too.
+  windows:
+    name: windows build, test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build --all-targets
+      - name: cargo test
+        run: cargo test --all-targets

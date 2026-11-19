@@ -117,6 +117,7 @@ pub fn current() -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn dir_prefers_xdg_config_home() {
         assert_eq!(
