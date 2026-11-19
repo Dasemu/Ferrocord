@@ -64,6 +64,10 @@ fn channel_title(app: &App, c: &Channel) -> String {
     }
 }
 
+/// Where the header's help button leads (Discord's Help Center, as in the
+/// official client).
+const HELP_URL: &str = "https://support.discord.com";
+
 fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     let t = &app.theme;
     let p = t.palette;
@@ -156,7 +160,10 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
         members,
         search,
         tool(Icon::Inbox),
-        tool(Icon::CircleHelp)
+        button(tool(Icon::CircleHelp))
+            .padding(0)
+            .on_press(ui(Ui::OpenUrl(HELP_URL.to_owned())))
+            .style(theme::link_button(p))
     ]
     .spacing(16)
     .align_y(Alignment::Center);
