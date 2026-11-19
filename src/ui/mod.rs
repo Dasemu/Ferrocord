@@ -8,6 +8,7 @@ pub mod members;
 pub mod popups;
 pub mod rail;
 pub mod search;
+pub mod settings;
 pub mod sidebar;
 pub mod theme;
 
@@ -21,6 +22,11 @@ use crate::net::model::User;
 use theme::{FerroTheme, INTER_SEMIBOLD, Palette};
 
 pub type El<'a> = Element<'a, Message>;
+
+/// View of the (only) main window, in the shape `iced::daemon` expects.
+pub fn view_window(app: &App, _window: iced::window::Id) -> El<'_> {
+    view(app)
+}
 
 pub fn view(app: &App) -> El<'_> {
     let t = &app.theme;
@@ -54,6 +60,9 @@ pub fn view(app: &App) -> El<'_> {
         for layer in popups::layers(app) {
             content = stack![content, layer].into();
         }
+    }
+    if app.settings_open && app.screen() == Screen::Main {
+        content = stack![content, settings::view(app)].into();
     }
     if let Some(url) = &app.pending_link {
         content = stack![content, leave_dialog(t, url)].into();

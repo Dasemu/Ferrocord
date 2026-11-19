@@ -2,6 +2,7 @@
 //! everything that touches the network, disk or keyring runs in a `Task`.
 
 pub mod actions;
+mod background;
 pub mod emoji;
 pub mod images;
 pub mod input;
@@ -12,6 +13,7 @@ pub mod message;
 pub mod search;
 pub mod state;
 pub mod upload;
+pub mod window;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -23,6 +25,7 @@ use iced::{Subscription, Task};
 use actions::{Editing, MessageMenu, OpenPicker, ReplyDraft};
 pub use message::{Done, Message, Ui};
 use state::{ChatState, Ctx, Effect};
+use window::{Geometry, Prefs, WindowState};
 
 use crate::auth::secrets::{self, KeyringStore, MemoryStore, Secret, SecretStore};
 use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
@@ -36,6 +39,7 @@ use crate::net::rest::RestClient;
 use crate::net::types::ClientProperties;
 use crate::net::{ConnectionState, Event};
 use crate::store::Store;
+use crate::tray;
 use crate::ui::theme::FerroTheme;
 
 /// Minimum interval between typing notifications (the server shows the
@@ -113,6 +117,17 @@ pub struct App {
     first_frame_logged: bool,
     fonts_ready: bool,
     window_opened: bool,
+    /// Main-window lifecycle (visible / hidden to the tray).
+    pub win: WindowState,
+    window_id: Option<iced::window::Id>,
+    /// Size and position remembered while the window is closed.
+    geometry: Option<Geometry>,
+    pub prefs: Prefs,
+    /// "Open at login" (the autostart file exists).
+    pub autostart: bool,
+    pub settings_open: bool,
+    /// Handle to the running tray, once it registered.
+    tray_control: Option<tray::Control>,
 }
 
 pub fn now_ms() -> u64 {
@@ -150,6 +165,9 @@ impl App {
             std::process::exit(1);
         });
 
+        let prefs = Prefs::load(&store);
+        let start_hidden = cfg.minimized || prefs.start_minimized;
+        let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
         let mut app = App {
             theme,
             secrets,
@@ -192,7 +210,24 @@ impl App {
             first_frame_logged: false,
             fonts_ready: false,
             window_opened: false,
+            win,
+            window_id: None,
+            geometry: None,
+            prefs,
+            autostart: false,
+            settings_open: false,
+            tray_control: None,
             cfg,
+        };
+        app.window_focused = app.win.visible;
+        let open_window = app.run_window_action(first_action);
+        let autostart = if app.cfg.mock {
+            Task::none()
+        } else {
+            Task::perform(
+                async { tokio::task::spawn_blocking(tray::autostart::current).await },
+                |r| Message::Done(Done::AutostartLoaded(r.unwrap_or(false))),
+            )
         };
 
         let fonts = Task::batch(
@@ -234,7 +269,7 @@ impl App {
                 Message::Done(Done::TokenRestored(r.map_err(|e| e.user_message())))
             })
         };
-        (app, Task::batch([fonts, restore]))
+        (app, Task::batch([open_window, fonts, restore, autostart]))
     }
 
     fn boot_mock(&mut self) {
@@ -348,7 +383,7 @@ impl App {
                     });
                 }
             }
-            Some(ScreenshotScreen::Guild) | None => {
+            Some(ScreenshotScreen::Guild | ScreenshotScreen::Settings) | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
                 };
@@ -359,6 +394,7 @@ impl App {
                 self.chat.mark_read(mock::CH_GENERAL);
             }
         }
+        self.settings_open = screen == Some(ScreenshotScreen::Settings);
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
@@ -416,7 +452,9 @@ impl App {
             Message::Ui(u) => self.update_ui(u),
             Message::Net(ev) => self.on_net(ev),
             Message::Done(d) => self.on_done(d),
+            Message::Tray(ev) => self.on_tray(ev),
         };
+        self.sync_tray();
         if !self.first_frame_logged
             && self.cfg.trace_startup
             && self.fonts_ready
@@ -573,6 +611,17 @@ impl App {
                 self.window_opened = true;
                 Task::none()
             }
+            Ui::CloseRequested
+            | Ui::ToggleWindow
+            | Ui::ShowWindow
+            | Ui::HideWindow
+            | Ui::Quit
+            | Ui::OpenSettings
+            | Ui::CloseSettings
+            | Ui::ToggleCloseToTray
+            | Ui::ToggleStartMinimized
+            | Ui::ToggleMuted
+            | Ui::ToggleAutostart => self.update_background(u),
             Ui::Tick => {
                 self.chat.prune_typing(now_ms());
                 Task::none()
@@ -954,6 +1003,7 @@ impl App {
         }
         for fx in effects {
             match fx {
+                Effect::Notify(_) if self.prefs.muted => {}
                 Effect::Notify(n) => tasks.push(notify(n, self.cfg.mock)),
                 Effect::Ack(c, m) if !self.cfg.mock => {
                     let rest = self.rest.clone();
@@ -980,6 +1030,17 @@ impl App {
     fn on_done(&mut self, d: Done) -> Task<Message> {
         match d {
             Done::Ignored => Task::none(),
+            Done::AutostartLoaded(on) => {
+                self.autostart = on;
+                Task::none()
+            }
+            Done::AutostartChanged(r) => {
+                match r {
+                    Ok(on) => self.autostart = on,
+                    Err(e) => self.toast = Some(e),
+                }
+                Task::none()
+            }
             Done::FontsLoaded => {
                 self.fonts_ready = true;
                 if let Some((_, _)) = &self.cfg.screenshot {
@@ -1388,6 +1449,13 @@ impl App {
             input::record(&e);
             input_message(e, status)
         })];
+        if self.cfg.tray {
+            subs.push(Subscription::run(tray::events).map(Message::Tray));
+            subs.push(
+                Subscription::run(tray::instance::show_requests)
+                    .map(|()| Message::Ui(Ui::ShowWindow)),
+            );
+        }
         if self.cfg.mock {
             return Subscription::batch(subs);
         }
@@ -1441,6 +1509,9 @@ fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message>
         }
         iced::Event::Window(iced::window::Event::Opened { .. }) => {
             Some(Message::Ui(Ui::WindowOpened))
+        }
+        iced::Event::Window(iced::window::Event::CloseRequested) => {
+            Some(Message::Ui(Ui::CloseRequested))
         }
         iced::Event::Window(iced::window::Event::Unfocused) => {
             Some(Message::Ui(Ui::WindowFocus(false)))

@@ -4,7 +4,7 @@
 //! Values reproduce the layout and colour scheme of the official dark theme
 //! (measured from public screenshots); see `docs/protocol.md` §UI reference.
 
-use iced::widget::{button, container, scrollable, text_input};
+use iced::widget::{button, container, scrollable, text_input, toggler};
 use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, font};
 
 use crate::config::ThemeChoice;
@@ -428,6 +428,34 @@ pub fn icon_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Sty
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+/// Switch used by the settings dialog: green when on, like the official
+/// client.
+pub fn switch(p: Palette) -> impl Fn(&Theme, toggler::Status) -> toggler::Style {
+    move |_, status| {
+        let (on, hovered) = match status {
+            toggler::Status::Active { is_toggled } => (is_toggled, false),
+            toggler::Status::Hovered { is_toggled } => (is_toggled, true),
+            toggler::Status::Disabled { is_toggled } => (is_toggled, false),
+        };
+        let track = if on { p.success } else { p.status_offline };
+        toggler::Style {
+            background: Background::Color(if hovered {
+                Color { a: 0.9, ..track }
+            } else {
+                track
+            }),
+            background_border_width: 0.0,
+            background_border_color: Color::TRANSPARENT,
+            foreground: Background::Color(Color::WHITE),
+            foreground_border_width: 0.0,
+            foreground_border_color: Color::TRANSPARENT,
+            text_color: None,
+            border_radius: None,
+            padding_ratio: 0.2,
+        }
     }
 }
 

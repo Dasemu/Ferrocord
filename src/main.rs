@@ -7,6 +7,7 @@
 use ferrocord::app::App;
 use ferrocord::config::{APP_ID, Config};
 use ferrocord::error::log_sink::LogSink;
+use ferrocord::tray::instance::{self, Role};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> iced::Result {
@@ -43,28 +44,34 @@ fn main() -> iced::Result {
         "starting Ferrocord"
     );
 
-    let window = iced::window::Settings {
-        size: iced::Size::new(1280.0, 800.0),
-        min_size: Some(iced::Size::new(940.0, 500.0)),
-        resizable: cfg.screenshot.is_none(),
-        platform_specific: iced::window::settings::PlatformSpecific {
-            #[cfg(target_os = "linux")]
-            application_id: APP_ID.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let _ = APP_ID;
+    // One instance (and one tray icon): a second launch asks the running
+    // one to show its window and exits. Screenshots never take the lock.
+    if cfg.tray {
+        let name = if cfg.mock {
+            format!("{APP_ID}.mock")
+        } else {
+            APP_ID.to_owned()
+        };
+        match instance::acquire(&name, !cfg.minimized) {
+            Role::Primary(p) => p.serve(instance::request_show_locally),
+            Role::Secondary => {
+                tracing::info!("already running; asked it to show its window");
+                return Ok(());
+            }
+        }
+    }
+
     let theme = ferrocord::ui::theme::FerroTheme::new(cfg.theme).iced_theme();
-    iced::application(
+    // A daemon, not an application: hiding to the tray closes the window
+    // (freeing the renderer) while the app keeps running.
+    iced::daemon(
         move || App::boot(cfg.clone()),
         App::update,
-        ferrocord::ui::view,
+        ferrocord::ui::view_window,
     )
-    .title(App::title)
+    .title(|app: &App, _window: iced::window::Id| app.title())
     .subscription(App::subscription)
-    .theme(move |_: &App| theme.clone())
-    .window(window)
+    .theme(move |_: &App, _window: iced::window::Id| theme.clone())
     .default_font(ferrocord::ui::theme::INTER)
     .antialiasing(true)
     .run()

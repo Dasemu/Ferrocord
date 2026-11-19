@@ -403,10 +403,10 @@ impl Store {
         Ok(())
     }
 
-    /// Wipes everything (logout).
+    /// Wipes everything (logout) except user preferences (`pref.*` meta).
     pub fn clear(&self) -> Result<()> {
         self.lock()?.execute_batch(
-            "DELETE FROM meta; DELETE FROM users; DELETE FROM guilds;
+            "DELETE FROM meta WHERE key NOT LIKE 'pref.%'; DELETE FROM users; DELETE FROM guilds;
              DELETE FROM channels; DELETE FROM messages; DELETE FROM read_states;",
         )?;
         Ok(())
