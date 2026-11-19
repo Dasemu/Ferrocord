@@ -29,6 +29,7 @@ pub enum ScreenshotScreen {
     Embeds,
     Search,
     Compose,
+    Settings,
 }
 
 impl ScreenshotScreen {
@@ -40,6 +41,7 @@ impl ScreenshotScreen {
             "embeds" | "attachments" => Some(Self::Embeds),
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
+            "settings" => Some(Self::Settings),
             _ => None,
         }
     }
@@ -90,6 +92,11 @@ pub struct Config {
     pub mock: bool,
     /// `--screenshot <screen> <out.png>`.
     pub screenshot: Option<(ScreenshotScreen, PathBuf)>,
+    /// `--minimized`: start with no window, only the tray icon.
+    pub minimized: bool,
+    /// System tray and background mode (off with `--no-tray`, and in
+    /// screenshot mode).
+    pub tray: bool,
     pub theme: ThemeChoice,
     pub gateway_url: String,
     pub api_url: String,
@@ -110,22 +117,26 @@ impl Config {
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut mock = false;
         let mut screenshot = None;
+        let mut minimized = false;
+        let mut no_tray = false;
         let mut args = args.into_iter().skip(1);
         while let Some(a) = args.next() {
             match a.as_str() {
                 "--mock" => mock = true,
+                "--minimized" => minimized = true,
+                "--no-tray" => no_tray = true,
                 "--screenshot" => {
                     let screen = args
                         .next()
                         .and_then(|s| ScreenshotScreen::parse(&s))
                         .ok_or(
-                            "--screenshot needs one of: login, guild, dms, embeds, search, compose",
+                            "--screenshot needs one of: login, guild, dms, embeds, search, compose, settings",
                         )?;
                     let out = args.next().ok_or("--screenshot needs an output path")?;
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--screenshot <login|guild|dms|embeds|search|compose> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }
@@ -151,9 +162,12 @@ impl Config {
         for u in [&api_url, &cdn_url] {
             validate_http_url(u)?;
         }
+        let tray = !no_tray && screenshot.is_none();
         Ok(Self {
             mock,
             screenshot,
+            minimized,
+            tray,
             theme,
             gateway_url,
             api_url,
@@ -174,6 +188,8 @@ impl Config {
         Self {
             mock: true,
             screenshot: None,
+            minimized: false,
+            tray: false,
             theme: ThemeChoice::Dark,
             gateway_url: DEFAULT_GATEWAY_URL.into(),
             api_url: DEFAULT_API_URL.into(),
@@ -225,6 +241,18 @@ mod tests {
         assert!(validate_http_url("http://127.0.0.1:8080").is_ok());
         assert!(validate_http_url("http://example.com").is_err());
         assert!(validate_http_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn parses_tray_flags() {
+        let c = Config::from_args(args(&["--mock", "--minimized"])).unwrap();
+        assert!(c.minimized && c.tray);
+        let c = Config::from_args(args(&["--no-tray"])).unwrap();
+        assert!(!c.tray && !c.minimized);
+        // Screenshots never use the tray.
+        let c = Config::from_args(args(&["--screenshot", "settings", "/tmp/x.png"])).unwrap();
+        assert!(!c.tray);
+        assert_eq!(c.screenshot.unwrap().0, ScreenshotScreen::Settings);
     }
 
     #[test]

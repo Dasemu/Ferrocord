@@ -288,3 +288,18 @@ channel per guild and the last view are stored in SQLite `meta`.
 | link | `#00a8fc` | `#006ce7` |
 
 Metrics are in `ui::theme::Metrics::DEFAULT` and `docs/protocol.md` §7.
+
+**Tray and background mode (`src/tray/`, `app/window.rs`, `app/background.rs`).**
+The app is an `iced::daemon`. A pure state machine (`app::window::WindowState`)
+decides between show / hide / quit: with a StatusNotifierWatcher on the bus,
+closing the window CLOSES it (renderer and surfaces are freed, the gateway
+stays connected); without one, closing quits. `tray::sni` (Linux, `ksni`)
+exports the StatusNotifierItem: left click toggles, menu = Show/Hide, Status
+(Online / Idle / Do Not Disturb / Invisible), Mute notifications, Start
+minimized, Quit; `NeedsAttention` plus a red-badge icon and the mention count
+in the tooltip while `ChatState::attention_count() > 0`. Other platforms use
+`tray::stub` (no tray; not implemented). `tray::instance` is a Unix-socket
+single-instance lock (a second launch shows the window); `tray::autostart`
+writes `~/.config/autostart/dev.ferro.ferrocord.desktop` with `--minimized`.
+Preferences live in SQLite `meta` under `pref.*` (kept on logout). Flags:
+`--minimized`, `--no-tray`.

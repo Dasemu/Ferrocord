@@ -14,6 +14,8 @@ static CURSOR_X: AtomicU32 = AtomicU32::new(0);
 static CURSOR_Y: AtomicU32 = AtomicU32::new(0);
 static WIN_W: AtomicU32 = AtomicU32::new(1280f32.to_bits());
 static WIN_H: AtomicU32 = AtomicU32::new(800f32.to_bits());
+static WIN_X: AtomicU32 = AtomicU32::new(f32::NAN.to_bits());
+static WIN_Y: AtomicU32 = AtomicU32::new(f32::NAN.to_bits());
 static SHIFT: AtomicBool = AtomicBool::new(false);
 
 fn load(a: &AtomicU32) -> f32 {
@@ -34,8 +36,19 @@ pub fn record(event: &iced::Event) {
             WIN_W.store(size.width.to_bits(), Ordering::Relaxed);
             WIN_H.store(size.height.to_bits(), Ordering::Relaxed);
         }
+        iced::Event::Window(iced::window::Event::Moved(p)) => {
+            WIN_X.store(p.x.to_bits(), Ordering::Relaxed);
+            WIN_Y.store(p.y.to_bits(), Ordering::Relaxed);
+        }
         _ => {}
     }
+}
+
+/// Last reported window position; `None` where the platform never reports
+/// one (Wayland).
+pub fn window_position() -> Option<Point> {
+    let (x, y) = (load(&WIN_X), load(&WIN_Y));
+    (x.is_finite() && y.is_finite()).then(|| Point::new(x, y))
 }
 
 pub fn cursor() -> Point {

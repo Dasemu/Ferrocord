@@ -16,6 +16,8 @@ pub enum Message {
     Ui(Ui),
     Net(net::Event),
     Done(Done),
+    /// Events from the system tray service.
+    Tray(crate::tray::Event),
 }
 
 /// User input.
@@ -90,11 +92,29 @@ pub enum Ui {
     CloseSearch,
     /// A notification was clicked.
     OpenChannel(ChannelId),
+    // -- window and tray
+    /// The window's close button (or Alt+F4).
+    CloseRequested,
+    ToggleWindow,
+    ShowWindow,
+    HideWindow,
+    Quit,
+    OpenSettings,
+    CloseSettings,
+    ToggleCloseToTray,
+    ToggleStartMinimized,
+    /// Tray "Mute notifications" / settings toggle.
+    ToggleMuted,
+    ToggleAutostart,
 }
 
 /// Completion of a `Task`.
 #[derive(Debug, Clone)]
 pub enum Done {
+    /// Autostart entry written or removed: the resulting state.
+    AutostartChanged(Result<bool, String>),
+    /// Initial autostart state read from disk.
+    AutostartLoaded(bool),
     FontsLoaded,
     /// Keyring read: `Ok(true)` if a token was found (it is moved into the
     /// app through `TokenReady`, never through a cloned message).

@@ -1,0 +1,178 @@
+//! Window lifecycle and system tray glue: turns `window::Action`s into
+//! iced window tasks and keeps the tray in sync with the app state.
+
+use iced::Task;
+
+use super::message::{Done, Message, Ui};
+use super::window::{self, Action, Geometry};
+use super::{App, input};
+use crate::auth::AuthState;
+use crate::tray::{self, TrayModel};
+
+impl App {
+    /// Carries out a window decision.
+    pub(super) fn run_window_action(&mut self, action: Action) -> Task<Message> {
+        match action {
+            Action::None => Task::none(),
+            Action::Open => {
+                if self.window_id.is_some() {
+                    return Task::none();
+                }
+                let settings =
+                    window::window_settings(self.cfg.screenshot.is_none(), self.geometry);
+                let (id, open) = iced::window::open(settings);
+                self.window_id = Some(id);
+                if self.window_opened {
+                    // A re-opened window: the Focused event follows.
+                    self.window_focused = false;
+                }
+                open.map(|_| Message::Done(Done::Ignored))
+            }
+            Action::Close => {
+                let Some(id) = self.window_id.take() else {
+                    return Task::none();
+                };
+                self.geometry = Some(Geometry {
+                    size: input::window_size(),
+                    position: input::window_position(),
+                });
+                // No Unfocused event arrives for a closed window; without
+                // this, notifications for the open chat would stay muted.
+                self.window_focused = false;
+                self.menu = None;
+                self.emoji_picker = None;
+                self.release_view_caches();
+                iced::window::close(id)
+            }
+            Action::Raise => match self.window_id {
+                Some(id) => Task::batch([
+                    iced::window::minimize(id, false),
+                    iced::window::gain_focus(id),
+                ]),
+                None => Task::none(),
+            },
+            Action::Exit => iced::exit(),
+        }
+    }
+
+    /// Drops state that only exists to speed up drawing; it is rebuilt on
+    /// the next frame after the window comes back.
+    fn release_view_caches(&mut self) {
+        self.md_cache.borrow_mut().clear();
+        self.md_cache.borrow_mut().shrink_to_fit();
+    }
+
+    pub(super) fn show_window(&mut self) -> Task<Message> {
+        let a = self.win.show();
+        self.run_window_action(a)
+    }
+
+    pub(super) fn on_tray(&mut self, ev: tray::Event) -> Task<Message> {
+        match ev {
+            tray::Event::Ready(control) => {
+                self.win.tray_ready();
+                self.tray_control = Some(control);
+                Task::none()
+            }
+            tray::Event::Available => {
+                self.win.tray_ready();
+                Task::none()
+            }
+            tray::Event::Unavailable => {
+                let a = self.win.tray_lost();
+                self.run_window_action(a)
+            }
+            tray::Event::Command(c) => self.update_ui(window::command_to_ui(c)),
+        }
+    }
+
+    /// What the tray should currently show.
+    pub fn tray_model(&self) -> TrayModel {
+        TrayModel {
+            visible: self.win.visible,
+            logged_in: matches!(self.auth, AuthState::LoggedIn { .. }),
+            status: self.chat.my_status,
+            muted: self.prefs.muted,
+            start_minimized: self.prefs.start_minimized,
+            mentions: self.chat.attention_count(),
+        }
+    }
+
+    /// Pushes the current state to the tray (a no-op when unchanged).
+    pub(super) fn sync_tray(&self) {
+        if let Some(control) = &self.tray_control {
+            control.publish(self.tray_model());
+        }
+    }
+
+    fn save_pref(&self, key: &'static str, on: bool) -> Task<Message> {
+        let store = self.store.clone();
+        Task::perform(
+            async move {
+                store
+                    .blocking(move |s| s.set_meta(key, if on { "1" } else { "0" }))
+                    .await
+            },
+            |_| Message::Done(Done::Ignored),
+        )
+    }
+
+    /// Window, tray and settings messages.
+    pub(super) fn update_background(&mut self, u: Ui) -> Task<Message> {
+        match u {
+            Ui::CloseRequested => {
+                let a = self.win.close_requested();
+                self.run_window_action(a)
+            }
+            Ui::ToggleWindow => {
+                let a = self.win.toggle();
+                self.run_window_action(a)
+            }
+            Ui::ShowWindow => self.show_window(),
+            Ui::HideWindow => {
+                let a = self.win.hide();
+                self.run_window_action(a)
+            }
+            Ui::Quit => iced::exit(),
+            Ui::OpenSettings => {
+                self.settings_open = true;
+                self.status_menu = false;
+                Task::none()
+            }
+            Ui::CloseSettings => {
+                self.settings_open = false;
+                Task::none()
+            }
+            Ui::ToggleCloseToTray => {
+                self.prefs.close_to_tray = !self.prefs.close_to_tray;
+                self.win.close_to_tray = self.prefs.close_to_tray;
+                self.save_pref(window::KEY_CLOSE_TO_TRAY, self.prefs.close_to_tray)
+            }
+            Ui::ToggleStartMinimized => {
+                self.prefs.start_minimized = !self.prefs.start_minimized;
+                self.save_pref(window::KEY_START_MINIMIZED, self.prefs.start_minimized)
+            }
+            Ui::ToggleMuted => {
+                self.prefs.muted = !self.prefs.muted;
+                self.save_pref(window::KEY_MUTED, self.prefs.muted)
+            }
+            Ui::ToggleAutostart => {
+                let want = !self.autostart;
+                if self.cfg.mock {
+                    // Mock mode never writes to disk.
+                    self.autostart = want;
+                    return Task::none();
+                }
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || tray::autostart::set_enabled(want))
+                            .await
+                            .unwrap_or_else(|e| Err(e.to_string()))
+                    },
+                    |r| Message::Done(Done::AutostartChanged(r)),
+                )
+            }
+            _ => Task::none(),
+        }
+    }
+}
