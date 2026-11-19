@@ -97,7 +97,27 @@ fn guild(id: GuildId, name: &str, roles: Vec<Role>) -> Guild {
         icon: None,
         roles,
         owner_id: Some(user(3).id),
+        emojis: vec![],
+        premium_tier: 0,
     }
+}
+
+fn custom_emoji(mut g: Guild) -> Guild {
+    g.emojis = vec![
+        CustomEmoji {
+            id: Snowflake(1001),
+            name: "ferris".into(),
+            animated: false,
+            available: true,
+        },
+        CustomEmoji {
+            id: Snowflake(1002),
+            name: "party".into(),
+            animated: false,
+            available: true,
+        },
+    ];
+    g
 }
 
 fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
@@ -228,7 +248,7 @@ pub fn ready() -> ReadyData {
         session_id: "mock-session".into(),
         resume_gateway_url: None,
         guilds: vec![
-            guild(
+            custom_emoji(guild(
                 GUILD_RUST,
                 "Rust Programming",
                 vec![
@@ -237,7 +257,7 @@ pub fn ready() -> ReadyData {
                     role(ROLE_CORE, "Core Team", 0xe67e22, 4),
                     role(ROLE_BOT, "Bot", 0x9b59b6, 2),
                 ],
-            ),
+            )),
             guild(GUILD_ICED, "Iced GUI", vec![]),
             guild(GUILD_LINUX, "Linux Desktop", vec![]),
             guild(GUILD_GAMES, "Game Night", vec![]),
@@ -252,6 +272,59 @@ pub fn ready() -> ReadyData {
         muted_channels: vec![],
         suppress_everyone: vec![],
         suppress_roles: vec![],
+        presences: vec![
+            (Snowflake(2), Presence::Online),
+            (Snowflake(3), Presence::Idle),
+            (Snowflake(4), Presence::Dnd),
+        ],
+        my_status: Some(Presence::Online),
+        premium_type: 0,
+    }
+}
+
+/// Member list of the mock Rust server, as the server would send it.
+pub fn member_list() -> MemberListUpdate {
+    let member = |n: u64, roles: &[RoleId], presence: Presence| {
+        MemberItem::Member(Box::new(MemberEntry {
+            user: user(n),
+            nick: None,
+            roles: roles.to_vec(),
+            presence,
+        }))
+    };
+    let group = |id: &str, count: u32| MemberItem::Group {
+        id: id.into(),
+        count,
+    };
+    let groups = vec![
+        (ROLE_CORE.to_string(), 1),
+        (ROLE_MOD.to_string(), 1),
+        (ROLE_BOT.to_string(), 1),
+        ("online".to_string(), 2),
+        ("offline".to_string(), 1),
+    ];
+    MemberListUpdate {
+        guild_id: GUILD_RUST,
+        list_id: "everyone".into(),
+        member_count: 6,
+        online_count: 5,
+        groups,
+        ops: vec![MemberOp::Sync {
+            start: 0,
+            items: vec![
+                group(&ROLE_CORE.to_string(), 1),
+                member(2, &[ROLE_CORE], Presence::Online),
+                group(&ROLE_MOD.to_string(), 1),
+                member(3, &[ROLE_MOD], Presence::Idle),
+                group(&ROLE_BOT.to_string(), 1),
+                member(5, &[ROLE_BOT], Presence::Online),
+                group("online", 2),
+                member(1, &[ROLE_MEMBER], Presence::Online),
+                member(4, &[ROLE_MEMBER], Presence::Dnd),
+                group("offline", 1),
+                member(6, &[], Presence::Offline),
+            ],
+        }],
     }
 }
 
@@ -271,6 +344,8 @@ pub fn text_message(channel: ChannelId, id: MessageId, author: User, content: &s
         mention_everyone: false,
         author_roles: vec![],
         reply_to: None,
+        referenced: None,
+        reactions: vec![],
         nonce: None,
         kind: 0,
         pending: false,
@@ -439,6 +514,35 @@ fn general(channel: ChannelId) -> Vec<Message> {
         ),
     ];
     v[7].mentions = vec![ME];
+    v[2].edited = true;
+    let react = |emoji: Emoji, count: u32, me: bool| Reaction { emoji, count, me };
+    v[3].reactions = vec![
+        react(Emoji::unicode("👍"), 3, true),
+        react(Emoji::unicode("🎉"), 2, false),
+        react(
+            Emoji {
+                id: Some(Snowflake(1001)),
+                name: "ferris".into(),
+                animated: false,
+            },
+            1,
+            false,
+        ),
+    ];
+    // A reply from the logged-in user, so edit/delete and the reply header
+    // are visible in screenshots.
+    let mut reply = gm(
+        channel,
+        50,
+        0,
+        1,
+        &[ROLE_MEMBER],
+        "agreed, and `let` chains stabilised smoothly too",
+    );
+    reply.kind = 19;
+    reply.reply_to = Some(v[1].id);
+    reply.referenced = Some(Box::new(ReplyPreview::from_message(&v[1])));
+    v.insert(5, reply);
     v.iter_mut().for_each(|m| m.channel_id = channel);
     v
 }

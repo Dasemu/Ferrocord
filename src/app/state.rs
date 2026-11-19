@@ -23,6 +23,10 @@ pub struct MessageWindow {
     pub loading: bool,
     /// History was fetched from the network since connect.
     pub synced: bool,
+    /// The window shows an old part of the channel (after a jump): newer
+    /// messages exist that are not loaded, so live messages are not
+    /// appended.
+    pub detached: bool,
 }
 
 impl MessageWindow {
@@ -65,6 +69,24 @@ impl MessageWindow {
             pos
         };
         self.messages.insert(pos, msg);
+    }
+
+    pub fn get(&self, id: MessageId) -> Option<&Message> {
+        self.messages.iter().find(|m| m.id == id)
+    }
+
+    pub fn get_mut(&mut self, id: MessageId) -> Option<&mut Message> {
+        self.messages.iter_mut().find(|m| m.id == id)
+    }
+
+    /// Replaces the whole window (used after a jump to a message).
+    pub fn replace(&mut self, msgs: Vec<Message>, detached: bool) {
+        self.messages = msgs.into_iter().collect();
+        self.messages.make_contiguous().sort_by_key(|m| m.id);
+        self.detached = detached;
+        self.loading = false;
+        self.synced = true;
+        self.reached_start = false;
     }
 
     fn trim_front(&mut self, max: usize) {
@@ -153,6 +175,24 @@ pub struct ChatState {
     pub suppress_everyone: HashSet<GuildId>,
     /// Servers where role mentions do not count.
     pub suppress_roles: HashSet<GuildId>,
+    /// Last known status per user (friends, members of subscribed guilds).
+    pub presence: HashMap<UserId, Presence>,
+    /// The user's own status.
+    pub my_status: Presence,
+    /// Nitro type of the current user (upload limit).
+    pub premium_type: u8,
+    /// Member list of the guild whose sidebar is open.
+    pub member_list: Option<super::members::MemberListState>,
+}
+
+/// Cap on remembered presences.
+const MAX_PRESENCES: usize = 20_000;
+
+/// Result of toggling a reaction locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactionChange {
+    Added,
+    Removed,
 }
 
 impl ChatState {
@@ -191,6 +231,15 @@ impl ChatState {
         self.muted_channels = r.muted_channels.iter().copied().collect();
         self.suppress_everyone = r.suppress_everyone.iter().copied().collect();
         self.suppress_roles = r.suppress_roles.iter().copied().collect();
+        // Presences from READY replace what we knew (stale after a
+        // reconnect); our own status comes from the settings.
+        self.presence = r.presences.iter().copied().collect();
+        if let Some(s) = r.my_status {
+            self.my_status = s;
+        }
+        if r.me.is_some() {
+            self.premium_type = r.premium_type;
+        }
         // Cached windows stay, but must be re-synced from the network.
         for w in self.messages.values_mut() {
             w.synced = false;
@@ -302,9 +351,281 @@ impl ChatState {
                     self.messages.remove(&c);
                 }
             }
+            Event::Reaction(r) => self.apply_reaction(r),
+            Event::PresenceUpdate { user_id, status } => self.set_presence(*user_id, *status),
+            Event::MemberList(u) => {
+                if let Some(l) = self.member_list.as_mut() {
+                    l.apply(u);
+                }
+                for op in &u.ops {
+                    match op {
+                        MemberOp::Sync { items, .. } => {
+                            for i in items {
+                                self.learn_member(i);
+                            }
+                        }
+                        MemberOp::Insert { item, .. } | MemberOp::Update { item, .. } => {
+                            self.learn_member(item)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::GuildEmojis { guild_id, emojis } => {
+                if let Some(g) = self.guilds.iter_mut().find(|g| g.id == *guild_id) {
+                    g.emojis.clone_from(emojis);
+                }
+            }
             Event::Connection(_) | Event::Resumed | Event::AuthFailed | Event::Fatal(_) => {}
         }
         fx
+    }
+
+    fn learn_member(&mut self, item: &MemberItem) {
+        if let MemberItem::Member(m) = item {
+            self.users
+                .entry(m.user.id)
+                .or_insert_with(|| m.user.clone());
+            self.set_presence(m.user.id, m.presence);
+        }
+    }
+
+    pub fn set_presence(&mut self, user: UserId, status: Presence) {
+        if Some(user) == self.me_id() {
+            // The own status is authoritative from settings/our setter;
+            // presence echoes only refine online/idle/dnd.
+            if status.is_online() {
+                self.my_status = status;
+            }
+            return;
+        }
+        if self.presence.len() >= MAX_PRESENCES && !self.presence.contains_key(&user) {
+            self.presence.clear();
+        }
+        self.presence.insert(user, status);
+    }
+
+    /// Status of `user` for the dot next to their avatar.
+    pub fn presence_of(&self, user: UserId) -> Presence {
+        if Some(user) == self.me_id() {
+            return self.my_status;
+        }
+        self.presence.get(&user).copied().unwrap_or_default()
+    }
+
+    // -- messages: lookup and local edits ------------------------------------
+
+    pub fn message(&self, c: ChannelId, id: MessageId) -> Option<&Message> {
+        self.messages.get(&c)?.get(id)
+    }
+
+    /// Reply header for `m`: the snapshot it came with, refreshed from the
+    /// loaded window when the original is there (edits, deletions).
+    pub fn reply_preview(&self, m: &Message) -> Option<ReplyPreview> {
+        let base = m.referenced.as_deref()?;
+        let Some(id) = base.message_id.or(m.reply_to) else {
+            return Some(base.clone());
+        };
+        if let Some(orig) = self.message(m.channel_id, id) {
+            return Some(ReplyPreview::from_message(orig));
+        }
+        Some(base.clone())
+    }
+
+    /// Applies an edit confirmed by the server.
+    pub fn set_content(&mut self, c: ChannelId, id: MessageId, content: &str) {
+        if let Some(m) = self.messages.get_mut(&c).and_then(|w| w.get_mut(id)) {
+            m.content = content.to_owned();
+            m.edited = true;
+        }
+    }
+
+    pub fn remove_message(&mut self, c: ChannelId, id: MessageId) {
+        if let Some(w) = self.messages.get_mut(&c) {
+            w.messages.retain(|m| m.id != id);
+        }
+    }
+
+    // -- reactions -------------------------------------------------------------
+
+    /// Toggles the current user's reaction locally (optimistic). Returns
+    /// what happened, so the caller can send the matching request.
+    pub fn toggle_reaction(
+        &mut self,
+        c: ChannelId,
+        id: MessageId,
+        emoji: &Emoji,
+    ) -> Option<ReactionChange> {
+        let m = self.messages.get_mut(&c)?.get_mut(id)?;
+        match m.reactions.iter().position(|r| r.emoji == *emoji) {
+            Some(i) if m.reactions[i].me => {
+                let r = &mut m.reactions[i];
+                r.me = false;
+                r.count = r.count.saturating_sub(1);
+                if r.count == 0 {
+                    m.reactions.remove(i);
+                }
+                Some(ReactionChange::Removed)
+            }
+            Some(i) => {
+                let r = &mut m.reactions[i];
+                r.me = true;
+                r.count += 1;
+                Some(ReactionChange::Added)
+            }
+            None => {
+                m.reactions.push(Reaction {
+                    emoji: emoji.clone(),
+                    count: 1,
+                    me: true,
+                });
+                Some(ReactionChange::Added)
+            }
+        }
+    }
+
+    /// Reverts [`toggle_reaction`](Self::toggle_reaction) after a failed
+    /// request.
+    pub fn revert_reaction(
+        &mut self,
+        c: ChannelId,
+        id: MessageId,
+        emoji: &Emoji,
+        change: ReactionChange,
+    ) {
+        match change {
+            ReactionChange::Added => self.set_reaction(c, id, emoji, false),
+            ReactionChange::Removed => self.set_reaction(c, id, emoji, true),
+        }
+    }
+
+    /// Sets the current user's presence in a reaction, idempotently.
+    fn set_reaction(&mut self, c: ChannelId, id: MessageId, emoji: &Emoji, me: bool) {
+        let Some(m) = self.messages.get_mut(&c).and_then(|w| w.get_mut(id)) else {
+            return;
+        };
+        let pos = m.reactions.iter().position(|r| r.emoji == *emoji);
+        match (pos, me) {
+            (Some(i), true) => {
+                let r = &mut m.reactions[i];
+                if !r.me {
+                    r.me = true;
+                    r.count += 1;
+                }
+            }
+            (None, true) => m.reactions.push(Reaction {
+                emoji: emoji.clone(),
+                count: 1,
+                me: true,
+            }),
+            (Some(i), false) => {
+                let r = &mut m.reactions[i];
+                if r.me {
+                    r.me = false;
+                    r.count = r.count.saturating_sub(1);
+                }
+                if r.count == 0 {
+                    m.reactions.remove(i);
+                }
+            }
+            (None, false) => {}
+        }
+    }
+
+    /// Applies MESSAGE_REACTION_* from the gateway. Our own add/remove echo
+    /// is idempotent with the optimistic update.
+    pub fn apply_reaction(&mut self, ev: &ReactionEvent) {
+        let me = self.me_id();
+        match ev {
+            ReactionEvent::Add {
+                channel_id,
+                message_id,
+                user_id,
+                emoji,
+            } => {
+                let Some(m) = self
+                    .messages
+                    .get_mut(channel_id)
+                    .and_then(|w| w.get_mut(*message_id))
+                else {
+                    return;
+                };
+                let is_me = Some(*user_id) == me;
+                match m.reactions.iter_mut().find(|r| r.emoji == *emoji) {
+                    Some(r) => {
+                        if is_me {
+                            if !r.me {
+                                r.me = true;
+                                r.count += 1;
+                            }
+                        } else {
+                            r.count += 1;
+                        }
+                    }
+                    None => m.reactions.push(Reaction {
+                        emoji: emoji.clone(),
+                        count: 1,
+                        me: is_me,
+                    }),
+                }
+            }
+            ReactionEvent::Remove {
+                channel_id,
+                message_id,
+                user_id,
+                emoji,
+            } => {
+                let is_me = Some(*user_id) == me;
+                let Some(m) = self
+                    .messages
+                    .get_mut(channel_id)
+                    .and_then(|w| w.get_mut(*message_id))
+                else {
+                    return;
+                };
+                let Some(i) = m.reactions.iter().position(|r| r.emoji == *emoji) else {
+                    return;
+                };
+                let r = &mut m.reactions[i];
+                if is_me {
+                    // Already removed locally: nothing to do.
+                    if r.me {
+                        r.me = false;
+                        r.count = r.count.saturating_sub(1);
+                    }
+                } else {
+                    r.count = r.count.saturating_sub(1);
+                }
+                if m.reactions[i].count == 0 {
+                    m.reactions.remove(i);
+                }
+            }
+            ReactionEvent::RemoveAll {
+                channel_id,
+                message_id,
+            } => {
+                if let Some(m) = self
+                    .messages
+                    .get_mut(channel_id)
+                    .and_then(|w| w.get_mut(*message_id))
+                {
+                    m.reactions.clear();
+                }
+            }
+            ReactionEvent::RemoveEmoji {
+                channel_id,
+                message_id,
+                emoji,
+            } => {
+                if let Some(m) = self
+                    .messages
+                    .get_mut(channel_id)
+                    .and_then(|w| w.get_mut(*message_id))
+                {
+                    m.reactions.retain(|r| r.emoji != *emoji);
+                }
+            }
+        }
     }
 
     fn on_message_create(&mut self, m: &Message, ctx: &Ctx, fx: &mut Vec<Effect>) {
@@ -329,7 +650,9 @@ impl ChatState {
         }
         // Only keep a window for channels that already have one (opened
         // before); others are fetched when opened.
-        if let Some(w) = self.messages.get_mut(&m.channel_id) {
+        if let Some(w) = self.messages.get_mut(&m.channel_id)
+            && (!w.detached || own_pending_echo(w, m))
+        {
             w.upsert(m.clone());
             w.trim_front(MESSAGE_WINDOW_MAX);
         }
@@ -706,8 +1029,16 @@ impl ChatState {
         content: String,
         nonce: String,
         now_ms: u64,
+        reply: Option<MessageId>,
     ) -> Option<Message> {
         let me = self.me.clone()?;
+        let referenced = reply.map(|id| {
+            Box::new(
+                self.message(c, id)
+                    .map(ReplyPreview::from_message)
+                    .unwrap_or_else(|| ReplyPreview::deleted(Some(id))),
+            )
+        });
         let guild_id = self.channels.get(&c).and_then(|c| c.guild_id);
         let author_roles = guild_id
             .and_then(|g| self.my_roles.get(&g).cloned())
@@ -725,9 +1056,11 @@ impl ChatState {
             mention_roles: vec![],
             mention_everyone: false,
             author_roles,
-            reply_to: None,
+            reply_to: reply,
+            referenced,
+            reactions: vec![],
             nonce: Some(nonce),
-            kind: 0,
+            kind: if reply.is_some() { 19 } else { 0 },
             pending: true,
             failed: false,
         };
@@ -747,12 +1080,21 @@ impl ChatState {
     }
 }
 
+/// A server echo of one of our pending messages is always applied.
+fn own_pending_echo(w: &MessageWindow, m: &Message) -> bool {
+    m.nonce.as_ref().is_some_and(|n| {
+        w.messages
+            .iter()
+            .any(|p| p.pending && p.nonce.as_ref() == Some(n))
+    })
+}
+
 /// Whether message `b` continues the group started by `a` (same author,
 /// within 7 minutes, no reply/system message).
 pub fn continues_group(a: &Message, b: &Message) -> bool {
     a.author.id == b.author.id
         && b.reply_to.is_none()
-        && matches!(b.kind, 0 | 19)
+        && b.kind == 0
         && matches!(a.kind, 0 | 19)
         && b.timestamp_ms().saturating_sub(a.timestamp_ms()) < GROUP_WINDOW_MS
 }
@@ -1037,7 +1379,7 @@ mod tests {
         let mut s = loaded();
         let ch = mock::CH_GENERAL;
         let p = s
-            .push_pending(ch, "hi".into(), "n1".into(), ctx().now_ms)
+            .push_pending(ch, "hi".into(), "n1".into(), ctx().now_ms, None)
             .unwrap();
         assert!(s.messages[&ch].messages.back().unwrap().pending);
         let mut echo = msg_in(&s, ch, s.me.clone().unwrap(), "hi");
@@ -1052,7 +1394,7 @@ mod tests {
     fn failed_send_is_marked() {
         let mut s = loaded();
         let ch = mock::CH_GENERAL;
-        s.push_pending(ch, "x".into(), "n2".into(), 0);
+        s.push_pending(ch, "x".into(), "n2".into(), 0, None);
         s.mark_failed(ch, "n2");
         assert!(s.messages[&ch].messages.back().unwrap().failed);
     }
@@ -1179,6 +1521,8 @@ mod tests {
             icon: None,
             roles: vec![],
             owner_id: None,
+            emojis: vec![],
+            premium_tier: 0,
         };
         let ch = Channel {
             id: Snowflake(778),
