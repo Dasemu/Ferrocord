@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
+use super::extras::SearchQuery;
 use super::model::*;
 use super::ratelimit::{RateLimitHeaders, RateLimiter, route_key};
 use super::types::{
@@ -354,7 +355,18 @@ impl RestClient {
     /// Discord answers 202 while it builds the index; that is retried a few
     /// times, honouring `retry_after`.
     pub async fn search(&self, scope: SearchScope, query: &str, offset: u32) -> Result<SearchPage> {
-        let path = search_path(scope, query, offset);
+        self.search_query(scope, &SearchQuery::text(query), offset)
+            .await
+    }
+
+    /// Search with `from:` / `has:` / `in:` filters.
+    pub async fn search_query(
+        &self,
+        scope: SearchScope,
+        query: &SearchQuery,
+        offset: u32,
+    ) -> Result<SearchPage> {
+        let path = search_path_q(scope, query, offset);
         for attempt in 0..4 {
             let v = self.request(Method::GET, &path, None).await?;
             if let Some(wait) = search_not_ready(&v) {
@@ -565,14 +577,29 @@ impl SearchScope {
 pub const SEARCH_PAGE: u32 = 25;
 
 pub fn search_path(scope: SearchScope, query: &str, offset: u32) -> String {
+    search_path_q(scope, &SearchQuery::text(query), offset)
+}
+
+/// Search URL with filters: `content`, then `author_id`, `has` and
+/// `channel_id` (each repeated per value; `channel_id` only for server
+/// searches), then paging.
+pub fn search_path_q(scope: SearchScope, q: &SearchQuery, offset: u32) -> String {
     let base = match scope {
         SearchScope::Guild(g) => format!("/guilds/{g}/messages/search"),
         SearchScope::Channel(c) => format!("/channels/{c}/messages/search"),
     };
-    format!(
-        "{base}?content={}&offset={offset}&include_nsfw=true",
-        percent_encode(query)
-    )
+    let mut params: Vec<String> = Vec::new();
+    if !q.content.is_empty() {
+        params.push(format!("content={}", percent_encode(&q.content)));
+    }
+    params.extend(q.authors.iter().map(|a| format!("author_id={a}")));
+    params.extend(q.has.iter().map(|h| format!("has={h}")));
+    if scope.guild().is_some() {
+        params.extend(q.channels.iter().map(|c| format!("channel_id={c}")));
+    }
+    params.push(format!("offset={offset}"));
+    params.push("include_nsfw=true".into());
+    format!("{base}?{}", params.join("&"))
 }
 
 /// `Some(wait)` when the response means "index not ready, retry".

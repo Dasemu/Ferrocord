@@ -5,9 +5,11 @@ pub mod icons;
 pub mod login;
 pub mod markdown;
 pub mod members;
+pub mod popovers;
 pub mod popups;
 pub mod rail;
 pub mod search;
+pub mod servers;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
@@ -70,7 +72,10 @@ pub fn view(app: &App) -> El<'_> {
     }
     let mut layers: Vec<El<'_>> = Vec::with_capacity(LAYER_SLOTS);
     layers.push(content);
+    layers.push(servers::discover(app).unwrap_or_else(empty));
     layers.extend(popups::layers(app));
+    layers.push(servers::add_server(app).unwrap_or_else(empty));
+    layers.push(servers::folder_dialog(app).unwrap_or_else(empty));
     layers.push(if app.settings_open {
         settings::view(app)
     } else {
@@ -87,8 +92,9 @@ pub fn view(app: &App) -> El<'_> {
         .into()
 }
 
-/// Base content + popup slots + settings + link dialog.
-pub const LAYER_SLOTS: usize = 1 + popups::SLOTS + 2;
+/// Base content + discover page + popup slots + add-server dialog + folder
+/// dialog + settings + link dialog.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 4;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {

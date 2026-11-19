@@ -20,7 +20,7 @@ const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
 /// Number of popup slots [`layers`] always returns.
-pub const SLOTS: usize = 4;
+pub const SLOTS: usize = 6;
 
 /// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
 /// popup is an empty placeholder so the widget tree keeps its shape (see
@@ -56,7 +56,27 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         Some((c, m)) => delete_dialog(app, c, m),
         None => super::empty(),
     };
-    vec![status, menu, picker, delete]
+    let popover = match app.panels.open {
+        Some(kind) => {
+            let size = super::popovers::size_of(app, kind);
+            let at = super::popovers::position(app, size);
+            // The backdrop starts under the header so its buttons stay
+            // clickable (switching from one popover to another).
+            popup_layer_from(
+                app,
+                super::popovers::view(app, kind),
+                at,
+                Ui::ClosePopover,
+                app.theme.metrics.header_height,
+            )
+        }
+        None => super::empty(),
+    };
+    let rail_menu = match super::rail::menu(app) {
+        Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
+        None => super::empty(),
+    };
+    vec![status, menu, picker, delete, popover, rail_menu]
 }
 
 fn picker_position(open: &OpenPicker, window: Size) -> Point {
@@ -77,16 +97,27 @@ fn picker_position(open: &OpenPicker, window: Size) -> Point {
 
 /// A click-away backdrop plus the popup at `at`.
 fn popup_layer<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui) -> El<'a> {
+    popup_layer_from(app, card, at, close, 0.0)
+}
+
+/// Like [`popup_layer`], but the backdrop leaves the top `top` pixels
+/// (the channel header) alone.
+fn popup_layer_from<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui, top: f32) -> El<'a> {
     let _ = app;
     // `Idle` makes the layers below see a "levitating" cursor while the
     // popup is open: no row under the backdrop reacts to hover. Without it
     // the message row under the pointer toggled its hover toolbar every
     // time the pointer crossed the menu's edge (the menu opens exactly at
     // the pointer), which showed as flicker.
-    let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-        .on_press(ui(close.clone()))
-        .on_right_press(ui(close))
-        .interaction(iced::mouse::Interaction::Idle);
+    let backdrop = container(
+        mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(ui(close.clone()))
+            .on_right_press(ui(close))
+            .interaction(iced::mouse::Interaction::Idle),
+    )
+    .padding(Padding::ZERO.top(top))
+    .width(Length::Fill)
+    .height(Length::Fill);
     let positioned = container(opaque(card))
         .padding(Padding::ZERO.top(at.y).left(at.x))
         .width(Length::Fill)

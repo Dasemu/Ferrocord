@@ -534,3 +534,40 @@ async fn upload_of_a_missing_file_fails_cleanly() {
     .expect("must not hang");
     assert!(r.is_err());
 }
+
+#[tokio::test]
+async fn search_filters_become_query_parameters() {
+    use ferrocord::net::extras::SearchQuery;
+    let server = http(Arc::new(|_, _| {
+        Response::json(200, json!({"total_results": 0, "messages": []}))
+    }))
+    .await;
+    let rest = rest_for(&server);
+    let q = SearchQuery {
+        content: "let chains".into(),
+        authors: vec![Snowflake(2)],
+        has: vec!["image", "link"],
+        channels: vec![Snowflake(10)],
+    };
+    rest.search_query(SearchScope::Guild(Snowflake(9)), &q, 25)
+        .await
+        .unwrap();
+    // A filter-only search has no `content`; `in:` is ignored in DMs.
+    let only = SearchQuery {
+        has: vec!["file"],
+        channels: vec![Snowflake(10)],
+        ..Default::default()
+    };
+    rest.search_query(SearchScope::Channel(Snowflake(10)), &only, 0)
+        .await
+        .unwrap();
+    let rec = server.recorded();
+    assert_eq!(
+        rec[0].path,
+        "/guilds/9/messages/search?content=let%20chains&author_id=2&has=image&has=link&channel_id=10&offset=25&include_nsfw=true"
+    );
+    assert_eq!(
+        rec[1].path,
+        "/channels/10/messages/search?has=file&offset=0&include_nsfw=true"
+    );
+}
