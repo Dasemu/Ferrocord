@@ -311,6 +311,43 @@ impl App {
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
             }
+            Some(s @ (ScreenshotScreen::Search | ScreenshotScreen::Compose)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+                if s == ScreenshotScreen::Search {
+                    let _ = self.update_ui(Ui::SearchChanged("let".into()));
+                    let _ = self.update_ui(Ui::SubmitSearch);
+                } else {
+                    let target = self
+                        .chat
+                        .messages
+                        .get(&mock::CH_GENERAL)
+                        .and_then(|w| w.messages.iter().rev().nth(1))
+                        .map(|m| m.id);
+                    if let Some(t) = target {
+                        let _ = self.update_ui(Ui::StartReply(t));
+                    }
+                    self.draft.push(upload::DraftAttachment::from_file(
+                        crate::net::rest::UploadFile {
+                            path: "/tmp/design-notes.pdf".into(),
+                            name: "design-notes.pdf".into(),
+                            size: 482_113,
+                        },
+                        false,
+                    ));
+                    let guild = self.chat.guild(mock::GUILD_RUST);
+                    self.emoji_picker = Some(OpenPicker {
+                        picker: emoji::EmojiPicker::open(emoji::PickerTarget::Composer, guild),
+                        at: iced::Point::new(1000.0, 725.0),
+                    });
+                }
+            }
             Some(ScreenshotScreen::Guild) | None => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),

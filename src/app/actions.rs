@@ -241,12 +241,19 @@ impl App {
                 }
                 Task::perform(
                     async {
-                        tokio::task::spawn_blocking(|| match upload::pick_files_blocking() {
-                            Ok(paths) => stat_paths(paths, false),
-                            Err(e) => vec![Err(e)],
-                        })
-                        .await
-                        .unwrap_or_default()
+                        // Native chooser through the desktop portal.
+                        let picked = rfd::AsyncFileDialog::new()
+                            .set_title("Upload files")
+                            .pick_files()
+                            .await;
+                        let paths: Vec<PathBuf> = picked
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|f| f.path().to_path_buf())
+                            .collect();
+                        tokio::task::spawn_blocking(move || stat_paths(paths, false))
+                            .await
+                            .unwrap_or_default()
                     },
                     |r| Message::Done(Done::FilesReady(r)),
                 )

@@ -5,7 +5,6 @@
 //! standard tools of the platform and are only called from `Task`s.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crate::net::model::*;
 use crate::net::rest::{
@@ -149,55 +148,6 @@ impl ActiveUpload {
     }
 }
 
-// -- parsing of dialog / clipboard output ---------------------------------------
-
-/// Decodes `%XX` escapes (invalid sequences are kept literally).
-pub fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
-        {
-            out.push(h * 16 + l);
-            i += 3;
-            continue;
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex(b: u8) -> Option<u8> {
-    (b as char).to_digit(16).map(|d| d as u8)
-}
-
-/// Parses a `text/uri-list` (or newline separated paths): `file://` URIs
-/// and absolute paths are kept, everything else (http links, comments) is
-/// ignored. At most [`MAX_FILES_PER_MESSAGE`] entries.
-pub fn parse_path_list(text: &str) -> Vec<PathBuf> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            if let Some(rest) = l.strip_prefix("file://") {
-                // `file://localhost/path` and `file:///path`.
-                let path = rest.strip_prefix("localhost").unwrap_or(rest);
-                path.starts_with('/')
-                    .then(|| PathBuf::from(percent_decode(path)))
-            } else if l.starts_with('/') {
-                Some(PathBuf::from(l))
-            } else {
-                None
-            }
-        })
-        .take(MAX_FILES_PER_MESSAGE)
-        .collect()
-}
-
 /// Content found on the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Clipboard {
@@ -207,101 +157,36 @@ pub enum Clipboard {
     Nothing,
 }
 
-/// Picks what to read from a list of clipboard MIME types: files first,
-/// then PNG, then other images we can upload as they are.
-pub fn choose_clipboard_type(types: &str) -> Option<&'static str> {
-    let has = |t: &str| types.lines().any(|l| l.trim() == t);
-    if has("text/uri-list") {
-        Some("text/uri-list")
-    } else if has("image/png") {
-        Some("image/png")
-    } else {
-        None
+/// Encodes RGBA pixels as PNG, refusing oversized images (decompression
+/// bomb style clipboard contents) and results above `max_bytes`.
+pub fn encode_png(width: usize, height: usize, rgba: &[u8], max_bytes: usize) -> Option<Vec<u8>> {
+    let (w, h) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > crate::net::rest::MAX_MEDIA_PIXELS {
+        return None;
     }
+    let img = image::RgbaImage::from_raw(w, h, rgba.to_vec())?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    let bytes = out.into_inner();
+    (bytes.len() <= max_bytes).then_some(bytes)
 }
 
-// -- blocking desktop helpers (call from `Task`s only) --------------------------
-
-/// Runs a command with a deadline and returns its stdout (capped at `cap`
-/// bytes). `None` on failure, timeout or when the tool is missing.
-fn run_capped(cmd: &str, args: &[&str], timeout: Duration, cap: usize) -> Option<Vec<u8>> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = (&mut stdout).take(cap as u64 + 1).read_to_end(&mut buf);
-        buf
-    });
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return None;
-            }
-        }
-    };
-    let buf = reader.join().ok()?;
-    (status.success() && buf.len() <= cap).then_some(buf)
-}
-
-/// Reads files or an image from the clipboard using `wl-paste` (Wayland)
-/// or `xclip` (X11). Returns `Nothing` when neither tool exists.
+/// Reads copied files or an image from the system clipboard (`arboard`,
+/// X11 and Wayland). Blocking: call from a `Task`.
 pub fn read_clipboard_blocking(max_image: usize) -> Clipboard {
-    let t = Duration::from_secs(3);
-    let backends: [(&str, &[&str], &str); 2] = [
-        ("wl-paste", &["--list-types"], "wl-paste"),
-        (
-            "xclip",
-            &["-selection", "clipboard", "-t", "TARGETS", "-o"],
-            "xclip",
-        ),
-    ];
-    for (cmd, list_args, kind) in backends {
-        let Some(types) = run_capped(cmd, list_args, t, 16 * 1024) else {
-            continue;
-        };
-        let types = String::from_utf8_lossy(&types).into_owned();
-        let Some(mime) = choose_clipboard_type(&types) else {
-            return Clipboard::Nothing;
-        };
-        let args: Vec<&str> = if kind == "wl-paste" {
-            vec!["--no-newline", "--type", mime]
-        } else {
-            vec!["-selection", "clipboard", "-t", mime, "-o"]
-        };
-        let cap = if mime == "image/png" {
-            max_image
-        } else {
-            64 * 1024
-        };
-        let Some(data) = run_capped(cmd, &args, Duration::from_secs(10), cap) else {
-            return Clipboard::Nothing;
-        };
-        return if mime == "text/uri-list" {
-            let files = parse_path_list(&String::from_utf8_lossy(&data));
-            if files.is_empty() {
-                Clipboard::Nothing
-            } else {
-                Clipboard::Files(files)
-            }
-        } else {
-            Clipboard::Image(data)
-        };
+    let Ok(mut cb) = arboard::Clipboard::new() else {
+        return Clipboard::Nothing;
+    };
+    if let Ok(mut files) = cb.get().file_list()
+        && !files.is_empty()
+    {
+        files.truncate(MAX_FILES_PER_MESSAGE);
+        return Clipboard::Files(files);
+    }
+    if let Ok(img) = cb.get().image()
+        && let Some(png) = encode_png(img.width, img.height, &img.bytes, max_image)
+    {
+        return Clipboard::Image(png);
     }
     Clipboard::Nothing
 }
@@ -322,39 +207,6 @@ pub fn save_pasted_image(bytes: &[u8]) -> std::io::Result<PathBuf> {
     let mut f = opts.open(&path)?;
     f.write_all(bytes)?;
     Ok(path)
-}
-
-/// Opens the native file chooser through `kdialog` or `zenity`. `Ok(vec![])`
-/// means the user cancelled; `Err` that no dialog tool is available.
-pub fn pick_files_blocking() -> Result<Vec<PathBuf>, String> {
-    let t = Duration::from_secs(600);
-    let attempts: [(&str, Vec<&str>); 2] = [
-        (
-            "kdialog",
-            vec!["--getopenfilename", ".", "--multiple", "--separate-output"],
-        ),
-        (
-            "zenity",
-            vec!["--file-selection", "--multiple", "--separator=\n"],
-        ),
-    ];
-    for (cmd, args) in attempts {
-        // A cancelled dialog exits non-zero; distinguish "missing tool"
-        // from "cancelled" by whether the command could be spawned.
-        if std::process::Command::new(cmd)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_err()
-        {
-            continue;
-        }
-        let out = run_capped(cmd, &args, t, 1024 * 1024).unwrap_or_default();
-        return Ok(parse_path_list(&String::from_utf8_lossy(&out)));
-    }
-    Err("No file dialog found (install kdialog or zenity). You can also drag files onto the window or paste them.".into())
 }
 
 #[cfg(test)]
@@ -399,40 +251,20 @@ mod tests {
     }
 
     #[test]
-    fn uri_lists_are_parsed_safely() {
-        let text = "# comment\nfile:///home/u/My%20Pic.png\nfile://localhost/tmp/a.txt\nhttps://evil.example/x\nrelative/path\n/abs/path.bin\n\n";
-        let v = parse_path_list(text);
-        assert_eq!(
-            v,
-            vec![
-                PathBuf::from("/home/u/My Pic.png"),
-                PathBuf::from("/tmp/a.txt"),
-                PathBuf::from("/abs/path.bin"),
-            ]
+    fn png_encoding_is_bounded() {
+        let px = vec![255u8; 4 * 4 * 4];
+        let png = encode_png(4, 4, &px, 10_000).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        assert!(encode_png(4, 4, &px, 10).is_none(), "size cap");
+        assert!(encode_png(0, 4, &px, 10_000).is_none());
+        assert!(
+            encode_png(4, 4, &px[..10], 10_000).is_none(),
+            "short buffer"
         );
-        let many = (0..50).map(|i| format!("/f{i}\n")).collect::<String>();
-        assert_eq!(parse_path_list(&many).len(), MAX_FILES_PER_MESSAGE);
-    }
-
-    #[test]
-    fn percent_decoding_edge_cases() {
-        assert_eq!(percent_decode("a%20b"), "a b");
-        assert_eq!(percent_decode("100%"), "100%");
-        assert_eq!(percent_decode("%zz%4"), "%zz%4");
-        assert_eq!(percent_decode("%E2%82%AC"), "€");
-    }
-
-    #[test]
-    fn clipboard_type_preference() {
-        assert_eq!(
-            choose_clipboard_type("text/plain\ntext/uri-list\nimage/png\n"),
-            Some("text/uri-list")
+        assert!(
+            encode_png(100_000, 100_000, &px, usize::MAX).is_none(),
+            "pixel cap"
         );
-        assert_eq!(
-            choose_clipboard_type("image/png\ntext/html"),
-            Some("image/png")
-        );
-        assert_eq!(choose_clipboard_type("text/plain"), None);
     }
 
     #[test]
