@@ -47,6 +47,21 @@ pub enum ThemeChoice {
     Light,
 }
 
+/// Restricts `path` to the current user (0700 for directories, 0600 for
+/// files). The cache and logs are not encrypted, so they must not be
+/// readable by other local users. No-op on non-Unix platforms.
+pub fn restrict_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if path.is_dir() { 0o700 } else { 0o600 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// `https://` for any host, plain `http://` only for loopback (mock servers).
 pub fn validate_http_url(url: &str) -> Result<(), String> {
     let u = url::Url::parse(url).map_err(|e| format!("invalid URL {url}: {e}"))?;

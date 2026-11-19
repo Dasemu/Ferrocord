@@ -196,20 +196,32 @@ pub mod log_sink {
         fn open(path: PathBuf) -> io::Result<Self> {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
+                crate::config::restrict_permissions(dir)?;
             }
-            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            let file = Self::open_file(&path)?;
             let size = file.metadata().map(|m| m.len()).unwrap_or(0);
             Ok(Self { path, file, size })
+        }
+
+        /// Owner-only (0600) append-mode log file.
+        fn open_file(path: &std::path::Path) -> io::Result<File> {
+            let mut o = OpenOptions::new();
+            o.create(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                o.mode(0o600);
+            }
+            let f = o.open(path)?;
+            crate::config::restrict_permissions(path)?;
+            Ok(f)
         }
 
         fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
             if self.size + bytes.len() as u64 > MAX_LOG_BYTES {
                 let rotated = self.path.with_extension("1");
                 let _ = std::fs::rename(&self.path, rotated);
-                self.file = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&self.path)?;
+                self.file = Self::open_file(&self.path)?;
                 self.size = 0;
             }
             self.file.write_all(bytes)?;

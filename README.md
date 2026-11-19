@@ -48,6 +48,12 @@ cargo build --release
 A Secret Service provider (KWallet on KDE, GNOME Keyring) must be running;
 without one, login is disabled rather than storing the token in a file.
 
+**Local data.** The message cache (`$XDG_DATA_HOME/ferrocord/cache.sqlite3`)
+and the log (`$XDG_STATE_HOME/ferrocord/log`) are *not* encrypted: the cache
+holds message text, names and channel lists in plain text (never the
+token). Both are created owner-only (directories `0700`, files `0600`).
+Delete the data directory to wipe the cache; logging out clears it too.
+
 Useful environment variables:
 
 | Variable | Purpose |

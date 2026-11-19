@@ -164,7 +164,9 @@ and Discord may require a captcha for the ticket exchange in some regions.
 SQLite (`cache.sqlite3`, WAL). Tables: `meta` (selected guild/channel,
 `me`), `users`, `guilds`, `channels`, `messages` (≤ 1000 per channel),
 `read_states`. Domain objects are stored as JSON next to indexed ids.
-Pending/failed local messages and credentials are never written.
+Pending/failed local messages and credentials are never written. The
+database is plain text (not encrypted); the data directory is `0700` and the
+database, `-wal`/`-shm` and log files are `0600`.
 
 ## 7. UI reference
 

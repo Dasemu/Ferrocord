@@ -56,6 +56,7 @@ impl Store {
             Some(p) => {
                 if let Some(dir) = p.parent() {
                     std::fs::create_dir_all(dir)?;
+                    crate::config::restrict_permissions(dir)?;
                 }
                 Connection::open(p)?
             }
@@ -65,6 +66,17 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Self::migrate(&conn)?;
+        if let Some(p) = path {
+            // The cache holds message text in plain text: owner-only.
+            // SQLite creates -wal/-shm with the database file's mode, but
+            // fix them up too in case they predate this build.
+            for suffix in ["", "-wal", "-shm"] {
+                let f = std::path::PathBuf::from(format!("{}{suffix}", p.display()));
+                if f.exists() {
+                    crate::config::restrict_permissions(&f)?;
+                }
+            }
+        }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -428,6 +440,23 @@ mod tests {
             s.load_snapshot().unwrap().selected_channel,
             Some(Snowflake(42))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data/cache.sqlite3");
+        let s = Store::open(Some(&path)).unwrap();
+        s.set_meta("k", "v").unwrap();
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        assert_eq!(mode(&path), 0o600);
+        let wal = dir.path().join("data/cache.sqlite3-wal");
+        if wal.exists() {
+            assert_eq!(mode(&wal), 0o600);
+        }
     }
 
     #[test]
