@@ -1128,9 +1128,8 @@ mod round3 {
             .unwrap();
         ui(&mut a, Ui::RailPress(RailItem::Folder(cid)));
         ui(&mut a, Ui::RailRelease(RailItem::Folder(cid)));
-        assert_ne!(
-            a.rail.expanded.contains(&cid),
-            true,
+        assert!(
+            !a.rail.expanded.contains(&cid),
             "created open, click closes"
         );
         ui(&mut a, Ui::RailMenu(RailItem::Guild(rust)));
