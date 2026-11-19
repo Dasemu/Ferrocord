@@ -222,7 +222,7 @@ fn empty_state<'a>(app: &App, i: Icon, head: &str, sub: &str) -> El<'a> {
 fn message_card<'a>(app: &'a App, m: &'a Msg, place: String, actions: Vec<El<'a>>) -> El<'a> {
     let p = app.theme.palette;
     let now = now_ms();
-    let snippet = truncate_chars(&m.content.replace('\n', " "), 220);
+    let snippet = truncate_chars(&super::plain_text(app, &m.content).replace('\n', " "), 220);
     let snippet = if snippet.is_empty() && !m.attachments.is_empty() {
         "Sent an attachment".to_owned()
     } else {

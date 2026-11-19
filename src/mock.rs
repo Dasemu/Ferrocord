@@ -715,28 +715,8 @@ pub fn mock_image(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     (w, h, px)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mock_data_is_consistent() {
-        let r = ready();
-        for c in &r.channels {
-            if let Some(g) = c.guild_id {
-                assert!(
-                    r.guilds.iter().any(|x| x.id == g),
-                    "channel {} has unknown guild",
-                    c.id
-                );
-            }
-        }
-        assert!(!history(CH_GENERAL).is_empty());
-        assert!(history(CH_SHOWCASE).iter().any(|m| !m.embeds.is_empty()));
-        let (w, h, px) = mock_image(10, 5);
-        assert_eq!(px.len(), (w * h * 4) as usize);
-    }
-}
+/// (id, name, description, category, members, online, verified, partnered)
+type DiscoverRow = (u64, &'static str, &'static str, u32, u32, u32, bool, bool);
 
 // -- add a server / discover (mock mode) ----------------------------------------------
 
@@ -780,7 +760,7 @@ pub fn discover_categories() -> Vec<crate::net::extras::DiscoverCategory> {
 
 pub fn discover_page(query: &str, category: Option<u32>) -> crate::net::extras::DiscoverPage {
     use crate::net::extras::{DiscoverGuild, DiscoverPage};
-    let all: [(u64, &str, &str, u32, u32, u32, bool, bool); 8] = [
+    let all: [DiscoverRow; 8] = [
         (
             910_101,
             "Rust Community",
@@ -886,5 +866,28 @@ pub fn discover_page(query: &str, category: Option<u32>) -> crate::net::extras::
     DiscoverPage {
         total: Some(guilds.len() as u32),
         guilds,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mock_data_is_consistent() {
+        let r = ready();
+        for c in &r.channels {
+            if let Some(g) = c.guild_id {
+                assert!(
+                    r.guilds.iter().any(|x| x.id == g),
+                    "channel {} has unknown guild",
+                    c.id
+                );
+            }
+        }
+        assert!(!history(CH_GENERAL).is_empty());
+        assert!(history(CH_SHOWCASE).iter().any(|m| !m.embeds.is_empty()));
+        let (w, h, px) = mock_image(10, 5);
+        assert_eq!(px.len(), (w * h * 4) as usize);
     }
 }

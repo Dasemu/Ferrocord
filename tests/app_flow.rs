@@ -881,3 +881,289 @@ fn image_handles_are_stable_across_views() {
         ferrocord::ui::icons::handle(ferrocord::ui::icons::Icon::Bell).id()
     );
 }
+
+// -- round 3 flows (mock mode) ---------------------------------------------------
+
+mod round3 {
+    use super::*;
+    use ferrocord::app::panels::Popover;
+    use ferrocord::app::rail::RailItem;
+    use ferrocord::app::servers::{JoinStep, ServerDialog};
+    use ferrocord::net::extras::{MuteDuration, NotifyLevel};
+    use ferrocord::net::model::Snowflake;
+
+    fn ui(a: &mut App, u: Ui) {
+        let _ = a.update(Message::Ui(u));
+    }
+
+    #[test]
+    fn popovers_toggle_and_switch() {
+        let mut a = app();
+        ui(&mut a, Ui::TogglePopover(Popover::Pins));
+        assert_eq!(a.panels.open, Some(Popover::Pins));
+        assert!(!a.panels.pins.items.is_empty());
+        ui(&mut a, Ui::TogglePopover(Popover::Inbox));
+        assert_eq!(a.panels.open, Some(Popover::Inbox));
+        assert!(!a.panels.inbox.items.is_empty());
+        ui(&mut a, Ui::TogglePopover(Popover::Inbox));
+        assert_eq!(a.panels.open, None);
+        ui(&mut a, Ui::TogglePopover(Popover::Bell));
+        ui(&mut a, Ui::Escape);
+        assert_eq!(a.panels.open, None);
+        // Views render with every popover open.
+        for k in [Popover::Bell, Popover::Pins, Popover::Inbox] {
+            ui(&mut a, Ui::TogglePopover(k));
+            let _ = ferrocord::ui::view(&a);
+        }
+    }
+
+    #[test]
+    fn bell_mutes_and_sets_levels() {
+        let mut a = app();
+        let c = mock::CH_GENERAL;
+        ui(&mut a, Ui::MuteChannel(c, MuteDuration::Hour1));
+        assert!(a.chat.is_channel_muted(c));
+        ui(&mut a, Ui::SetChannelLevel(c, NotifyLevel::Mentions));
+        assert_eq!(a.chat.channel_notify(c).level, NotifyLevel::Mentions);
+        assert!(a.chat.is_channel_muted(c), "a level change keeps the mute");
+        ui(&mut a, Ui::UnmuteChannel(c));
+        assert!(!a.chat.is_channel_muted(c));
+        ui(&mut a, Ui::SetChannelLevel(c, NotifyLevel::Default));
+        assert!(a.chat.channel_notify.is_empty());
+    }
+
+    #[test]
+    fn unpin_removes_from_the_list_in_mock_mode() {
+        let mut a = app();
+        ui(&mut a, Ui::TogglePopover(Popover::Pins));
+        let first = a.panels.pins.items[0].clone();
+        let n = a.panels.pins.items.len();
+        ui(&mut a, Ui::Unpin(first.channel_id, first.id));
+        assert_eq!(a.panels.pins.items.len(), n - 1);
+    }
+
+    #[test]
+    fn jumping_closes_the_popover() {
+        let mut a = app();
+        ui(&mut a, Ui::TogglePopover(Popover::Inbox));
+        let m = a.panels.inbox.items[0].clone();
+        ui(
+            &mut a,
+            Ui::JumpTo {
+                channel: m.channel_id,
+                message: m.id,
+            },
+        );
+        assert_eq!(a.panels.open, None);
+    }
+
+    #[test]
+    fn search_filters_apply_and_bad_filters_report() {
+        let mut a = app();
+        ui(&mut a, Ui::SearchChanged("from:alice has:link".into()));
+        ui(&mut a, Ui::SubmitSearch);
+        assert!(!a.search.results.is_empty());
+        assert!(a.search.results.iter().all(|m| m.content.contains("http")));
+        assert!(a.search.results.iter().all(|m| m.author.id == Snowflake(2)));
+        ui(&mut a, Ui::SearchChanged("from:nobody-here".into()));
+        ui(&mut a, Ui::SubmitSearch);
+        assert!(
+            a.search
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("nobody-here")
+        );
+        assert!(a.search.results.is_empty());
+    }
+
+    #[test]
+    fn create_server_flow() {
+        let mut a = app();
+        ui(&mut a, Ui::OpenAddServer);
+        assert_eq!(a.server_dialog, Some(ServerDialog::Choose));
+        ui(&mut a, Ui::AddServerCreate);
+        ui(&mut a, Ui::CreateNameChanged("x".into()));
+        ui(&mut a, Ui::SubmitCreate);
+        assert!(a.server_dialog.is_some(), "a one-letter name is refused");
+        ui(&mut a, Ui::CreateNameChanged("Brand New".into()));
+        let before = a.chat.guilds.len();
+        // Mock mode answers through a task; feed its result directly.
+        let _ = a.update(Message::Done(ferrocord::app::Done::Created(Ok((
+            Snowflake(900_002),
+            "Brand New".into(),
+        )))));
+        assert_eq!(a.chat.guilds.len(), before + 1);
+        assert!(a.server_dialog.is_none());
+        assert!(matches!(a.view, View::Guild { guild, .. } if guild == Snowflake(900_002)));
+        // New servers are appended to the rail.
+        assert_eq!(
+            a.chat.folders.flat_order().last(),
+            Some(&Snowflake(900_002))
+        );
+    }
+
+    #[test]
+    fn join_flow_resolves_then_joins_and_reports_errors() {
+        let mut a = app();
+        ui(&mut a, Ui::OpenAddServer);
+        ui(&mut a, Ui::AddServerJoin);
+        ui(&mut a, Ui::JoinInputChanged("nonsense with spaces".into()));
+        ui(&mut a, Ui::SubmitJoin);
+        let Some(ServerDialog::Join(f)) = &a.server_dialog else {
+            panic!()
+        };
+        assert!(f.error.is_some());
+        ui(
+            &mut a,
+            Ui::JoinInputChanged("https://discord.gg/rust-lang".into()),
+        );
+        ui(&mut a, Ui::SubmitJoin);
+        let Some(ServerDialog::Join(f)) = &a.server_dialog else {
+            panic!()
+        };
+        let g = f.generation();
+        let pv = mock::invite_preview("rust-lang").unwrap();
+        let _ = a.update(Message::Done(ferrocord::app::Done::Invite {
+            generation: g,
+            result: Ok(pv.clone()),
+        }));
+        let Some(ServerDialog::Join(f)) = &a.server_dialog else {
+            panic!()
+        };
+        assert_eq!(f.step, JoinStep::Preview(pv));
+        // A captcha demand keeps the card and shows the message.
+        ui(&mut a, Ui::ConfirmJoin);
+        let Some(ServerDialog::Join(f)) = &a.server_dialog else {
+            panic!()
+        };
+        let g = f.generation();
+        let msg = ferrocord::error::Error::CaptchaRequired.user_message();
+        let _ = a.update(Message::Done(ferrocord::app::Done::Joined {
+            generation: g,
+            result: Err(msg),
+        }));
+        let Some(ServerDialog::Join(f)) = &a.server_dialog else {
+            panic!()
+        };
+        assert!(matches!(f.step, JoinStep::Preview(_)));
+        assert!(f.error.as_deref().unwrap().contains("captcha"));
+        let _ = ferrocord::ui::view(&a);
+    }
+
+    #[test]
+    fn discover_loads_filters_and_joins() {
+        let mut a = app();
+        ui(&mut a, Ui::OpenDiscover);
+        let d = a.discover.as_ref().unwrap();
+        assert!(!d.guilds.is_empty() && !d.categories.is_empty());
+        let all = d.guilds.len();
+        ui(&mut a, Ui::DiscoverCategory(Some(3)));
+        assert!(a.discover.as_ref().unwrap().guilds.len() < all);
+        ui(&mut a, Ui::DiscoverCategory(None));
+        ui(&mut a, Ui::DiscoverInput("iced".into()));
+        ui(&mut a, Ui::DiscoverSubmit);
+        assert_eq!(a.discover.as_ref().unwrap().guilds.len(), 1);
+        let id = a.discover.as_ref().unwrap().guilds[0].id;
+        ui(&mut a, Ui::DiscoverDetails(Some(id)));
+        let _ = ferrocord::ui::view(&a);
+        let _ = a.update(Message::Done(ferrocord::app::Done::DiscoverJoined {
+            guild: id,
+            result: Ok(()),
+        }));
+        assert!(a.discover.is_none(), "the page closes after joining");
+        assert!(a.chat.guild(id).is_some());
+        ui(&mut a, Ui::OpenDiscover);
+        ui(&mut a, Ui::Escape);
+        assert!(a.discover.is_none());
+    }
+
+    #[test]
+    fn folders_create_drag_rename_remove_ungroup() {
+        let mut a = app();
+        let (rust, iced_g, linux) = (mock::GUILD_RUST, mock::GUILD_ICED, mock::GUILD_LINUX);
+        // Create from the context menu.
+        ui(&mut a, Ui::CreateFolder(rust));
+        let fid = a.chat.folders.folder_of(rust).unwrap().id.unwrap();
+        // Drag one server onto another: press, release elsewhere.
+        ui(&mut a, Ui::RailPress(RailItem::Guild(iced_g)));
+        ui(&mut a, Ui::RailRelease(RailItem::Guild(linux)));
+        let f2 = a.chat.folders.folder_of(linux).unwrap();
+        assert_eq!(f2.guild_ids, vec![linux, iced_g]);
+        // Drop on a folder header.
+        ui(&mut a, Ui::RailPress(RailItem::Guild(mock::GUILD_GAMES)));
+        ui(&mut a, Ui::RailRelease(RailItem::Folder(fid)));
+        assert!(
+            a.chat
+                .folders
+                .folder(fid)
+                .unwrap()
+                .guild_ids
+                .contains(&mock::GUILD_GAMES)
+        );
+        // A press that ended elsewhere (DragEnd) never drops.
+        ui(&mut a, Ui::RailPress(RailItem::Guild(mock::GUILD_CAFE)));
+        ui(&mut a, Ui::DragEnd);
+        ui(&mut a, Ui::RailRelease(RailItem::Guild(rust)));
+        assert!(a.chat.folders.folder_of(mock::GUILD_CAFE).is_none());
+        // Settings dialog: rename and colour.
+        ui(&mut a, Ui::OpenFolderSettings(fid));
+        ui(&mut a, Ui::FolderNameChanged("Work".into()));
+        ui(&mut a, Ui::FolderColor(Some(0xED4245)));
+        ui(&mut a, Ui::SaveFolder);
+        let f = a.chat.folders.folder(fid).unwrap();
+        assert_eq!((f.name.as_deref(), f.color), (Some("Work"), Some(0xED4245)));
+        // Remove a server from its folder, then ungroup.
+        ui(&mut a, Ui::RemoveFromFolder(mock::GUILD_GAMES));
+        ui(&mut a, Ui::UngroupFolder(fid));
+        assert!(a.chat.folders.folder(fid).is_none());
+        // Clicking toggles; the rail renders in every state.
+        ui(&mut a, Ui::CreateFolder(mock::GUILD_CAFE));
+        let cid = a
+            .chat
+            .folders
+            .folder_of(mock::GUILD_CAFE)
+            .unwrap()
+            .id
+            .unwrap();
+        ui(&mut a, Ui::RailPress(RailItem::Folder(cid)));
+        ui(&mut a, Ui::RailRelease(RailItem::Folder(cid)));
+        assert_ne!(
+            a.rail.expanded.contains(&cid),
+            true,
+            "created open, click closes"
+        );
+        ui(&mut a, Ui::RailMenu(RailItem::Guild(rust)));
+        let _ = ferrocord::ui::view(&a);
+        ui(&mut a, Ui::Escape);
+        assert!(a.rail.menu.is_none());
+    }
+
+    #[test]
+    fn overlays_do_not_reshape_the_tree() {
+        use iced::advanced::widget::Tree;
+        let mut a = app();
+        let mut tree = {
+            let el = ferrocord::ui::view(&a);
+            Tree::new(&el)
+        };
+        let base = format!("{:?}", tree.children[0].children[1].tag);
+        for open in [
+            Ui::TogglePopover(Popover::Pins),
+            Ui::OpenAddServer,
+            Ui::OpenDiscover,
+            Ui::OpenFolderSettings(0),
+            Ui::RailMenu(RailItem::Guild(mock::GUILD_RUST)),
+        ] {
+            ui(&mut a, open);
+            {
+                let el = ferrocord::ui::view(&a);
+                tree.diff(&el);
+            }
+            assert_eq!(tree.children.len(), ferrocord::ui::LAYER_SLOTS);
+            assert_eq!(format!("{:?}", tree.children[0].children[1].tag), base);
+            ui(&mut a, Ui::Escape);
+            ui(&mut a, Ui::Escape);
+        }
+    }
+}

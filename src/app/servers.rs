@@ -249,7 +249,7 @@ impl DiscoverState {
             Some(t) => (self.guilds.len() as u32) < t,
             None => {
                 self.guilds.len() as u32 >= DISCOVER_PAGE
-                    && self.guilds.len() as u32 % DISCOVER_PAGE == 0
+                    && (self.guilds.len() as u32).is_multiple_of(DISCOVER_PAGE)
             }
         }
     }

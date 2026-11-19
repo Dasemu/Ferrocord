@@ -115,7 +115,8 @@ fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64) -> El<'a> {
         Some(c) => format!("#{}", c.name.as_deref().unwrap_or("channel")),
         None => "unknown channel".to_owned(),
     };
-    let snippet = model::truncate_chars(&m.content.replace('\n', " "), 260);
+    let snippet =
+        model::truncate_chars(&super::plain_text(app, &m.content).replace('\n', " "), 260);
     let snippet = if snippet.is_empty() && !m.attachments.is_empty() {
         "Sent an attachment".to_owned()
     } else {

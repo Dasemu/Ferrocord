@@ -133,6 +133,63 @@ pub fn ellipsize(s: &str, max_px: f32, size: f32, semibold: bool) -> String {
     format!("{out}\u{2026}")
 }
 
+/// Message text for one-line previews (popovers, search results): mention
+/// and emoji tokens become readable names.
+pub fn plain_text(app: &App, content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let Some(end) = tail.find('>') else {
+            out.push_str(tail);
+            return out;
+        };
+        let tok = &tail[1..end];
+        let id = |s: &str| s.parse::<u64>().ok().map(crate::net::model::Snowflake);
+        let rep = if let Some(r) = tok.strip_prefix("@&") {
+            id(r).and_then(|id| {
+                app.chat
+                    .guilds
+                    .iter()
+                    .flat_map(|g| g.roles.iter())
+                    .find(|ro| ro.id == id)
+                    .map(|ro| format!("@{}", ro.name))
+            })
+        } else if let Some(r) = tok.strip_prefix("@!").or_else(|| tok.strip_prefix('@')) {
+            id(r).map(|id| format!("@{}", app.chat.user_name(id).unwrap_or("unknown-user")))
+        } else if let Some(r) = tok.strip_prefix('#') {
+            id(r).map(|id| {
+                format!(
+                    "#{}",
+                    app.chat
+                        .channels
+                        .get(&id)
+                        .and_then(|c| c.name.as_deref())
+                        .unwrap_or("deleted-channel")
+                )
+            })
+        } else {
+            let t2 = tok.strip_prefix("a:").or_else(|| tok.strip_prefix(':'));
+            t2.and_then(|r| r.split(':').next())
+                .filter(|n| !n.is_empty() && tok.matches(':').count() >= 2)
+                .map(|n| format!(":{n}:"))
+        };
+        match rep {
+            Some(r) => {
+                out.push_str(&r);
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('<');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Placeholder for a closed layer.
 pub fn empty<'a>() -> El<'a> {
     iced::widget::Space::new().into()
@@ -502,6 +559,21 @@ mod tests {
 
     fn est(s: &str, size: f32, semibold: bool) -> f32 {
         s.chars().map(glyph_em).sum::<f32>() * size * if semibold { 1.06 } else { 1.0 }
+    }
+
+    #[test]
+    fn plain_text_resolves_mentions_and_emoji() {
+        let a = crate::app::App::boot(crate::config::Config::for_tests()).0;
+        let s = plain_text(
+            &a,
+            "hi <@2> in <#132> <:ferris:1001> <a:x:5> <not a token> a < b",
+        );
+        assert!(s.starts_with("hi @"), "{s}");
+        assert!(!s.contains("<@2>") && !s.contains("<#132>"), "{s}");
+        assert!(s.contains(":ferris:") && s.contains(":x:"), "{s}");
+        assert!(s.contains("<not a token>") && s.ends_with("a < b"), "{s}");
+        assert_eq!(plain_text(&a, "no tokens"), "no tokens");
+        assert_eq!(plain_text(&a, "unterminated <@2"), "unterminated <@2");
     }
 
     #[test]
