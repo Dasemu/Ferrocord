@@ -437,13 +437,63 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                 "Reminder set for **Saturday 18:00**.",
             ),
         ],
-        DM_BOB => vec![
-            gm(DM_BOB, 2900, 0, 3, &[], "thanks for the review yesterday!"),
-            gm(DM_BOB, 2880, 0, 1, &[], "anytime 👍"),
-        ],
+        DM_BOB => long_history(DM_BOB),
         DM_EVE => vec![gm(DM_EVE, 4400, 0, 6, &[], "see you at the meetup")],
         _ => general(channel),
     }
+}
+
+/// Avatar hash given to the users of the long mock DM, so their avatars are
+/// real raster images (see [`mock_emoji`]).
+pub const MOCK_AVATAR: &str = "mockavatar";
+
+/// A long, image-heavy conversation (300 messages: text of varying length,
+/// code blocks, image attachments, raster avatars) to exercise scrolling
+/// and rendering the way a real DM does.
+pub fn long_history(channel: ChannelId) -> Vec<Message> {
+    const LINES: [&str; 8] = [
+        "thanks for the review yesterday!",
+        "anytime 👍",
+        "did you try the new build on Windows? scrolling feels much smoother now",
+        "I think the cache eviction is off by one, look at this:
+```rust
+while self.bytes > self.budget && self.order.len() > 1 {
+    self.evict();
+}
+```",
+        "lol",
+        "having a **huge** library makes me understand why people want a lighter client, it adds up fast when you keep ten of these open all day",
+        "> quoted reply
+and an answer below it with `inline code` and a [link](https://example.com)",
+        "ok",
+    ];
+    let mut out = Vec::with_capacity(300);
+    for i in 0..300u64 {
+        let author = if i % 3 == 0 { 1 } else { 3 };
+        let mut m = gm(
+            channel,
+            3000 - i * 9,
+            0,
+            author,
+            &[],
+            LINES[(i % 8) as usize],
+        );
+        m.author.avatar = Some(MOCK_AVATAR.into());
+        if i % 8 == 5 {
+            m.attachments = vec![Attachment {
+                id: Snowflake(7000 + i),
+                filename: "screenshot.png".into(),
+                size: 482_133,
+                url: "mock://image/1".into(),
+                proxy_url: None,
+                content_type: Some("image/png".into()),
+                width: Some(400),
+                height: Some(225),
+            }];
+        }
+        out.push(m);
+    }
+    out
 }
 
 fn general(channel: ChannelId) -> Vec<Message> {

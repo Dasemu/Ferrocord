@@ -304,6 +304,21 @@ impl App {
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
+        // Raster avatars for the users of the long mock DM.
+        for (n, rgb) in [(1u64, [120u8, 200, 255]), (3, [250, 170, 40])] {
+            let mut u = mock::user(n);
+            u.avatar = Some(mock::MOCK_AVATAR.into());
+            let (side, px) = mock::mock_emoji(rgb);
+            for size in [64, 80] {
+                if let Some(url) = self.rest.avatar_url(&u, size) {
+                    self.images.insert(
+                        url,
+                        iced::widget::image::Handle::from_rgba(side, side, px.clone()),
+                        (side * side * 4) as usize,
+                    );
+                }
+            }
+        }
         for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
             let (n, px) = mock::mock_emoji(rgb);
             self.images.insert(
