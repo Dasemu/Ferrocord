@@ -2,9 +2,14 @@
 
 use iced::widget::scrollable::Viewport;
 
+use std::path::PathBuf;
+
+use super::emoji::{PickerTarget, Section};
+use super::upload::UploadEvent;
 use crate::net;
 use crate::net::model::*;
 use crate::net::remote_auth::RaEvent;
+use crate::net::rest::UploadFile;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -35,6 +40,56 @@ pub enum Ui {
     WindowFocus(bool),
     WindowOpened,
     Tick,
+    // -- replies, jumps
+    StartReply(MessageId),
+    CancelReply,
+    ToggleReplyMention,
+    JumpTo {
+        channel: ChannelId,
+        message: MessageId,
+    },
+    JumpToPresent,
+    // -- edit and delete
+    StartEdit(MessageId),
+    EditChanged(String),
+    SubmitEdit,
+    CancelEdit,
+    /// Up arrow in an empty composer.
+    EditLast,
+    DeleteClicked(MessageId),
+    ConfirmDelete,
+    CancelDelete,
+    /// Escape: closes the topmost popup / cancels edit or reply.
+    Escape,
+    // -- message menus
+    ContextMenu(MessageId),
+    CloseMenu,
+    CopyText(MessageId),
+    CopyLink(MessageId),
+    // -- reactions and emoji
+    ToggleReaction(MessageId, Emoji),
+    OpenEmojiPicker(PickerTarget),
+    EmojiQuery(String),
+    EmojiSection(Section),
+    PickEmoji(Emoji),
+    CloseEmojiPicker,
+    // -- attachments
+    PickFiles,
+    FileDropped(PathBuf),
+    Paste,
+    RemoveAttachment(usize),
+    CancelUpload(u64),
+    // -- member list, status, search
+    ToggleMembers,
+    MembersScrolled(Viewport),
+    ToggleStatusMenu,
+    SetStatus(Presence),
+    SearchChanged(String),
+    SubmitSearch,
+    SearchPage(bool),
+    CloseSearch,
+    /// A notification was clicked.
+    OpenChannel(ChannelId),
 }
 
 /// Completion of a `Task`.
@@ -69,6 +124,50 @@ pub enum Done {
         key: String,
         bytes: Option<Vec<u8>>,
     },
+    Edited {
+        channel: ChannelId,
+        message: MessageId,
+        result: Result<Box<crate::net::model::Message>, String>,
+    },
+    ActionFailed(String),
+    ReactionFailed {
+        channel: ChannelId,
+        message: MessageId,
+        emoji: Emoji,
+        change: super::state::ReactionChange,
+        error: String,
+    },
+    /// Files chosen in the dialog or dropped (already stat-ed).
+    FilesReady(Vec<Result<(UploadFile, bool), String>>),
+    /// Result of a Ctrl+V clipboard probe; `pasted` are file paths that may
+    /// also have been pasted as text.
+    Pasted {
+        files: Vec<Result<(UploadFile, bool), String>>,
+        pasted: Vec<PathBuf>,
+    },
+    ClearHighlight(MessageId),
+    Upload {
+        id: u64,
+        event: UploadEvent,
+    },
+    /// A window around a message (jump), or `None` when loading failed.
+    Around {
+        channel: ChannelId,
+        target: MessageId,
+        result: Result<Vec<crate::net::model::Message>, String>,
+    },
+    /// Newer messages after a detached window.
+    Newer {
+        channel: ChannelId,
+        result: Result<Vec<crate::net::model::Message>, String>,
+    },
+    Search {
+        generation: u64,
+        result: Result<SearchPage, String>,
+    },
+    /// Delay after a jump so the new rows are laid out before scrolling.
+    ScrollToMessage(MessageId),
+    StatusSaved(Result<(), String>),
     Screenshot(iced::window::Screenshot),
     ScreenshotReady,
     Ignored,

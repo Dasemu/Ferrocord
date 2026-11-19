@@ -1,0 +1,16 @@
+{
+  "guild_id": "2000000000000000001",
+  "emojis": [
+    {
+      "id": "1001",
+      "name": "ferris",
+      "animated": false,
+      "available": true
+    },
+    {
+      "id": "1002",
+      "name": "party",
+      "animated": true
+    }
+  ]
+}

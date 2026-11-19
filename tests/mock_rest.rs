@@ -10,7 +10,8 @@ use common::{Response, http};
 use ferrocord::auth::secrets::Secret;
 use ferrocord::error::Error;
 use ferrocord::net::model::Snowflake;
-use ferrocord::net::rest::RestClient;
+use ferrocord::net::model::{Emoji, Presence};
+use ferrocord::net::rest::{ReplyTarget, RestClient, SearchScope, UploadFile};
 use serde_json::json;
 
 const TOKEN: &str = "rest-test-token";
@@ -66,7 +67,7 @@ async fn send_message_typing_and_ack() {
     .await;
     let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
     let m = rest
-        .send_message(Snowflake(10), "hello **world**", "123")
+        .send_message(Snowflake(10), "hello **world**", "123", None)
         .await
         .unwrap();
     assert_eq!(m.content, "hello **world**");
@@ -212,4 +213,324 @@ fn decompression_bombs_are_rejected() {
     bomb[20..24].copy_from_slice(&100_000u32.to_be_bytes());
     assert!(check_image_dimensions(&bomb).is_err());
     assert!(check_image_dimensions(b"not an image").is_err());
+}
+
+fn rest_for(server: &common::MockHttp) -> RestClient {
+    RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap()
+}
+
+#[tokio::test]
+async fn reply_body_has_reference_and_optional_allowed_mentions() {
+    let server = http(Arc::new(|_, _| Response::json(200, msg(80)))).await;
+    let rest = rest_for(&server);
+    let t = ReplyTarget {
+        message: Snowflake(5),
+        guild: Some(Snowflake(9)),
+        mention: true,
+    };
+    rest.send_message(Snowflake(10), "yes", "n1", Some(t))
+        .await
+        .unwrap();
+    rest.send_message(
+        Snowflake(10),
+        "quiet",
+        "n2",
+        Some(ReplyTarget {
+            mention: false,
+            ..t
+        }),
+    )
+    .await
+    .unwrap();
+    let rec = server.recorded();
+    let a: serde_json::Value = serde_json::from_str(&rec[0].body).unwrap();
+    assert_eq!(a["message_reference"]["message_id"], "5");
+    assert_eq!(a["message_reference"]["channel_id"], "10");
+    assert_eq!(a["message_reference"]["guild_id"], "9");
+    assert_eq!(a["message_reference"]["fail_if_not_exists"], false);
+    assert!(a.get("allowed_mentions").is_none(), "ping on = default");
+    let b: serde_json::Value = serde_json::from_str(&rec[1].body).unwrap();
+    assert_eq!(b["allowed_mentions"]["replied_user"], false);
+    assert_eq!(
+        b["allowed_mentions"]["parse"],
+        json!(["users", "roles", "everyone"])
+    );
+}
+
+#[tokio::test]
+async fn edit_and_delete_messages() {
+    let server = http(Arc::new(|req, _| match req.method.as_str() {
+        "PATCH" => {
+            let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+            let mut m = msg(10);
+            m["content"] = body["content"].clone();
+            m["edited_timestamp"] = json!("2026-11-18T12:00:00+00:00");
+            Response::json(200, m)
+        }
+        "DELETE" => Response::json(204, json!(null)),
+        _ => Response::json(404, json!({})),
+    }))
+    .await;
+    let rest = rest_for(&server);
+    let m = rest
+        .edit_message(Snowflake(10), Snowflake(10), "fixed")
+        .await
+        .unwrap();
+    assert_eq!(m.content, "fixed");
+    assert!(m.edited);
+    rest.delete_message(Snowflake(10), Snowflake(10))
+        .await
+        .unwrap();
+    let rec = server.recorded();
+    assert_eq!(
+        (rec[0].method.as_str(), rec[0].path.as_str()),
+        ("PATCH", "/channels/10/messages/10")
+    );
+    assert_eq!(
+        (rec[1].method.as_str(), rec[1].path.as_str()),
+        ("DELETE", "/channels/10/messages/10")
+    );
+    // A forbidden delete is an error the UI can show.
+    let denied = http(Arc::new(|_, _| {
+        Response::json(
+            403,
+            json!({"message": "Missing Permissions", "code": 50013}),
+        )
+    }))
+    .await;
+    let e = rest_for(&denied)
+        .delete_message(Snowflake(1), Snowflake(2))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::Http { status: 403, .. }));
+}
+
+#[tokio::test]
+async fn reactions_use_encoded_emoji_paths() {
+    let server = http(Arc::new(|_, _| Response::json(204, json!(null)))).await;
+    let rest = rest_for(&server);
+    let thumbs = Emoji::unicode("👍");
+    rest.set_reaction(Snowflake(10), Snowflake(20), &thumbs, true)
+        .await
+        .unwrap();
+    rest.set_reaction(Snowflake(10), Snowflake(20), &thumbs, false)
+        .await
+        .unwrap();
+    let custom = Emoji {
+        id: Some(Snowflake(77)),
+        name: "ferris".into(),
+        animated: false,
+    };
+    rest.set_reaction(Snowflake(10), Snowflake(20), &custom, true)
+        .await
+        .unwrap();
+    let rec = server.recorded();
+    assert_eq!(rec[0].method, "PUT");
+    assert_eq!(
+        rec[0].path,
+        "/channels/10/messages/20/reactions/%F0%9F%91%8D/@me"
+    );
+    assert_eq!(rec[1].method, "DELETE");
+    assert_eq!(
+        rec[2].path,
+        "/channels/10/messages/20/reactions/ferris:77/@me"
+    );
+}
+
+#[tokio::test]
+async fn jump_windows_and_status_setting() {
+    let server = http(Arc::new(|req, _| {
+        if req.path.starts_with("/channels/10/messages") {
+            Response::json(200, json!([msg(30), msg(20), msg(10)]))
+        } else {
+            Response::json(200, json!({}))
+        }
+    }))
+    .await;
+    let rest = rest_for(&server);
+    let around = rest
+        .messages_around(Snowflake(10), Snowflake(20), 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        around.iter().map(|m| m.id.0).collect::<Vec<_>>(),
+        vec![10, 20, 30]
+    );
+    rest.messages_after(Snowflake(10), Snowflake(30), 50)
+        .await
+        .unwrap();
+    rest.set_status_setting(Presence::Offline).await.unwrap();
+    let rec = server.recorded();
+    assert_eq!(rec[0].path, "/channels/10/messages?limit=50&around=20");
+    assert_eq!(rec[1].path, "/channels/10/messages?limit=50&after=30");
+    assert_eq!(
+        (rec[2].method.as_str(), rec[2].path.as_str()),
+        ("PATCH", "/users/@me/settings")
+    );
+    let b: serde_json::Value = serde_json::from_str(&rec[2].body).unwrap();
+    // "Invisible" is spelled `invisible` on the wire.
+    assert_eq!(b["status"], "invisible");
+}
+
+#[tokio::test]
+async fn search_parses_hits_and_waits_for_the_index() {
+    let server = http(Arc::new(|req, n| {
+        assert!(
+            req.path
+                .starts_with("/guilds/9/messages/search?content=let%20chains&offset=25")
+        );
+        if n == 0 {
+            // Index not ready yet.
+            return Response::json(
+                202,
+                json!({"message": "Index not yet available.", "code": 110000, "retry_after": 0.2}),
+            );
+        }
+        let mut hit = msg(55);
+        hit["hit"] = json!(true);
+        Response::json(
+            200,
+            json!({"total_results": 61, "messages": [[msg(54), hit, msg(56)], [{"broken": true}]]}),
+        )
+    }))
+    .await;
+    let rest = rest_for(&server);
+    let start = Instant::now();
+    let page = rest
+        .search(SearchScope::Guild(Snowflake(9)), "let chains", 25)
+        .await
+        .unwrap();
+    assert!(start.elapsed() >= Duration::from_millis(190));
+    assert_eq!(page.total, 61);
+    // The hit is picked out of its context group; the broken group is skipped.
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].id.0, 55);
+    assert_eq!(page.messages[0].guild_id, Some(Snowflake(9)));
+    assert_eq!(server.recorded().len(), 2);
+}
+
+#[tokio::test]
+async fn dm_search_uses_the_channel_endpoint() {
+    let server = http(Arc::new(|req, _| {
+        assert!(
+            req.path
+                .starts_with("/channels/10/messages/search?content=hi&offset=0")
+        );
+        Response::json(200, json!({"total_results": 0, "messages": []}))
+    }))
+    .await;
+    let page = rest_for(&server)
+        .search(SearchScope::Channel(Snowflake(10)), "hi", 0)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 0);
+    assert!(page.messages.is_empty());
+}
+
+#[tokio::test]
+async fn multipart_upload_streams_files_with_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("notes.txt");
+    let b = dir.path().join("log.json");
+    // Big enough for several 64 KiB chunks.
+    let a_body = "line of text\n".repeat(20_000);
+    std::fs::write(&a, &a_body).unwrap();
+    std::fs::write(&b, "{\"ok\":true}").unwrap();
+    let files = vec![
+        UploadFile {
+            path: a.clone(),
+            name: "notes.txt".into(),
+            size: a_body.len() as u64,
+        },
+        UploadFile {
+            path: b.clone(),
+            name: "log.json".into(),
+            size: 11,
+        },
+    ];
+    let server = http(Arc::new(|_, _| {
+        let mut m = msg(90);
+        m["attachments"] = json!([{"id": "1", "filename": "notes.txt", "size": 1, "url": "https://cdn.discordapp.com/x"}]);
+        Response::json(200, m)
+    }))
+    .await;
+    let rest = rest_for(&server);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let reply = ReplyTarget {
+        message: Snowflake(5),
+        guild: None,
+        mention: false,
+    };
+    let m = rest
+        .send_with_files(Snowflake(10), "my caption", "nn", Some(reply), &files, tx)
+        .await
+        .unwrap();
+    assert_eq!(m.attachments.len(), 1);
+
+    let rec = &server.recorded()[0];
+    assert_eq!(rec.path, "/channels/10/messages");
+    let ct = rec.header("content-type").unwrap();
+    let boundary = ct.strip_prefix("multipart/form-data; boundary=").unwrap();
+    // The declared length is exactly the body we streamed.
+    assert_eq!(
+        rec.header("content-length")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap(),
+        rec.body.len()
+    );
+    assert!(rec.body.starts_with(&format!("--{boundary}\r\n")));
+    assert!(rec.body.ends_with(&format!("\r\n--{boundary}--\r\n")));
+    assert!(rec.body.contains("name=\"payload_json\""));
+    assert!(
+        rec.body
+            .contains("name=\"files[0]\"; filename=\"notes.txt\"")
+    );
+    assert!(
+        rec.body
+            .contains("name=\"files[1]\"; filename=\"log.json\"")
+    );
+    assert!(
+        rec.body
+            .contains("Content-Type: application/json\r\n\r\n{\"ok\":true}")
+    );
+    assert!(rec.body.contains(&a_body));
+    // payload_json carries the caption, reply, nonce and attachment ids.
+    let start = rec.body.find("\r\n\r\n").unwrap() + 4;
+    let end = rec.body[start..].find("\r\n--").unwrap() + start;
+    let payload: serde_json::Value = serde_json::from_str(&rec.body[start..end]).unwrap();
+    assert_eq!(payload["content"], "my caption");
+    assert_eq!(payload["nonce"], "nn");
+    assert_eq!(payload["message_reference"]["message_id"], "5");
+    assert_eq!(payload["attachments"][1]["filename"], "log.json");
+    assert_eq!(payload["allowed_mentions"]["replied_user"], false);
+
+    // Progress is monotonic and ends at the total length.
+    let mut last = 0;
+    let mut n = 0;
+    while let Ok(v) = rx.try_recv() {
+        assert!(v >= last);
+        last = v;
+        n += 1;
+    }
+    assert!(n > 2, "several progress reports, got {n}");
+    assert_eq!(last as usize, rec.body.len());
+}
+
+#[tokio::test]
+async fn upload_of_a_missing_file_fails_cleanly() {
+    let server = http(Arc::new(|_, _| Response::json(200, msg(1)))).await;
+    let files = vec![UploadFile {
+        path: "/definitely/not/here.bin".into(),
+        name: "here.bin".into(),
+        size: 4,
+    }];
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let r = tokio::time::timeout(
+        Duration::from_secs(10),
+        rest_for(&server).send_with_files(Snowflake(10), "", "n", None, &files, tx),
+    )
+    .await
+    .expect("must not hang");
+    assert!(r.is_err());
 }

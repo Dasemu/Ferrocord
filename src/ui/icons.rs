@@ -42,9 +42,19 @@ pub enum Icon {
     Volume2,
     WifiOff,
     X,
+    ArrowDown,
+    Check,
+    Copy,
+    Ellipsis,
+    Link,
+    Pencil,
+    Reply,
+    ReplySpine,
+    SmilePlus,
+    Trash,
 }
 
-const ALL: [(Icon, &[u8]); 35] = [
+const ALL: [(Icon, &[u8]); 45] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -146,6 +156,34 @@ const ALL: [(Icon, &[u8]); 35] = [
         include_bytes!("../../assets/icons/wifi-off.svg"),
     ),
     (Icon::X, include_bytes!("../../assets/icons/x.svg")),
+    (
+        Icon::ArrowDown,
+        include_bytes!("../../assets/icons/arrow-down.svg"),
+    ),
+    (Icon::Check, include_bytes!("../../assets/icons/check.svg")),
+    (Icon::Copy, include_bytes!("../../assets/icons/copy.svg")),
+    (
+        Icon::Ellipsis,
+        include_bytes!("../../assets/icons/ellipsis.svg"),
+    ),
+    (Icon::Link, include_bytes!("../../assets/icons/link.svg")),
+    (
+        Icon::Pencil,
+        include_bytes!("../../assets/icons/pencil.svg"),
+    ),
+    (Icon::Reply, include_bytes!("../../assets/icons/reply.svg")),
+    (
+        Icon::ReplySpine,
+        include_bytes!("../../assets/icons/reply-spine.svg"),
+    ),
+    (
+        Icon::SmilePlus,
+        include_bytes!("../../assets/icons/smile-plus.svg"),
+    ),
+    (
+        Icon::Trash,
+        include_bytes!("../../assets/icons/trash-2.svg"),
+    ),
 ];
 
 /// Handles are created once so iced can cache the rasterised icons.

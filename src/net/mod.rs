@@ -59,6 +59,18 @@ pub enum Event {
         partial: bool,
     },
     GuildDelete(GuildId),
+    Reaction(ReactionEvent),
+    /// PRESENCE_UPDATE (friends, and members of subscribed guilds).
+    PresenceUpdate {
+        user_id: UserId,
+        status: Presence,
+    },
+    MemberList(Box<MemberListUpdate>),
+    /// GUILD_EMOJIS_UPDATE.
+    GuildEmojis {
+        guild_id: GuildId,
+        emojis: Vec<CustomEmoji>,
+    },
     /// The token was rejected (close code 4004). The session must be cleared.
     AuthFailed,
     /// Unrecoverable gateway error (bad intents, invalid API version, ...).

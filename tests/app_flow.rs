@@ -133,3 +133,492 @@ fn inline_custom_emoji_render_as_images_when_loaded() {
     assert!(a.image(&key).is_some());
     let _ = ferrocord::ui::view(&a);
 }
+
+// -- round 2: replies, edit/delete, reactions, uploads, members, search ------------
+
+use ferrocord::app::Done;
+use ferrocord::app::emoji::{PickerTarget, Section};
+use ferrocord::app::upload::UploadEvent;
+use ferrocord::net::model::{Emoji, Message as Msg, Presence, Snowflake};
+use ferrocord::net::rest::UploadFile;
+
+fn ui(a: &mut App, u: Ui) {
+    let _ = a.update(Message::Ui(u));
+}
+
+fn window(a: &App) -> Vec<&Msg> {
+    a.chat.messages[&mock::CH_GENERAL].messages.iter().collect()
+}
+
+fn last_of(a: &App, user: u64) -> Msg {
+    window(a)
+        .into_iter()
+        .rev()
+        .find(|m| m.author.id == Snowflake(user))
+        .cloned()
+        .expect("message by user")
+}
+
+#[test]
+fn reply_flow_from_bar_to_pending_message() {
+    let mut a = app();
+    let target = last_of(&a, 3); // Bob
+    ui(&mut a, Ui::StartReply(target.id));
+    let r = a.reply.clone().expect("reply draft");
+    assert_eq!(r.message, target.id);
+    assert!(r.mention, "ping is on by default");
+    ui(&mut a, Ui::ToggleReplyMention);
+    assert!(!a.reply.as_ref().unwrap().mention);
+    let _ = ferrocord::ui::view(&a);
+
+    ui(&mut a, Ui::ComposerChanged("on it".into()));
+    ui(&mut a, Ui::Send);
+    assert!(a.reply.is_none(), "reply bar closes after sending");
+    let pending = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
+    assert!(pending.pending);
+    assert_eq!(pending.reply_to, Some(target.id));
+    assert_eq!(pending.kind, 19);
+    let preview = a.chat.reply_preview(pending).unwrap();
+    assert_eq!(preview.author.unwrap().id, Snowflake(3));
+    assert!(!preview.deleted);
+    // The reply header renders.
+    let _ = ferrocord::ui::view(&a);
+}
+
+#[test]
+fn replying_to_yourself_never_pings_and_escape_cancels() {
+    let mut a = app();
+    let mine = last_of(&a, 1);
+    ui(&mut a, Ui::StartReply(mine.id));
+    assert!(!a.reply.as_ref().unwrap().mention);
+    ui(&mut a, Ui::ToggleReplyMention);
+    assert!(!a.reply.as_ref().unwrap().mention, "toggle is a no-op");
+    ui(&mut a, Ui::Escape);
+    assert!(a.reply.is_none());
+}
+
+#[test]
+fn reply_draft_is_dropped_when_switching_channels() {
+    let mut a = app();
+    let target = last_of(&a, 3);
+    ui(&mut a, Ui::StartReply(target.id));
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert!(a.reply.is_none());
+}
+
+#[test]
+fn edit_flow_up_arrow_save_and_edited_marker() {
+    let mut a = app();
+    let mine = last_of(&a, 1);
+    // Up arrow in an empty composer edits the last own message.
+    ui(&mut a, Ui::EditLast);
+    let e = a.editing.clone().expect("editing");
+    assert_eq!(e.message, mine.id);
+    assert_eq!(e.text, mine.content);
+    let _ = ferrocord::ui::view(&a);
+    ui(
+        &mut a,
+        Ui::EditChanged("agreed, and `let` chains are great".into()),
+    );
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_none());
+    let m = a.chat.message(mock::CH_GENERAL, mine.id).unwrap();
+    assert_eq!(m.content, "agreed, and `let` chains are great");
+    assert!(m.edited);
+}
+
+#[test]
+fn edit_rules() {
+    let mut a = app();
+    // Not your message: ignored.
+    let bobs = last_of(&a, 3);
+    ui(&mut a, Ui::StartEdit(bobs.id));
+    assert!(a.editing.is_none());
+    // Up arrow does nothing while the composer has text.
+    ui(&mut a, Ui::ComposerChanged("draft".into()));
+    ui(&mut a, Ui::EditLast);
+    assert!(a.editing.is_none());
+    ui(&mut a, Ui::ComposerChanged(String::new()));
+
+    let mine = last_of(&a, 1);
+    // Unchanged text closes the editor without marking it edited.
+    ui(&mut a, Ui::StartEdit(mine.id));
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_none());
+    assert_eq!(
+        a.chat.message(mock::CH_GENERAL, mine.id).unwrap().edited,
+        mine.edited
+    );
+    // Too long: stays open with a toast.
+    ui(&mut a, Ui::StartEdit(mine.id));
+    ui(&mut a, Ui::EditChanged("x".repeat(2001)));
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_some());
+    assert!(a.toast.is_some());
+    // Emptying the message offers to delete it instead.
+    ui(&mut a, Ui::EditChanged("  ".into()));
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_none());
+    assert_eq!(a.pending_delete, Some((mock::CH_GENERAL, mine.id)));
+    ui(&mut a, Ui::CancelDelete);
+    // Escape cancels an edit.
+    ui(&mut a, Ui::StartEdit(mine.id));
+    ui(&mut a, Ui::Escape);
+    assert!(a.editing.is_none());
+}
+
+/// One test, because it toggles the process-wide Shift state.
+#[test]
+fn delete_confirms_unless_shift_is_held() {
+    use ferrocord::app::input::set_shift_for_tests;
+    let mut a = app();
+    let mine = last_of(&a, 1);
+    let bobs = last_of(&a, 3);
+    set_shift_for_tests(false);
+    // Others' messages cannot be deleted.
+    ui(&mut a, Ui::DeleteClicked(bobs.id));
+    assert!(a.pending_delete.is_none());
+    // Plain click opens the confirmation (which renders).
+    ui(&mut a, Ui::DeleteClicked(mine.id));
+    assert_eq!(a.pending_delete, Some((mock::CH_GENERAL, mine.id)));
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::CancelDelete);
+    assert!(a.chat.message(mock::CH_GENERAL, mine.id).is_some());
+    ui(&mut a, Ui::DeleteClicked(mine.id));
+    ui(&mut a, Ui::ConfirmDelete);
+    assert!(a.chat.message(mock::CH_GENERAL, mine.id).is_none());
+    assert!(a.pending_delete.is_none());
+
+    // Shift+click skips the confirmation.
+    let again = mock::text_message(
+        mock::CH_GENERAL,
+        Snowflake::from_timestamp_ms(mock::now_ms(), 77),
+        mock::user(1),
+        "delete me fast",
+    );
+    let id = again.id;
+    a.chat
+        .messages
+        .get_mut(&mock::CH_GENERAL)
+        .unwrap()
+        .upsert(again);
+    set_shift_for_tests(true);
+    ui(&mut a, Ui::DeleteClicked(id));
+    set_shift_for_tests(false);
+    assert!(a.pending_delete.is_none());
+    assert!(a.chat.message(mock::CH_GENERAL, id).is_none());
+}
+
+#[test]
+fn context_menu_opens_and_closes() {
+    let mut a = app();
+    let m = last_of(&a, 1);
+    ui(&mut a, Ui::ContextMenu(m.id));
+    assert_eq!(a.menu.unwrap().message, m.id);
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::Escape);
+    assert!(a.menu.is_none());
+    // Opening the reaction picker from the menu replaces the menu.
+    ui(&mut a, Ui::ContextMenu(m.id));
+    ui(
+        &mut a,
+        Ui::OpenEmojiPicker(PickerTarget::Reaction {
+            channel: mock::CH_GENERAL,
+            message: m.id,
+        }),
+    );
+    assert!(a.menu.is_none() && a.emoji_picker.is_some());
+    let _ = ferrocord::ui::view(&a);
+}
+
+#[test]
+fn reactions_toggle_and_picker_flows() {
+    let mut a = app();
+    let m = last_of(&a, 3);
+    let thumbs = Emoji::unicode("👍");
+    ui(&mut a, Ui::ToggleReaction(m.id, thumbs.clone()));
+    let r = &a.chat.message(mock::CH_GENERAL, m.id).unwrap().reactions;
+    assert_eq!((r[0].count, r[0].me), (1, true));
+    ui(&mut a, Ui::ToggleReaction(m.id, thumbs.clone()));
+    assert!(
+        a.chat
+            .message(mock::CH_GENERAL, m.id)
+            .unwrap()
+            .reactions
+            .is_empty()
+    );
+
+    // Picker opened from the toolbar reacts to that message.
+    ui(
+        &mut a,
+        Ui::OpenEmojiPicker(PickerTarget::Reaction {
+            channel: mock::CH_GENERAL,
+            message: m.id,
+        }),
+    );
+    // The mock server has custom emoji, so it opens there.
+    assert!(matches!(
+        a.emoji_picker.as_ref().unwrap().picker.section,
+        Section::Server(_)
+    ));
+    ui(&mut a, Ui::EmojiQuery("crab".into()));
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::PickEmoji(Emoji::unicode("🦀")));
+    assert!(a.emoji_picker.is_none());
+    assert_eq!(
+        a.chat.message(mock::CH_GENERAL, m.id).unwrap().reactions[0].emoji,
+        Emoji::unicode("🦀")
+    );
+
+    // Picker opened from the composer inserts text, custom emoji as markup.
+    ui(&mut a, Ui::OpenEmojiPicker(PickerTarget::Composer));
+    ui(&mut a, Ui::EmojiSection(Section::Unicode(3)));
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::PickEmoji(Emoji::unicode("🍕")));
+    ui(&mut a, Ui::OpenEmojiPicker(PickerTarget::Composer));
+    ui(
+        &mut a,
+        Ui::PickEmoji(Emoji {
+            id: Some(Snowflake(1001)),
+            name: "ferris".into(),
+            animated: false,
+        }),
+    );
+    assert_eq!(a.composer, "🍕 <:ferris:1001> ");
+}
+
+#[test]
+fn failed_reaction_request_is_reverted_with_a_toast() {
+    let mut a = app();
+    let m = last_of(&a, 3);
+    let e = Emoji::unicode("🎈");
+    ui(&mut a, Ui::ToggleReaction(m.id, e.clone()));
+    let _ = a.update(Message::Done(Done::ReactionFailed {
+        channel: mock::CH_GENERAL,
+        message: m.id,
+        emoji: e,
+        change: ferrocord::app::state::ReactionChange::Added,
+        error: "Unknown Emoji".into(),
+    }));
+    assert!(
+        a.chat
+            .message(mock::CH_GENERAL, m.id)
+            .unwrap()
+            .reactions
+            .is_empty()
+    );
+    assert!(a.toast.as_deref().unwrap().contains("Unknown Emoji"));
+}
+
+fn file(name: &str, size: u64) -> Result<(UploadFile, bool), String> {
+    Ok((
+        UploadFile {
+            path: format!("/tmp/{name}").into(),
+            name: name.into(),
+            size,
+        },
+        false,
+    ))
+}
+
+#[test]
+fn attachments_upload_with_progress_and_caption() {
+    let mut a = app();
+    let _ = a.update(Message::Done(Done::FilesReady(vec![
+        file("shot.png", 2_000),
+        file("huge.bin", 11 * 1024 * 1024),
+        file("empty.txt", 0),
+    ])));
+    // The oversized and empty files are refused with a toast.
+    assert_eq!(a.draft.len(), 1);
+    assert!(a.toast.is_some());
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::ComposerChanged("look at this".into()));
+    ui(&mut a, Ui::Send);
+    assert!(a.draft.is_empty() && a.composer.is_empty());
+    assert_eq!(a.uploads.len(), 1);
+    let id = a.uploads[0].id;
+    assert_eq!(a.uploads[0].total, 2_000);
+    let _ = ferrocord::ui::view(&a);
+
+    let _ = a.update(Message::Done(Done::Upload {
+        id,
+        event: UploadEvent::Progress {
+            sent: 500,
+            total: 2_000,
+        },
+    }));
+    assert!((a.uploads[0].fraction() - 0.25).abs() < 1e-6);
+
+    let mut m = mock::text_message(
+        mock::CH_GENERAL,
+        Snowflake::from_timestamp_ms(mock::now_ms(), 9),
+        mock::user(1),
+        "look at this",
+    );
+    m.attachments = vec![];
+    let _ = a.update(Message::Done(Done::Upload {
+        id,
+        event: UploadEvent::Done(Ok(Box::new(m.clone()))),
+    }));
+    assert!(a.uploads.is_empty());
+    assert!(a.chat.message(mock::CH_GENERAL, m.id).is_some());
+}
+
+#[test]
+fn upload_errors_and_cancel() {
+    let mut a = app();
+    let _ = a.update(Message::Done(Done::FilesReady(vec![file("a.txt", 10)])));
+    ui(&mut a, Ui::Send);
+    let id = a.uploads[0].id;
+    let _ = a.update(Message::Done(Done::Upload {
+        id,
+        event: UploadEvent::Done(Err("Request Entity Too Large".into())),
+    }));
+    assert!(a.uploads.is_empty());
+    assert_eq!(a.toast.as_deref(), Some("Request Entity Too Large"));
+
+    let _ = a.update(Message::Done(Done::FilesReady(vec![file("b.txt", 10)])));
+    ui(&mut a, Ui::Send);
+    let id = a.uploads[0].id;
+    ui(&mut a, Ui::CancelUpload(id));
+    assert!(a.uploads.is_empty());
+    // Removing a draft file.
+    let _ = a.update(Message::Done(Done::FilesReady(vec![file("c.txt", 10)])));
+    assert_eq!(a.draft.len(), 1);
+    ui(&mut a, Ui::RemoveAttachment(0));
+    assert!(a.draft.is_empty());
+    // Dropped files are ignored while editing.
+    let mine = last_of(&a, 1).id;
+    ui(&mut a, Ui::StartEdit(mine));
+    ui(&mut a, Ui::FileDropped("/tmp/x.png".into()));
+}
+
+#[test]
+fn member_list_shows_groups_and_presence() {
+    let mut a = app();
+    let l = a.chat.member_list.as_ref().expect("mock member list");
+    assert_eq!(l.loaded().count(), 11);
+    assert_eq!(a.chat.presence_of(Snowflake(3)), Presence::Idle);
+    assert_eq!(a.chat.presence_of(Snowflake(6)), Presence::Offline);
+    let _ = ferrocord::ui::view(&a);
+    // The panel can be toggled off and on.
+    ui(&mut a, Ui::ToggleMembers);
+    assert!(!a.members_open);
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::ToggleMembers);
+    assert!(a.members_open);
+    // DMs have no member list.
+    ui(&mut a, Ui::SelectChannel(mock::DM_ALICE));
+    assert!(a.chat.member_list.is_none());
+    let _ = ferrocord::ui::view(&a);
+    // Back in the server it is rebuilt.
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    assert!(a.chat.member_list.is_some());
+}
+
+#[test]
+fn own_status_can_be_changed() {
+    let mut a = app();
+    assert_eq!(a.chat.my_status, Presence::Online);
+    ui(&mut a, Ui::ToggleStatusMenu);
+    assert!(a.status_menu);
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::SetStatus(Presence::Dnd));
+    assert_eq!(a.chat.my_status, Presence::Dnd);
+    assert!(!a.status_menu);
+    assert_eq!(a.chat.presence_of(Snowflake(1)), Presence::Dnd);
+    let _ = ferrocord::ui::view(&a);
+}
+
+#[test]
+fn search_results_and_jump_to_message() {
+    let mut a = app();
+    ui(&mut a, Ui::SearchChanged("let".into()));
+    assert!(a.search.open);
+    ui(&mut a, Ui::SubmitSearch);
+    assert!(a.search.panel_visible());
+    assert!(a.search.total >= 2, "total {}", a.search.total);
+    let _ = ferrocord::ui::view(&a);
+    let hit = a.search.results[0].clone();
+
+    // Jump from another channel: switches back and flashes the message.
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    ui(
+        &mut a,
+        Ui::JumpTo {
+            channel: hit.channel_id,
+            message: hit.id,
+        },
+    );
+    assert_eq!(a.open_channel(), Some(hit.channel_id));
+    assert_eq!(a.highlight, Some(hit.id));
+    let _ = ferrocord::ui::view(&a);
+    let _ = a.update(Message::Done(Done::ClearHighlight(hit.id)));
+    assert!(a.highlight.is_none());
+
+    // Escape closes the search panel; blank queries do nothing.
+    ui(&mut a, Ui::SearchChanged("   ".into()));
+    ui(&mut a, Ui::SubmitSearch);
+    ui(&mut a, Ui::Escape);
+    assert!(!a.search.panel_visible() && !a.search.open);
+}
+
+#[test]
+fn search_in_dms_and_no_results() {
+    let mut a = app();
+    ui(&mut a, Ui::SelectChannel(mock::DM_ALICE));
+    ui(&mut a, Ui::SearchChanged("iced".into()));
+    ui(&mut a, Ui::SubmitSearch);
+    assert!(a.search.total >= 1);
+    for m in &a.search.results {
+        assert_eq!(m.channel_id, mock::DM_ALICE);
+    }
+    ui(&mut a, Ui::SearchChanged("zzzz-nothing".into()));
+    ui(&mut a, Ui::SubmitSearch);
+    assert_eq!(a.search.total, 0);
+    let _ = ferrocord::ui::view(&a);
+    // Home without an open DM cannot search.
+    ui(&mut a, Ui::CloseSearch);
+    ui(&mut a, Ui::SelectHome);
+}
+
+#[test]
+fn notification_click_opens_the_channel() {
+    let mut a = app();
+    ui(&mut a, Ui::OpenChannel(mock::DM_ALICE));
+    assert_eq!(a.view, View::Home(Some(mock::DM_ALICE)));
+    ui(&mut a, Ui::OpenChannel(mock::CH_RANDOM));
+    assert_eq!(a.open_channel(), Some(mock::CH_RANDOM));
+    assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
+    // A channel that no longer exists is ignored.
+    ui(&mut a, Ui::OpenChannel(Snowflake(999_999)));
+    assert_eq!(a.open_channel(), Some(mock::CH_RANDOM));
+}
+
+#[test]
+fn jump_to_present_reloads_a_detached_window() {
+    let mut a = app();
+    a.chat.messages.get_mut(&mock::CH_GENERAL).unwrap().detached = true;
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::JumpToPresent);
+    let w = &a.chat.messages[&mock::CH_GENERAL];
+    assert!(!w.detached);
+}
+
+#[test]
+fn live_messages_are_not_appended_to_a_detached_window() {
+    let mut a = app();
+    a.chat.messages.get_mut(&mock::CH_GENERAL).unwrap().detached = true;
+    let before = a.chat.messages[&mock::CH_GENERAL].messages.len();
+    let m = mock::text_message(
+        mock::CH_GENERAL,
+        Snowflake::from_timestamp_ms(mock::now_ms() + 5_000, 1),
+        mock::user(3),
+        "new live message",
+    );
+    let _ = a.update(Message::Net(ferrocord::net::Event::MessageCreate(
+        Box::new(m),
+    )));
+    assert_eq!(a.chat.messages[&mock::CH_GENERAL].messages.len(), before);
+}

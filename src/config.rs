@@ -27,6 +27,8 @@ pub enum ScreenshotScreen {
     Guild,
     Dms,
     Embeds,
+    Search,
+    Compose,
 }
 
 impl ScreenshotScreen {
@@ -36,6 +38,8 @@ impl ScreenshotScreen {
             "guild" | "server" => Some(Self::Guild),
             "dms" | "dm" => Some(Self::Dms),
             "embeds" | "attachments" => Some(Self::Embeds),
+            "search" => Some(Self::Search),
+            "compose" => Some(Self::Compose),
             _ => None,
         }
     }
@@ -114,12 +118,14 @@ impl Config {
                     let screen = args
                         .next()
                         .and_then(|s| ScreenshotScreen::parse(&s))
-                        .ok_or("--screenshot needs one of: login, guild, dms, embeds")?;
+                        .ok_or(
+                            "--screenshot needs one of: login, guild, dms, embeds, search, compose",
+                        )?;
                     let out = args.next().ok_or("--screenshot needs an output path")?;
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--screenshot <login|guild|dms|embeds> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--screenshot <login|guild|dms|embeds|search|compose> <out.png>]".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }
