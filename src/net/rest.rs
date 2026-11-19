@@ -112,7 +112,13 @@ impl RestClient {
             if let Some(b) = &body {
                 req = req.json(b);
             }
-            let resp = req.send().await?;
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    self.limiter.lock().await.release(&route);
+                    return Err(e.into());
+                }
+            };
             let status = resp.status();
             let headers = RateLimitHeaders::from_headers(resp.headers());
             let retry_after_header = resp
@@ -134,7 +140,7 @@ impl RestClient {
                     .or(retry_after_header)
                     .unwrap_or(1.0);
                 let global = headers.global || body.is_some_and(|b| b.global);
-                let wait = Duration::from_secs_f64(secs.min(300.0));
+                let wait = super::ratelimit::secs(secs).min(Duration::from_secs(300));
                 self.limiter
                     .lock()
                     .await

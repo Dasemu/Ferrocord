@@ -54,6 +54,8 @@ pub struct RateLimiter {
     /// on routes without a bucket header).
     unbucketed: HashMap<String, Bucket>,
     global_until: Option<Instant>,
+    /// Routes whose first request is in flight (value: when it started).
+    probing: HashMap<String, Instant>,
 }
 
 /// Computes the rate-limit route key for `METHOD /path`.
@@ -96,6 +98,29 @@ fn major_of(route: &str) -> &str {
     }
 }
 
+/// Longest wait we ever accept from a header (protects against garbage).
+pub const MAX_WAIT: Duration = Duration::from_secs(3600);
+/// While the first request on an unknown (or just reset) bucket is in
+/// flight, others wait; a lost probe is forgotten after this long.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Poll interval while waiting for a probe.
+pub const PROBE_POLL: Duration = Duration::from_millis(50);
+
+/// Converts header seconds to a duration: rejects NaN/negative/huge values.
+pub fn secs(v: f64) -> Duration {
+    if !v.is_finite() || v <= 0.0 {
+        return Duration::ZERO;
+    }
+    if v >= MAX_WAIT.as_secs_f64() {
+        return MAX_WAIT;
+    }
+    Duration::try_from_secs_f64(v).unwrap_or(Duration::ZERO)
+}
+
+fn after(now: Instant, d: Duration) -> Instant {
+    now.checked_add(d.min(MAX_WAIT)).unwrap_or(now)
+}
+
 impl RateLimiter {
     pub fn new() -> Self {
         Self::default()
@@ -108,45 +133,97 @@ impl RateLimiter {
     }
 
     /// How long to wait before sending a request on `route`. When it returns
-    /// `None` a slot has been reserved (remaining is decremented).
+    /// `None` a slot has been reserved: `remaining` is decremented, or, for
+    /// an unknown / just-reset bucket, this request becomes the single
+    /// "probe" whose response teaches us the limits (others wait for it).
     pub fn acquire(&mut self, route: &str, now: Instant) -> Option<Duration> {
         if let Some(until) = self.global_until {
             if until > now {
-                return Some(until - now);
+                return Some(until.saturating_duration_since(now));
             }
             self.global_until = None;
         }
         let key = self.bucket_key(route);
-        let bucket = match key {
-            Some(k) => self.buckets.get_mut(&k),
+        let bucket = match &key {
+            Some(k) => self.buckets.get_mut(k),
             None => self.unbucketed.get_mut(route),
         };
-        let b = bucket?;
-        if b.reset_at <= now {
-            // Bucket has reset; the next response will tell us the new state.
+        if let Some(b) = bucket
+            && b.reset_at > now
+        {
+            if b.remaining == 0 {
+                return Some(b.reset_at.saturating_duration_since(now));
+            }
+            b.remaining -= 1;
             return None;
         }
-        if b.remaining == 0 {
-            return Some(b.reset_at - now);
+        // Unknown bucket, or its window has passed (state is stale):
+        // serialise until a response refreshes it.
+        match key {
+            Some(k) => {
+                self.buckets.remove(&k);
+            }
+            None => {
+                self.unbucketed.remove(route);
+            }
         }
-        b.remaining -= 1;
+        if let Some(started) = self.probing.get(route)
+            && now.saturating_duration_since(*started) < PROBE_TIMEOUT
+        {
+            return Some(PROBE_POLL);
+        }
+        self.probing.insert(route.to_owned(), now);
         None
+    }
+
+    /// Call when a request failed before any response arrived, so waiting
+    /// requests on the same route are not blocked by a dead probe.
+    pub fn release(&mut self, route: &str) {
+        self.probing.remove(route);
     }
 
     /// Records the headers of a response.
     pub fn update(&mut self, route: &str, h: &RateLimitHeaders, now: Instant) {
+        self.probing.remove(route);
         let Some(remaining) = h.remaining else { return };
-        let reset_at = now + Duration::from_secs_f64(h.reset_after.unwrap_or(0.0).max(0.0));
-        let state = Bucket {
+        let reset_at = after(now, secs(h.reset_after.unwrap_or(0.0)));
+        let fresh = Bucket {
             remaining,
             reset_at,
         };
+        // Responses can arrive out of order. Within the same window keep
+        // the smaller `remaining`; never let an older window overwrite a
+        // newer one.
+        let merge = |old: Option<&Bucket>| -> Bucket {
+            match old {
+                Some(o) if o.reset_at > now => {
+                    let gap = if o.reset_at > reset_at {
+                        o.reset_at - reset_at
+                    } else {
+                        reset_at - o.reset_at
+                    };
+                    if gap < Duration::from_secs(1) {
+                        Bucket {
+                            remaining: o.remaining.min(remaining),
+                            reset_at: o.reset_at.max(reset_at),
+                        }
+                    } else if reset_at < o.reset_at {
+                        *o
+                    } else {
+                        fresh
+                    }
+                }
+                _ => fresh,
+            }
+        };
         if let Some(hash) = &h.bucket {
             self.routes.insert(route.to_owned(), hash.clone());
-            self.unbucketed.remove(route);
+            let old = self.unbucketed.remove(route);
             let key = format!("{hash}:{}", major_of(route));
+            let state = merge(self.buckets.get(&key).or(old.as_ref()));
             self.buckets.insert(key, state);
         } else {
+            let state = merge(self.unbucketed.get(route));
             self.unbucketed.insert(route.to_owned(), state);
         }
     }
@@ -154,7 +231,8 @@ impl RateLimiter {
     /// Records a 429. `retry_after` comes from the JSON body (preferred) or
     /// the `Retry-After` header.
     pub fn on_429(&mut self, route: &str, retry_after: Duration, global: bool, now: Instant) {
-        let until = now + retry_after;
+        self.probing.remove(route);
+        let until = after(now, retry_after);
         if global {
             self.global_until = Some(self.global_until.map_or(until, |g| g.max(until)));
             return;
@@ -264,6 +342,92 @@ mod tests {
             Some(Duration::from_secs(3))
         );
         assert_eq!(rl.acquire("POST /channels/2/typing", now), None);
+    }
+
+    #[test]
+    fn unknown_route_is_probed_by_one_request_at_a_time() {
+        let mut rl = RateLimiter::new();
+        let now = Instant::now();
+        let r = "POST /channels/1/messages";
+        assert_eq!(rl.acquire(r, now), None);
+        assert_eq!(rl.acquire(r, now), Some(PROBE_POLL));
+        rl.update(
+            r,
+            &RateLimitHeaders {
+                bucket: Some("b".into()),
+                remaining: Some(3),
+                reset_after: Some(1.0),
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(rl.acquire(r, now), None);
+        // A failed probe is released.
+        let r2 = "GET /x";
+        assert_eq!(rl.acquire(r2, now), None);
+        rl.release(r2);
+        assert_eq!(rl.acquire(r2, now), None);
+        // ...and a lost one times out.
+        assert_eq!(rl.acquire(r2, now + PROBE_TIMEOUT), None);
+    }
+
+    #[test]
+    fn stale_bucket_is_reprobed_after_reset() {
+        let mut rl = RateLimiter::new();
+        let now = Instant::now();
+        let r = "POST /channels/1/messages";
+        rl.acquire(r, now);
+        rl.update(
+            r,
+            &RateLimitHeaders {
+                bucket: Some("b".into()),
+                remaining: Some(0),
+                reset_after: Some(1.0),
+                ..Default::default()
+            },
+            now,
+        );
+        let later = now + Duration::from_secs(2);
+        assert_eq!(rl.acquire(r, later), None);
+        assert_eq!(rl.acquire(r, later), Some(PROBE_POLL));
+    }
+
+    #[test]
+    fn out_of_order_updates_keep_lowest_remaining() {
+        let mut rl = RateLimiter::new();
+        let now = Instant::now();
+        let r = "POST /channels/1/messages";
+        let h = |rem, reset| RateLimitHeaders {
+            bucket: Some("b".into()),
+            remaining: Some(rem),
+            reset_after: Some(reset),
+            ..Default::default()
+        };
+        rl.update(r, &h(1, 2.0), now);
+        // An older response (higher remaining, same window) arrives late.
+        rl.update(r, &h(4, 2.05), now);
+        assert_eq!(rl.acquire(r, now), None);
+        assert!(rl.acquire(r, now).is_some(), "remaining must stay at 1");
+    }
+
+    #[test]
+    fn garbage_header_values_are_clamped() {
+        assert_eq!(secs(f64::NAN), Duration::ZERO);
+        assert_eq!(secs(-5.0), Duration::ZERO);
+        assert_eq!(secs(f64::INFINITY), Duration::ZERO);
+        assert_eq!(secs(1e300), MAX_WAIT);
+        let mut rl = RateLimiter::new();
+        let now = Instant::now();
+        rl.update(
+            "GET /a",
+            &RateLimitHeaders {
+                remaining: Some(0),
+                reset_after: Some(f64::MAX),
+                ..Default::default()
+            },
+            now,
+        );
+        assert!(rl.acquire("GET /a", now).unwrap() <= MAX_WAIT);
     }
 
     #[test]
