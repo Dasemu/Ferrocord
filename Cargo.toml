@@ -33,6 +33,8 @@ sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false }
+# Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
+unicode-segmentation = "1"
 emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }

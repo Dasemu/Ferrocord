@@ -6,6 +6,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Length, Padding, Point, Size};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, ui};
@@ -517,7 +518,10 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         "\u{1F3C1}",
     ];
     for (i, face) in FACES.iter().enumerate() {
-        tabs = tabs.push(tab(text(*face).size(16).into(), Section::Unicode(i)));
+        tabs = tabs.push(tab(
+            emoji_text(*face, 16.0, p.text_normal, INTER, false),
+            Section::Unicode(i),
+        ));
     }
 
     // Grid.
@@ -544,7 +548,7 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
     for e in unicode {
         cells.push(emoji_button(
             p,
-            text(e.as_str()).size(24).into(),
+            emoji_text(e.as_str(), 24.0, p.text_normal, INTER, false),
             Emoji::unicode(e.as_str()),
         ));
     }

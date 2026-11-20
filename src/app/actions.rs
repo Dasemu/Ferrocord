@@ -33,11 +33,11 @@ pub struct ReplyDraft {
 }
 
 /// An inline edit in progress.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Editing {
     pub channel: ChannelId,
     pub message: MessageId,
-    pub text: String,
+    pub text: super::composer::Composer,
     pub original: String,
 }
 
@@ -121,7 +121,13 @@ impl App {
             Ui::StartEdit(m) => self.start_edit(m),
             Ui::EditChanged(s) => {
                 if let Some(e) = self.editing.as_mut() {
-                    e.text = s;
+                    e.text.set_text(&s);
+                }
+                Task::none()
+            }
+            Ui::EditAction(a) => {
+                if let Some(e) = self.editing.as_mut() {
+                    e.text.perform(a);
                 }
                 Task::none()
             }
@@ -469,7 +475,7 @@ impl App {
         self.editing = Some(Editing {
             channel: c,
             message: m,
-            text: msg.content.clone(),
+            text: super::composer::Composer::with_text(&msg.content),
             original: msg.content.clone(),
         });
         self.menu = None;
@@ -481,7 +487,7 @@ impl App {
         let Some(e) = self.editing.clone() else {
             return Task::none();
         };
-        let text = e.text.trim().to_owned();
+        let text = e.text.text().trim().to_owned();
         if text == e.original.trim() {
             self.editing = None;
             return focus(composer_id());
@@ -699,8 +705,7 @@ impl App {
         };
         match open.picker.target {
             PickerTarget::Composer => {
-                self.composer.push_str(&e.composer_text());
-                self.composer.push(' ');
+                self.composer.push_str(&format!("{} ", e.composer_text()));
                 focus(composer_id())
             }
             PickerTarget::Reaction { channel, message } => {
@@ -841,8 +846,9 @@ impl App {
         for p in paths {
             let plain = p.display().to_string();
             for variant in [format!("file://{plain}"), plain] {
-                if self.composer.contains(&variant) {
-                    self.composer = self.composer.replace(&variant, "").trim().to_owned();
+                let text = self.composer.text();
+                if text.contains(&variant) {
+                    self.composer.set_text(text.replace(&variant, "").trim());
                 }
             }
         }

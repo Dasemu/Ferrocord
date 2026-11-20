@@ -45,6 +45,8 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// Multi-line composer and multi-line / emoji messages in a DM.
+    Multiline,
 }
 
 impl ScreenshotScreen {
@@ -88,6 +90,7 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "multiline" | "emoji" => Some(Self::Multiline),
             _ => None,
         }
     }
