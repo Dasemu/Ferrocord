@@ -534,12 +534,46 @@ pub struct EmbedField {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbedMedia {
+    /// The original URL (never fetched).
     pub url: String,
+    /// Discord's media proxy URL (`media.discordapp.net`, `images-ext-*`):
+    /// the only one that is downloaded.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
 
+impl EmbedMedia {
+    /// What to download: the proxy URL, else the plain one (which the host
+    /// allowlist then accepts only when it is Discord's own CDN).
+    pub fn download_url(&self) -> &str {
+        self.proxy_url.as_deref().unwrap_or(&self.url)
+    }
+}
+
+/// `embed.video`: a direct file on the proxy (mp4/webm) or an iframe-only
+/// player page (YouTube, Twitch).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EmbedVideo {
+    pub url: String,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl EmbedVideo {
+    pub fn download_url(&self) -> &str {
+        self.proxy_url.as_deref().unwrap_or(&self.url)
+    }
+}
+
+/// `MESSAGE_FLAGS`: the embeds of the message are hidden.
+pub const FLAG_SUPPRESS_EMBEDS: u64 = 1 << 2;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Embed {
     pub kind: Option<String>,
     pub title: Option<String>,
@@ -548,11 +582,21 @@ pub struct Embed {
     pub color: Option<u32>,
     pub author_name: Option<String>,
     pub author_url: Option<String>,
+    /// Author icon: the proxy URL when there is one.
+    pub author_icon: Option<String>,
     pub provider_name: Option<String>,
+    pub provider_url: Option<String>,
     pub footer: Option<String>,
+    /// Footer icon: the proxy URL when there is one.
+    pub footer_icon: Option<String>,
+    /// `embed.timestamp`, Unix milliseconds.
+    pub timestamp_ms: Option<u64>,
     pub fields: Vec<EmbedField>,
     pub image: Option<EmbedMedia>,
     pub thumbnail: Option<EmbedMedia>,
+    pub video: Option<EmbedVideo>,
+    /// `embed.flags` (unused here, kept for round trips).
+    pub flags: u64,
 }
 
 impl Embed {
@@ -588,6 +632,9 @@ pub struct Message {
     pub edited: bool,
     pub attachments: Vec<Attachment>,
     pub embeds: Vec<Embed>,
+    /// `MESSAGE_FLAGS` bit field (SUPPRESS_EMBEDS is bit 2).
+    #[serde(default)]
+    pub flags: u64,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
     pub mentions: Vec<UserId>,
@@ -640,6 +687,11 @@ impl Message {
                 .any(|e| e.kind.as_deref() == Some("gifv") && e.url.as_deref() == Some(c))
     }
 
+    /// The message's embeds are hidden (its author or a moderator chose so).
+    pub fn embeds_suppressed(&self) -> bool {
+        self.flags & FLAG_SUPPRESS_EMBEDS != 0
+    }
+
     /// Applies a MESSAGE_UPDATE patch (only the fields that were sent).
     pub fn apply_patch(&mut self, p: &MessagePatch) {
         if let Some(c) = &p.content {
@@ -650,6 +702,9 @@ impl Message {
         }
         if let Some(a) = &p.attachments {
             self.attachments = a.clone();
+        }
+        if let Some(f) = p.flags {
+            self.flags = f;
         }
         self.edited |= p.edited;
     }
@@ -663,6 +718,7 @@ pub struct MessagePatch {
     pub content: Option<String>,
     pub embeds: Option<Vec<Embed>>,
     pub attachments: Option<Vec<Attachment>>,
+    pub flags: Option<u64>,
     pub edited: bool,
 }
 
@@ -845,6 +901,7 @@ mod tests {
             url: Some(url.into()),
             provider_name: Some("Tenor".into()),
             thumbnail: Some(EmbedMedia {
+                proxy_url: None,
                 url: "https://media.example/thumb.png".into(),
                 width: Some(220),
                 height: Some(165),
@@ -961,6 +1018,7 @@ mod tests {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            flags: 0,
             stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],

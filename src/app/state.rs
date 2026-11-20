@@ -574,6 +574,27 @@ impl ChatState {
         }
     }
 
+    /// Optimistically hides the embeds of a message (`SUPPRESS_EMBEDS`).
+    /// Returns what to restore on failure and the new flags to send.
+    pub fn suppress_embeds(
+        &mut self,
+        c: ChannelId,
+        id: MessageId,
+    ) -> Option<(Vec<Embed>, u64, u64)> {
+        let m = self.messages.get_mut(&c).and_then(|w| w.get_mut(id))?;
+        let (old_embeds, old_flags) = (std::mem::take(&mut m.embeds), m.flags);
+        m.flags |= FLAG_SUPPRESS_EMBEDS;
+        Some((old_embeds, old_flags, m.flags))
+    }
+
+    /// Undoes [`Self::suppress_embeds`] after a refusal.
+    pub fn restore_embeds(&mut self, c: ChannelId, id: MessageId, embeds: Vec<Embed>, flags: u64) {
+        if let Some(m) = self.messages.get_mut(&c).and_then(|w| w.get_mut(id)) {
+            m.embeds = embeds;
+            m.flags = flags;
+        }
+    }
+
     pub fn remove_message(&mut self, c: ChannelId, id: MessageId) {
         if let Some(w) = self.messages.get_mut(&c) {
             w.messages.retain(|m| m.id != id);
@@ -1195,6 +1216,7 @@ impl ChatState {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            flags: 0,
             stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],

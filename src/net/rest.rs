@@ -343,6 +343,24 @@ impl RestClient {
         Ok(serde_json::from_value::<WireMessage>(v)?.into_domain())
     }
 
+    /// `PATCH /channels/{c}/messages/{m}` with `flags` — what the official
+    /// client's embed "X" sends (`flags | SUPPRESS_EMBEDS`).
+    pub async fn set_message_flags(
+        &self,
+        channel: ChannelId,
+        message: MessageId,
+        flags: u64,
+    ) -> Result<Message> {
+        let v = self
+            .request(
+                Method::PATCH,
+                &format!("/channels/{channel}/messages/{message}"),
+                Some(serde_json::json!({ "flags": flags })),
+            )
+            .await?;
+        Ok(serde_json::from_value::<WireMessage>(v)?.into_domain())
+    }
+
     /// `DELETE /channels/{c}/messages/{m}`.
     pub async fn delete_message(&self, channel: ChannelId, message: MessageId) -> Result<()> {
         self.request(

@@ -159,12 +159,12 @@ fn message_create_full() {
     assert_eq!(e.author_name.as_deref(), Some("Author"));
     assert_eq!(e.footer.as_deref(), Some("Footer"));
     assert_eq!(e.fields.len(), 1);
-    // Proxy URLs are preferred for media.
+    // Proxy URLs are what gets downloaded.
     assert!(
         e.thumbnail
             .as_ref()
             .unwrap()
-            .url
+            .download_url()
             .contains("images-ext-1.discordapp.net")
     );
     // Debug output never contains the body.

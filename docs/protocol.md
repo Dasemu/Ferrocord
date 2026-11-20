@@ -355,3 +355,41 @@ default gg Sans are not bundled: a bold weight of Inter stands in for them.
 * `passthrough=true` for decoration assets not prefixed `a_` (those are
   treated as still).
 * Server-specific display name styles and nameplates in member objects.
+
+## 11. Embeds (`app/embeds.rs`, `ui/embeds.rs`)
+
+* **Model.** `Embed` keeps `author.icon_url`/`proxy_icon_url` (the proxy one
+  wins), `footer.icon_url`, `timestamp`, `provider.url`, `video`, `flags`;
+  `EmbedMedia` keeps both `url` and `proxy_url`. Only the proxy URL is
+  downloaded (`EmbedMedia::download_url`), through the same host allowlist as
+  every CDN fetch (`cdn.discordapp.com`, `media.discordapp.net`,
+  `images-ext-*.discordapp.net`, no token). Messages carry `flags`; bit 2 is
+  `SUPPRESS_EMBEDS`. Cached JSON from older versions loads (`#[serde(default)]`).
+* **Layout** is decided by pure functions: `plan` (small 80 px thumbnail on the
+  right, large image / large `article`/`link` thumbnail (>= 300 px wide) /
+  video poster below, 400x300 box, no upscaling, boxes fixed before the
+  download so history does not jump), `field_rows` (3 inline fields per row,
+  2 beside a thumbnail, non-inline on their own row), `group_embeds` +
+  `grid_columns` (embeds sharing a `url` and carrying only an image join the
+  lead; 2/3/4 photos as a grid).
+* **Video cards** show the poster with a play button. `video_action` routes a
+  click: a direct mp4/webm on the media proxy -> `Ui::PlayVideo(url)` (the
+  hook for the inline player; today it asks via the confirm-link dialog and
+  opens the browser), anything else (YouTube, Twitch iframes) -> the page
+  link through `Ui::ConfirmLink`. `gifv` stays a bare still frame;
+  `gifv_source` returns the looping MP4 for the animation engine.
+* **Safety.** Only http(s) reaches `pending_link`/the browser; texts are cut
+  to Discord's own limits (`clip`), at most 10 embeds and 25 fields are drawn.
+* **Live updates.** `MESSAGE_UPDATE` is a `MessagePatch` of `Option`s: an
+  embeds-only update (link unfurl) never touches the content, and `embeds: []`
+  removes them. The same patch is applied to the SQLite cache.
+* **Suppress.** The "X" (author or `MANAGE_MESSAGES`) hides the embeds at once and
+  sends `PATCH /channels/{c}/messages/{m}` with `{"flags": flags | 4}`; a
+  refusal puts them back. Messages with the flag draw no embeds.
+* **Spoilers.** An embed whose URL appears inside `||...||` in the message
+  text shows its media behind a click (`Ui::RevealSpoiler`).
+
+Renderer note: tiny-skia ignores image `crop`, container `clip` and corner
+radii, so an image can never be "covered" into a box. Posters take the aspect
+ratio of their own thumbnail, and grid cells letterbox (`Contain`) on the
+card background.
