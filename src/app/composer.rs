@@ -26,12 +26,14 @@ impl Composer {
         Self::default()
     }
 
-    /// A buffer holding `text`, with the cursor at the end.
+    /// A buffer holding `text`, with the cursor at the end. The text goes
+    /// in as a paste so the editor lays it out like typed input.
     pub fn with_text(text: &str) -> Self {
-        let mut c = Self {
-            content: Content::with_text(text),
-        };
-        c.content.move_to(end_cursor(&c.content));
+        let mut c = Self::new();
+        if !text.is_empty() {
+            c.content
+                .perform(Action::Edit(Edit::Paste(Arc::new(text.to_owned()))));
+        }
         c
     }
 

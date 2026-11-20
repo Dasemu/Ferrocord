@@ -398,6 +398,13 @@ impl App {
                 self.auth = AuthState::LoggedOut { error: None };
                 self.qr = Some(qr_ready("https://discord.com/ra/mock-fingerprint-not-real"));
             }
+            Some(ScreenshotScreen::Multiline) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(Some(mock::DM_ALICE));
+                self.chat.mark_read(mock::DM_ALICE);
+            }
             Some(ScreenshotScreen::Dms) => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -1279,7 +1286,13 @@ impl App {
             }
             Done::FontsLoaded => {
                 self.fonts_ready = true;
-                if let Some((_, _)) = &self.cfg.screenshot {
+                if let Some((screen, _)) = &self.cfg.screenshot {
+                    // The editor buffer must be shaped once the fonts exist.
+                    if *screen == ScreenshotScreen::Multiline {
+                        self.composer.set_text(
+                            "Dinner at 8? 🍕\nI booked the table by the window.\nShift+Enter breaks the line,\nEnter sends it 🦀",
+                        );
+                    }
                     return Task::perform(
                         async { tokio::time::sleep(Duration::from_millis(600)).await },
                         |_| Message::Done(Done::ScreenshotReady),
