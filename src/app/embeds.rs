@@ -181,12 +181,14 @@ pub fn plan(g: &Group<'_>) -> Plan {
     if is_video_card(e) {
         let poster = e.thumbnail.as_ref().or(e.image.as_ref());
         let v = e.video.as_ref();
-        let (w, h) = match v.and_then(|v| v.width.zip(v.height)) {
+        // The poster's own aspect ratio (the software renderer cannot crop
+        // or clip an image), else the video's, else 16:9.
+        let (w, h) = match poster
+            .and_then(|m| m.width.zip(m.height))
+            .or_else(|| v.and_then(|v| v.width.zip(v.height)))
+        {
             Some((w, h)) if w > 0 && h > 0 => (w, h),
-            _ => match poster.and_then(|m| m.width.zip(m.height)) {
-                Some((w, h)) if w > 0 && h > 0 => (w, h),
-                _ => (16, 9),
-            },
+            _ => (16, 9),
         };
         // Scale up as well: posters of 320x180 still fill the card.
         let (bw, bh) = fit_size(w * 100, h * 100, MAX_MEDIA_W, MAX_MEDIA_H);
@@ -645,14 +647,22 @@ mod tests {
     }
 
     #[test]
-    fn video_card_has_poster_sized_by_the_video() {
+    fn video_card_follows_the_poster_then_the_video_aspect() {
+        // 4:3 poster: its own aspect (no cropping available).
         let e = youtube(None);
         let p = plan(&group_embeds(std::slice::from_ref(&e))[0]);
         assert!(p.video);
         let l = p.large.unwrap();
-        assert_eq!((l.w, l.h), (400, 225));
+        assert_eq!((l.w, l.h), (400, 300));
         assert_eq!(l.key.as_deref(), Some("https://media.discordapp.net/yt"));
-        // No poster at all: still a box at the final size.
+        // 16:9 poster.
+        let mut e = youtube(None);
+        e.thumbnail = Some(media("yt", 1280, 720));
+        let l = plan(&group_embeds(std::slice::from_ref(&e))[0])
+            .large
+            .unwrap();
+        assert_eq!((l.w, l.h), (400, 225));
+        // No poster at all: still a box at the final size (video's aspect).
         let mut e = youtube(None);
         e.thumbnail = None;
         let l = plan(&group_embeds(std::slice::from_ref(&e))[0])

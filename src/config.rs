@@ -31,6 +31,8 @@ pub enum ScreenshotScreen {
     EmbedMedia,
     /// Bot embed with every decoration and a photo grid.
     EmbedRich,
+    /// Twitter-style photo grid.
+    EmbedGrid,
     Search,
     Compose,
     Settings,
@@ -80,6 +82,7 @@ impl ScreenshotScreen {
             "embeds" | "attachments" => Some(Self::Embeds),
             "embeds-media" => Some(Self::EmbedMedia),
             "embeds-rich" => Some(Self::EmbedRich),
+            "embeds-grid" => Some(Self::EmbedGrid),
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),

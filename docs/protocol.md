@@ -289,3 +289,8 @@ is local only.
   refusal puts them back. Messages with the flag draw no embeds.
 * **Spoilers.** An embed whose URL appears inside `||...||` in the message
   text shows its media behind a click (`Ui::RevealSpoiler`).
+
+Renderer note: tiny-skia ignores image `crop`, container `clip` and corner
+radii, so an image can never be "covered" into a box. Posters take the aspect
+ratio of their own thumbnail, and grid cells letterbox (`Contain`) on the
+card background.

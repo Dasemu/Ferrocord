@@ -120,12 +120,21 @@ fn media<'a>(
         .into();
     }
     match b.key.as_deref().and_then(|k| app.image(k)) {
-        Some(handle) => iced::widget::image(handle.clone())
-            .width(w)
-            .height(h)
-            .content_fit(fit)
-            .border_radius(radius)
-            .into(),
+        // No `Cover`/crop/clip: the software renderer ignores them and the
+        // image would overflow its box. `Contain` letterboxes instead.
+        Some(handle) => container(
+            iced::widget::image(handle.clone())
+                .width(w)
+                .height(h)
+                .content_fit(fit)
+                .border_radius(radius),
+        )
+        .width(w)
+        .height(h)
+        .center_x(w)
+        .center_y(h)
+        .style(theme::rounded_bg(app.theme.palette.bg_app, radius))
+        .into(),
         None => placeholder(app, b.w, b.h, Icon::Image),
     }
 }
@@ -136,7 +145,7 @@ fn round_icon<'a>(app: &'a App, key: &str, size: f32) -> El<'a> {
         Some(h) => iced::widget::image(h.clone())
             .width(size)
             .height(size)
-            .content_fit(ContentFit::Cover)
+            .content_fit(ContentFit::Contain)
             .border_radius(size / 2.0)
             .into(),
         None => container(Space::new())
@@ -203,7 +212,7 @@ fn grid_view<'a>(app: &'a App, m: &model::Message, plan: &Plan, spoiler: bool) -
         for (w, h) in col {
             let key = it.next().and_then(|b| b.key.clone());
             let cell = MediaBox { key, w, h };
-            c = c.push(media(app, m, &cell, ContentFit::Cover, 4.0, spoiler));
+            c = c.push(media(app, m, &cell, ContentFit::Contain, 4.0, spoiler));
         }
         r = r.push(c);
     }
@@ -218,7 +227,7 @@ fn video_view<'a>(
     spoiler: bool,
 ) -> El<'a> {
     let p = app.theme.palette;
-    let poster = media(app, m, b, ContentFit::Cover, 4.0, spoiler);
+    let poster = media(app, m, b, ContentFit::Contain, 4.0, spoiler);
     let play = container(icon(Icon::Play, 26.0, Color::WHITE))
         .width(56)
         .height(56)

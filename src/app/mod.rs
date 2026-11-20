@@ -438,11 +438,15 @@ impl App {
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
             }
-            Some(s @ (ScreenshotScreen::EmbedMedia | ScreenshotScreen::EmbedRich)) => {
-                let channel = if s == ScreenshotScreen::EmbedMedia {
-                    mock::CH_EMBED_MEDIA
-                } else {
-                    mock::CH_EMBED_RICH
+            Some(
+                s @ (ScreenshotScreen::EmbedMedia
+                | ScreenshotScreen::EmbedRich
+                | ScreenshotScreen::EmbedGrid),
+            ) => {
+                let channel = match s {
+                    ScreenshotScreen::EmbedMedia => mock::CH_EMBED_MEDIA,
+                    ScreenshotScreen::EmbedGrid => mock::CH_EMBED_GRID,
+                    _ => mock::CH_EMBED_RICH,
                 };
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),

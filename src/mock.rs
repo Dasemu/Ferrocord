@@ -25,6 +25,7 @@ pub const CH_SHOWCASE: ChannelId = Snowflake(133);
 /// Embed demo channels: video + link preview, and rich + photo grid.
 pub const CH_EMBED_MEDIA: ChannelId = Snowflake(134);
 pub const CH_EMBED_RICH: ChannelId = Snowflake(135);
+pub const CH_EMBED_GRID: ChannelId = Snowflake(136);
 
 pub const DM_ALICE: ChannelId = Snowflake(600);
 pub const DM_BOB: ChannelId = Snowflake(601);
@@ -177,6 +178,7 @@ pub fn ready() -> ReadyData {
         ch(CH_SHOWCASE, Text, g, "showcase", 3, Some(CAT_TEXT)),
         ch(CH_EMBED_MEDIA, Text, g, "embeds-media", 4, Some(CAT_TEXT)),
         ch(CH_EMBED_RICH, Text, g, "embeds-rich", 5, Some(CAT_TEXT)),
+        ch(CH_EMBED_GRID, Text, g, "embeds-grid", 6, Some(CAT_TEXT)),
         ch(Snowflake(140), Voice, g, "Lounge", 0, Some(CAT_VOICE)),
         ch(
             Snowflake(141),
@@ -407,6 +409,7 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
         CH_SHOWCASE => showcase(),
         CH_EMBED_MEDIA => embed_media_demo(),
         CH_EMBED_RICH => embed_rich_demo(),
+        CH_EMBED_GRID => embed_grid_demo(),
         DM_ALICE => vec![
             gm(
                 DM_ALICE,
@@ -791,7 +794,7 @@ fn showcase() -> Vec<Message> {
 
 /// Images behind the embed demo channels: (key, width, height, hue shift).
 pub const MOCK_EMBED_IMAGES: [(&str, u32, u32, u8); 8] = [
-    ("mock://embed/yt", 480, 360, 1),
+    ("mock://embed/yt", 480, 270, 1),
     ("mock://embed/icon", 48, 48, 2),
     ("mock://embed/thumb", 128, 128, 0),
     ("mock://embed/tw1", 400, 267, 0),
@@ -842,7 +845,7 @@ fn embed_media_demo() -> Vec<Message> {
         author_name: Some("Ferris Talks".into()),
         author_url: Some("https://www.youtube.com/@ferristalks".into()),
         color: Some(0xff0000),
-        thumbnail: Some(proxied("mock://embed/yt", 480, 360)),
+        thumbnail: Some(proxied("mock://embed/yt", 480, 270)),
         video: Some(EmbedVideo {
             url: "https://www.youtube.com/embed/dQw4w9WgXcQ".into(),
             proxy_url: None,
@@ -909,8 +912,13 @@ fn embed_rich_demo() -> Vec<Message> {
         timestamp_ms: Some(now_ms()),
         ..Default::default()
     }];
+    vec![a]
+}
+
+/// A Twitter-style photo set: four embeds sharing one URL.
+fn embed_grid_demo() -> Vec<Message> {
     let tw = "https://x.example.com/ferris/status/1";
-    let mut b = gm(CH_EMBED_RICH, 10, 0, 2, &[], tw);
+    let mut b = gm(CH_EMBED_GRID, 10, 0, 2, &[], tw);
     let mut lead = Embed {
         kind: Some("rich".into()),
         url: Some(tw.into()),
@@ -932,7 +940,7 @@ fn embed_rich_demo() -> Vec<Message> {
         });
     }
     b.embeds = embeds;
-    vec![a, b]
+    vec![b]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for
@@ -1186,7 +1194,7 @@ mod tests {
         assert!(!history(CH_GENERAL).is_empty());
         assert!(history(CH_SHOWCASE).iter().any(|m| !m.embeds.is_empty()));
         assert!(history(CH_EMBED_MEDIA).iter().any(|m| !m.embeds.is_empty()));
-        assert!(history(CH_EMBED_RICH).iter().any(|m| m.embeds.len() == 4));
+        assert!(history(CH_EMBED_GRID).iter().any(|m| m.embeds.len() == 4));
         let (w, h, px) = mock_image(10, 5);
         assert_eq!(px.len(), (w * h * 4) as usize);
     }
