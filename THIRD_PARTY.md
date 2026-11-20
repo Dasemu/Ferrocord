@@ -11,6 +11,24 @@ fonts or artwork are included.
 `assets/icons/reply-spine.svg` is an original drawing (MIT, like the project).
 The `emojis` crate embeds Unicode emoji names and shortcodes (gemoji, MIT).
 
+Video playback (the `ferrocord-player` helper only; the app links none of it):
+
+| Component | Licence | Notes |
+|---|---|---|
+| OpenH264 (Cisco), via `openh264-sys2` | BSD-2-Clause | H.264 decoder built from source and linked statically; the licence text ships in `licenses/OpenH264-BSD-2-Clause.txt`. Built from source by the user, no Cisco binary is distributed, so the AVC patent licence Cisco grants to its own binaries does not apply: see below. |
+| `rusty_vp9` | Apache-2.0 | Pure-Rust VP9 decoder. |
+| `vp8-decoder` | (MIT OR Apache-2.0) AND BSD-3-Clause | Pure-Rust VP8 decoder (RFC 6386 reference code derived parts). |
+| `matroska-demuxer` | Zlib OR MIT OR Apache-2.0 | WebM / Matroska demuxer. |
+| `mp4`, `symphonia` (aac, isomp4) | MIT / MPL-2.0 | MP4 demuxer and AAC decoder. Symphonia is MPL-2.0: file-level copyleft, unmodified here. |
+| libopus, via `audiopus_sys` | BSD-3-Clause | Statically linked into the helper. |
+| `cpal` | Apache-2.0 | Sound output (links ALSA on Linux). |
+
+Patents: H.264 and AAC are patent-encumbered formats. Decoding them in
+software is what every open-source player does; Ferrocord ships source and a
+binary built from it, with no separate licence. If this matters for your use,
+the helper can be left out (`--no-default-features`) and the app then offers
+"Open externally" for videos.
+
 Rust crate dependencies keep their own licences (see `Cargo.lock`; all are
 MIT, Apache-2.0, ISC, BSD, Zlib or similar permissive licences).
 Noto Color Emoji is used from the system if installed and is not bundled.

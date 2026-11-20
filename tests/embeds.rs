@@ -320,13 +320,18 @@ fn only_web_links_reach_the_confirm_dialog() {
     assert!(a.pending_link.is_none());
     let _ = a.update(Message::Ui(Ui::ConfirmLink("https://example.com".into())));
     assert_eq!(a.pending_link.as_deref(), Some("https://example.com"));
-    // The inline player is not wired yet: playing asks before opening.
+    // Playing a video goes to the inline player, never to the confirm dialog.
     let _ = a.update(Message::Ui(Ui::CancelLink));
-    let _ = a.update(Message::Ui(Ui::PlayVideo(
-        "https://media.discordapp.net/x.mp4".into(),
-    )));
-    assert_eq!(
-        a.pending_link.as_deref(),
-        Some("https://media.discordapp.net/x.mp4")
-    );
+    let _ = a.update(Message::Ui(Ui::PlayVideo(Box::new(
+        ferrocord::media::clip::Clip {
+            id: "emb:1:x".into(),
+            url: "https://media.discordapp.net/x.mp4".into(),
+            name: "x.mp4".into(),
+            size: 0,
+            width: None,
+            height: None,
+            poster: None,
+        },
+    ))));
+    assert!(a.pending_link.is_none());
 }

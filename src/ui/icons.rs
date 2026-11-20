@@ -66,9 +66,14 @@ pub enum Icon {
     ShieldCheck,
     VolumeX,
     Play,
+    Pause,
+    Maximize,
+    Minimize,
+    RotateCcw,
+    ExternalLink,
 }
 
-const ALL: [(Icon, &[u8]); 58] = [
+const ALL: [(Icon, &[u8]); 63] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -241,6 +246,23 @@ const ALL: [(Icon, &[u8]); 58] = [
         include_bytes!("../../assets/icons/volume-x.svg"),
     ),
     (Icon::Play, include_bytes!("../../assets/icons/play.svg")),
+    (Icon::Pause, include_bytes!("../../assets/icons/pause.svg")),
+    (
+        Icon::Maximize,
+        include_bytes!("../../assets/icons/maximize.svg"),
+    ),
+    (
+        Icon::Minimize,
+        include_bytes!("../../assets/icons/minimize.svg"),
+    ),
+    (
+        Icon::RotateCcw,
+        include_bytes!("../../assets/icons/rotate-ccw.svg"),
+    ),
+    (
+        Icon::ExternalLink,
+        include_bytes!("../../assets/icons/external-link.svg"),
+    ),
 ];
 
 /// Handles are created once so iced can cache the rasterised icons.

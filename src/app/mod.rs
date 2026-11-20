@@ -25,6 +25,7 @@ pub mod servers;
 pub mod state;
 pub mod stickers;
 pub mod upload;
+pub mod video;
 pub mod voice;
 pub mod window;
 
@@ -44,6 +45,7 @@ use crate::auth::secrets::{self, KeyringStore, MemoryStore, Secret, SecretStore}
 use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
 use crate::config::{Config, ScreenshotScreen};
 use crate::error::Redacted;
+use crate::media::clip::Clip;
 use crate::mock;
 use crate::net::gateway::{self, GatewayConfig, GatewayHandle};
 use crate::net::model::*;
@@ -166,6 +168,9 @@ pub struct App {
     tray_control: Option<tray::Control>,
     /// Voice channels, calls and voice settings.
     pub voice: voice::Voice,
+    /// The one video that is downloading or playing.
+    pub video: Option<video::Playback>,
+    video_session: u32,
 }
 
 pub fn now_ms() -> u64 {
@@ -269,6 +274,8 @@ impl App {
             profiles: profile::ProfileState::default(),
             tray_control: None,
             voice,
+            video: None,
+            video_session: 0,
             cfg,
         };
         app.window_focused = app.win.visible;
@@ -321,7 +328,11 @@ impl App {
                 Message::Done(Done::TokenRestored(r.map_err(|e| e.user_message())))
             })
         };
-        (app, Task::batch([open_window, fonts, restore, autostart]))
+        let sweep = app.sweep_videos();
+        (
+            app,
+            Task::batch([open_window, fonts, restore, autostart, sweep]),
+        )
     }
 
     fn boot_mock(&mut self) {
@@ -359,6 +370,12 @@ impl App {
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
             "mock://image/1".into(),
+            iced::widget::image::Handle::from_rgba(w, h, px),
+            (w * h * 4) as usize,
+        );
+        let (w, h, px) = mock::mock_image(400, 225);
+        self.images.insert(
+            "mock://video/poster".into(),
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
@@ -454,6 +471,17 @@ impl App {
                     channel: Some(mock::CH_SHOWCASE),
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
+            }
+            Some(s @ (ScreenshotScreen::Video | ScreenshotScreen::VideoFullscreen)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_SHOWCASE),
+                };
+                self.chat.mark_read(mock::CH_SHOWCASE);
+                self.mock_video_screen(s == ScreenshotScreen::VideoFullscreen);
             }
             Some(
                 s @ (ScreenshotScreen::EmbedMedia
@@ -736,6 +764,11 @@ impl App {
             Message::Voice(ev) => self.on_voice_event(ev),
         };
         self.sync_tray();
+        let task = if self.video.is_some() {
+            Task::batch([task, self.stop_video_if_left()])
+        } else {
+            task
+        };
         if !self.first_frame_logged
             && self.cfg.trace_startup
             && self.fonts_ready
@@ -863,11 +896,6 @@ impl App {
             }
             Ui::ConfirmLink(url) => {
                 // Only http(s) ever reaches the dialog, let alone the browser.
-                self.pending_link = embeds::web_url(&url).map(str::to_owned);
-                Task::none()
-            }
-            Ui::PlayVideo(url) => {
-                // VIDEO-HOOK: replace with the inline player.
                 self.pending_link = embeds::web_url(&url).map(str::to_owned);
                 Task::none()
             }
@@ -1653,6 +1681,7 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Video { session, progress } => self.on_video(session, progress),
             Done::Image { key, bytes } => {
                 match bytes {
                     Some(b) => self.images.insert_bytes(key, b),
@@ -1755,6 +1784,12 @@ impl App {
                     collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
                 }
                 urls.extend(crate::ui::embeds::media_keys(m));
+                urls.extend(
+                    m.attachments
+                        .iter()
+                        .filter_map(Clip::from_attachment)
+                        .filter_map(|c| c.poster),
+                );
             }
         }
         if self.emoji_picker.is_some()

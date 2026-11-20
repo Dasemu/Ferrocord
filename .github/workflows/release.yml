@@ -56,18 +56,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake libasound2-dev libssl-dev libdbus-1-dev libxkbcommon-dev \
-            libwayland-dev libfontconfig1-dev
+            pkg-config cmake libssl-dev libdbus-1-dev libxkbcommon-dev \
+            libwayland-dev libfontconfig1-dev libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
         if: steps.ver.outputs.skip != 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.ver.outputs.skip != 'true'
       - name: Build release binary
         if: steps.ver.outputs.skip != 'true'
-        run: cargo build --release --locked
+        run: |
+          # OpenH264 (C++) is built from source; link libstdc++ statically so the
+          # video helper needs no C++ runtime package on the user's machine.
+          export CXXSTDLIB=static=stdc++
+          export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)")"
+          cargo build --release --locked
       - name: Shared libraries of the binary
         if: steps.ver.outputs.skip != 'true'
-        run: ldd target/release/ferrocord
+        run: |
+          ldd target/release/ferrocord
+          # No codec libraries anywhere; the helper needs only the base system.
+          if ldd target/release/ferrocord | grep -Eqi 'openh264|stdc\+\+|opus|vpx'; then echo "::error::ferrocord links a codec library"; exit 1; fi
+          .github/scripts/check-helper-libs.sh target/release/ferrocord-player
       - name: Package
         if: steps.ver.outputs.skip != 'true'
         env:
@@ -76,12 +85,14 @@ jobs:
           set -euo pipefail
           name="ferrocord-v${VERSION}-linux-x86_64"
           mkdir -p "dist/$name/packaging" "dist/$name/licenses"
-          cp target/release/ferrocord README.md LICENSE "dist/$name/"
+          cp target/release/ferrocord target/release/ferrocord-player README.md LICENSE "dist/$name/"
           cp packaging/dev.ferro.ferrocord.desktop "dist/$name/packaging/dev.ferro.ferrocord.desktop"
           cp packaging/dev.ferro.ferrocord.svg "dist/$name/packaging/dev.ferro.ferrocord.svg"
           cp assets/fonts/OFL.txt "dist/$name/licenses/Inter-OFL.txt"
           cp assets/icons/LICENSE "dist/$name/licenses/Lucide-ISC.txt"
           cp THIRD_PARTY.md "dist/$name/licenses/THIRD_PARTY.md"
+          cp "$(find ~/.cargo/registry/src -path '*openh264-sys2-*/upstream/LICENSE' | head -n 1)" \
+            "dist/$name/licenses/OpenH264-BSD-2-Clause.txt"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
           ls -l dist

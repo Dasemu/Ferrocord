@@ -17,6 +17,7 @@ pub mod servers;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
+pub mod video;
 pub mod voice;
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
@@ -94,6 +95,7 @@ pub fn view(app: &App) -> El<'_> {
         Some(url) => leave_dialog(t, url),
         None => empty(),
     });
+    layers.push(video::fullscreen(app).unwrap_or_else(empty));
     container(stack(layers))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -102,8 +104,9 @@ pub fn view(app: &App) -> El<'_> {
 }
 
 /// Base content + discover page + popup slots + voice user menu + incoming
-/// call + add-server dialog + folder dialog + settings + link dialog.
-pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 4;
+/// call + add-server dialog + folder dialog + settings + link dialog +
+/// full-screen video.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 4 + 1;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {

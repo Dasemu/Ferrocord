@@ -27,8 +27,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake libasound2-dev libssl-dev libdbus-1-dev libxkbcommon-dev \
-            libwayland-dev libfontconfig1-dev dbus gnome-keyring
+            pkg-config cmake libssl-dev libdbus-1-dev libxkbcommon-dev \
+            libwayland-dev libfontconfig1-dev libasound2-dev dbus gnome-keyring
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -44,6 +44,16 @@ jobs:
 
       - name: cargo test
         run: cargo test --all-targets
+
+      # The video helper must run on a machine with no codec packages: build it
+      # the way the release does (libstdc++ static) and check what it links.
+      - name: Video helper links nothing beyond the base system
+        run: |
+          export CXXSTDLIB=static=stdc++
+          export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)")"
+          cargo build --bin ferrocord-player --target-dir target/helper
+          .github/scripts/check-helper-libs.sh target/helper/debug/ferrocord-player
+          if ldd target/debug/ferrocord | grep -Eqi 'openh264|stdc\+\+|opus|vpx'; then echo "::error::ferrocord links a codec library"; exit 1; fi
 
       # The StatusNotifierItem test needs a session bus; without one it
       # skips itself in the step above, so run it again under a private bus.

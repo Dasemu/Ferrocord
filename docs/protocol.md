@@ -394,7 +394,84 @@ radii, so an image can never be "covered" into a box. Posters take the aspect
 ratio of their own thumbnail, and grid cells letterbox (`Contain`) on the
 card background.
 
-## 12. Voice and calls
+## 12. Video playback (`media/`, `app/video.rs`, `ui/video.rs`, `bin/ferrocord-player`)
+
+**What plays.** Attachments whose `content_type` is `video/*` or whose name
+ends in `.mp4 .m4v .mov .webm .mkv`, and embeds (`type: video`, a bare video
+link) whose `video.proxy_url` / `video.url` is a file with such an extension
+(`media::clip::Clip`). `gifv` / `image` embeds keep their bare-image rendering,
+and page players (YouTube, ...) stay link cards: their `video.url` is a web
+page, never fetched. The inline box is at most 400x300 px (never enlarged),
+like the official client.
+
+**Embed cards.** `ui::embeds::video_card` routes through `app::embeds::video_action`: a proxied direct file builds a `Clip` (poster = the card's media box, size from `embed.video`) and plays in the inline player inside the card; iframe-only providers (YouTube, Twitch) keep the confirm-link flow to the browser.
+
+**Poster.** Discord's media proxy renders the first frame of a video as an
+image: `{proxy_url}?format=webp&width=W&height=H` (the same URL the official
+client uses). Embeds use their `thumbnail` / `image` when present. The poster
+goes through the normal bounded image cache. While playing, the poster is
+replaced by the live frame.
+
+**Download.** Clicking play downloads the file (`RestClient::download_file`):
+only `cdn.discordapp.com` / `media.discordapp.net` (and the configured CDN
+override) over HTTPS, no token, the final URL after redirects is checked
+again, at most 200 MB, streamed to `<data dir>/videos/ferrocord-video-<pid>-<n>.<ext>`
+(`0600`, `create_new`). The file is deleted when the video closes (`Scratch`
+is dropped), and files older than 6 h left by a crash are swept at start.
+Nothing is downloaded until the user presses play.
+
+**One active video.** `App::video: Option<Playback>`. Starting another video,
+leaving the channel, closing the player or logging out drops it: the helper
+process ends, and the file is deleted. When a video plays to the end the
+helper is released at once (RAM returned); replay starts a new helper on the
+file already on disk.
+
+**Helper process.** `ferrocord-player <file>` (installed next to `ferrocord`)
+demuxes and decodes; the app never links a codec. The container is chosen by
+the file's first bytes, not its name.
+
+| | Container | Video | Audio |
+|---|---|---|---|
+| MP4 / MOV (QuickTime) | `mp4` crate | H.264 Baseline/Main/High incl. B-frames (OpenH264, built from source, static) | AAC-LC (symphonia, pure Rust) |
+| WebM / MKV | `matroska-demuxer` | VP8 (`vp8-decoder`), VP9 profile 0/1 8-bit (`rusty_vp9`), both pure Rust | Opus mono/stereo (libopus, static) |
+
+Anything else (H.265/HEVC, AV1, ProRes, 10-bit VP9, Vorbis-only, ...) ends
+with `Failed { missing: true, text: "<codec>" }` and the player shows "uses
+<codec>, which the built-in player cannot decode" with **Open externally**
+(the only way an external player starts). A video track with unsupported audio
+plays silently. Sound goes out through `cpal`; the audio the device consumed
+drives the clock (picture follows sound), the wall clock takes over without a
+device or when the device stalls. Rotation (`tkhd` matrix) is applied.
+Pictures are scaled to at most 960x540 in the helper (nearest), so a 4K video
+costs the same pipe and RAM as 540p. Frames are sent at most every 30 ms.
+Picture sizes above 8192 per side are refused.
+
+**Wire format** (`media/video_proto.rs`). Helper to app: tag byte + little
+endian fields: `R` ready (w, h, duration ms, 0 = unknown), `F` frame (w, h,
+RGBA), `T` time (position, duration, state), `E` failed (kind, length, UTF-8,
+at most 2 KiB). The reader rejects unknown tags, frame sizes above 4096 per
+side / 32 MB and oversized text before allocating. App to helper: lines
+`play`, `pause`, `seek <ms>`, `volume <0-100>`, `mute <0|1>`, `quit`;
+anything else is ignored. stdin closing (the app died) ends the helper. A
+helper that exits without a message is reported with the dynamic loader's
+last stderr line (missing library) or "the helper exited".
+
+**Frames.** Each `Frame` becomes an `image::Handle` in `App::update` (new id
+per frame, created once, never in `view`). The event stream keeps only the
+newest frame when the UI falls behind.
+
+**Controls.** Play/pause (click on the picture too), time, seek bar (drag
+holds the thumb, the seek is sent on release), mute, volume, full screen. Full
+screen is a layer in the window stack that also switches the window to
+fullscreen (not in mock mode); Esc or the minimise button leaves it and the
+video keeps playing inline. Controls are always laid out: nothing changes
+size on hover.
+
+**Mock mode.** `--mock` plays a scripted test pattern (`media::video::spawn_mock`)
+instead of downloading: no network, no disk, no helper. Screenshots:
+`--screenshot video` and `--screenshot video-fullscreen`.
+
+## 13. Voice and calls
 
 Design, DAVE and the video feasibility pass: `docs/voice.md`.
 
