@@ -164,9 +164,17 @@ pub fn decoration<'a>(app: &'a App, user: &User, size: f32, phase: Phase) -> Opt
     let off = -(big - size) / 2.0;
     // Until the image arrives the slot stays (an empty one) so the widget
     // tree keeps its shape.
-    let img: El<'a> = match app.decoration_frame(deco, cdn_size, phase) {
-        Some(h) => iced::widget::image(h.clone()).width(big).height(big).into(),
-        None => Space::new().width(big).height(big).into(),
+    let live = (phase == Phase::Live)
+        .then(|| app.decoration_live(deco, cdn_size))
+        .flatten();
+    let img: El<'a> = if let Some(a) = live {
+        super::anim_image::anim_image(a.clone(), app.anim.epoch, app.cosmetics_playing(), big, big)
+            .into()
+    } else {
+        match app.decoration_frame(deco, cdn_size, phase) {
+            Some(h) => iced::widget::image(h.clone()).width(big).height(big).into(),
+            None => Space::new().width(big).height(big).into(),
+        }
     };
     Some(
         Placed::new(img, Size::new(big, big), Point::new(off, off))
@@ -267,7 +275,8 @@ pub fn with_nameplate<'a>(app: &'a App, user: &User, content: El<'a>) -> El<'a> 
         .into()
 }
 
-/// Wraps `el` so a click opens the user's profile popout.
+/// Wraps `el` so a click opens the user's profile popout and a right click
+/// the user menu.
 pub fn clickable<'a>(
     el: impl Into<El<'a>>,
     user: &User,
@@ -278,6 +287,12 @@ pub fn clickable<'a>(
             user: user.id,
             guild,
         }))
+        .on_right_press(Message::Ui(Ui::ContextOpen(
+            crate::app::context::CtxTarget::User {
+                user: user.id,
+                guild,
+            },
+        )))
         .interaction(mouse::Interaction::Pointer)
         .into()
 }

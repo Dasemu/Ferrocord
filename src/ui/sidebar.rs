@@ -26,12 +26,14 @@ pub fn view(app: &App) -> El<'_> {
             .height(t.metrics.header_height)
             .width(Length::Fill)
             .style(theme::sidebar_header(p)),
-        scrollable(list)
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().width(4).scroller_width(4),
-            ))
-            .style(theme::thin_scrollbar(p, false))
-            .height(Length::Fill),
+        super::smooth_scroll::smooth(
+            scrollable(list)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill)
+        ),
         super::voice::connected_panel(app).unwrap_or_else(super::empty),
         user_panel(app),
     ])
@@ -137,17 +139,20 @@ fn channel_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
     if mentions > 0 {
         r = r.push(mention_badge(&p, mentions, p.bg_sidebar));
     }
+    let btn = button(r)
+        .padding(Padding::from([6, 8]))
+        .width(Length::Fill)
+        .on_press(ui(if is_voice(c.kind) {
+            Ui::Voice(crate::app::voice::VoiceUi::Join(c.id))
+        } else {
+            Ui::SelectChannel(c.id)
+        }))
+        .style(theme::list_row(p, selected || joined));
     row![
         edge_pill(app, unread && !selected),
-        button(r)
-            .padding(Padding::from([6, 8]))
-            .width(Length::Fill)
-            .on_press(ui(if is_voice(c.kind) {
-                Ui::Voice(crate::app::voice::VoiceUi::Join(c.id))
-            } else {
-                Ui::SelectChannel(c.id)
-            }))
-            .style(theme::list_row(p, selected || joined)),
+        iced::widget::mouse_area(btn).on_right_press(ui(Ui::ContextOpen(
+            crate::app::context::CtxTarget::Channel(c.id)
+        ))),
     ]
     .padding(Padding::ZERO.right(8))
     .align_y(Alignment::Center)
@@ -324,7 +329,9 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
         user: u.id,
         message: None,
     });
-    let mut area = iced::widget::mouse_area(btn);
+    let mut area = iced::widget::mouse_area(btn).on_right_press(ui(Ui::ContextOpen(
+        crate::app::context::CtxTarget::Channel(c.id),
+    )));
     if let Some(h) = hover {
         area = area
             .on_enter(Message::Ui(Ui::HoverEnter(h)))

@@ -131,6 +131,7 @@ impl App {
                 self.menu = None;
                 self.emoji_picker = None;
                 self.panels.open = None;
+                self.ctx_menu = None;
                 Task::none()
             }
             Ui::CloseRailMenu => {

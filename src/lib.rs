@@ -15,3 +15,5 @@ pub mod net;
 pub mod store;
 pub mod tray;
 pub mod ui;
+#[cfg(windows)]
+pub mod win_app_id;

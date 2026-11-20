@@ -108,33 +108,23 @@ fn failed_profile_requests_show_loading_and_never_panic() {
 }
 
 #[test]
-fn hover_starts_and_stops_ticking() {
+fn list_avatars_play_by_themselves_without_ticking() {
     let mut a = app();
     assert!(!a.anim.active(a.prefs.reduce_motion));
-    // Alice's avatar is animated: hovering her row ticks.
+    // Every list / message avatar is live, hovered or not...
+    assert_eq!(a.phase_of(ALICE), Phase::Live);
+    assert_eq!(a.phase_of(BOB), Phase::Live);
+    // ...and hovering a user row never ticks the app: animated avatars and
+    // decorations redraw themselves (`ui::anim_image`).
     let h = Hover {
         user: ALICE,
         message: None,
     };
     ui(&mut a, Ui::HoverEnter(h));
-    assert!(a.anim.active(a.prefs.reduce_motion));
-    assert_eq!(a.phase_of(ALICE), Phase::Hover);
-    assert_eq!(a.phase_of(BOB), Phase::Still);
+    assert!(!a.anim.active(a.prefs.reduce_motion));
     ui(&mut a, Ui::HoverLeave(h));
-    assert!(!a.anim.active(a.prefs.reduce_motion));
-    assert_eq!(a.phase_of(ALICE), Phase::Still);
-    // Bob only has a still decoration: hovering him never ticks.
-    let hb = Hover {
-        user: BOB,
-        message: None,
-    };
-    ui(&mut a, Ui::HoverEnter(hb));
-    assert!(!a.anim.active(a.prefs.reduce_motion));
-    ui(&mut a, Ui::HoverLeave(hb));
-    // Leaving a row we already left (event order) is harmless.
-    ui(&mut a, Ui::HoverEnter(h));
-    ui(&mut a, Ui::HoverLeave(hb));
-    assert!(a.anim.active(a.prefs.reduce_motion));
+    assert!(a.cosmetics_playing());
+    let _ = ferrocord::ui::view(&a);
 }
 
 #[test]
@@ -149,6 +139,7 @@ fn reduce_motion_stops_every_animation() {
     ui(&mut a, Ui::HoverEnter(h));
     assert!(!a.anim.active(a.prefs.reduce_motion));
     assert_eq!(a.phase_of(ALICE), Phase::Still);
+    assert!(!a.cosmetics_playing());
     open(&mut a, ALICE);
     assert!(!a.anim.active(a.prefs.reduce_motion));
     // The effect falls back to its (absent) static frame: nothing drawn.

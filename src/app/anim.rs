@@ -39,8 +39,14 @@ pub const MAX_SOURCE_DIM: u32 = 2048;
 /// What an animation is for; decides eviction on popout close and budgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Class {
+    /// Avatar in the popout.
     Avatar,
+    /// Avatar in lists and messages (plays all the time, kept small).
+    AvatarList,
+    /// Decoration in the popout.
     Decoration,
+    /// Decoration in lists and messages.
+    DecorationList,
     Banner,
     Effect,
     Emoji,
@@ -61,8 +67,10 @@ impl Class {
 
     pub fn limits(self) -> Limits {
         match self {
-            Self::Avatar => Limits::new(80, 24, 2 * MB, 160),
-            Self::Decoration => Limits::new(80, 40, 3 * MB, 240),
+            Self::Avatar => Limits::new(160, 48, 3 * MB, 160).round(),
+            Self::AvatarList => Limits::new(160, 32, MB, 80).round(),
+            Self::Decoration => Limits::new(160, 48, 4 * MB, 192),
+            Self::DecorationList => Limits::new(160, 48, 2 * MB, 96),
             Self::Banner => Limits::new(80, 48, 8 * MB, 340),
             // Effect canvases are large: decode at a reduced width, the
             // view scales them to the card.
@@ -90,6 +98,9 @@ pub struct Limits {
     pub max_bytes: usize,
     /// Frames wider than this are downscaled to it.
     pub target_width: u32,
+    /// Cut the frames to a circle (avatars: tiny-skia ignores the image
+    /// border radius).
+    pub round: bool,
 }
 
 impl Limits {
@@ -99,6 +110,38 @@ impl Limits {
             max_frames,
             max_bytes,
             target_width: w,
+            round: false,
+        }
+    }
+
+    pub const fn round(mut self) -> Self {
+        self.round = true;
+        self
+    }
+}
+
+/// Makes everything outside the inscribed circle of a `w` x `h` RGBA
+/// buffer transparent, with a one-pixel anti-aliased edge.
+pub fn round_mask(w: u32, h: u32, px: &mut [u8]) {
+    if w == 0 || h == 0 || px.len() < (w as usize) * (h as usize) * 4 {
+        return;
+    }
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    let r = cx.min(cy);
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            let cover = (r - d + 0.5).clamp(0.0, 1.0);
+            if cover < 1.0 {
+                let i = ((y * w + x) * 4) as usize;
+                // Premultiplied or not, scaling every channel keeps the
+                // pixel consistent.
+                for c in &mut px[i..i + 4] {
+                    *c = (f32::from(*c) * cover).round() as u8;
+                }
+            }
         }
     }
 }
@@ -214,15 +257,30 @@ fn decimate(v: &mut Vec<Raw>) {
     }
 }
 
+/// Reads the frames, keeping one in every `stride` source frames (the
+/// dropped ones add their delay to the kept one). The stride doubles each
+/// time a limit is hit, so every kept frame stands for the same number of
+/// source frames and the animation keeps an even pace.
 fn collect<'a>(frames: image::Frames<'a>, lim: &Limits) -> Result<Vec<Raw>, AnimError> {
     let mut out: Vec<Raw> = Vec::new();
     let mut bytes = 0usize;
+    let mut stride = 1usize;
+    // Source frames merged into `out.last()`.
+    let mut merged = 0usize;
     for (n, f) in frames.enumerate() {
         if n >= lim.max_read {
             break;
         }
         let Ok(f) = f else { break };
         let delay = delay_of(f.delay());
+        if merged > 0
+            && merged < stride
+            && let Some(last) = out.last_mut()
+        {
+            last.delay += delay;
+            merged += 1;
+            continue;
+        }
         let mut buf = f.into_buffer();
         if buf.width() > lim.target_width && lim.target_width > 0 {
             let h = ((u64::from(buf.height()) * u64::from(lim.target_width))
@@ -236,14 +294,23 @@ fn collect<'a>(frames: image::Frames<'a>, lim: &Limits) -> Result<Vec<Raw>, Anim
             );
         }
         let (w, h) = buf.dimensions();
-        let px = buf.into_raw();
+        let mut px = buf.into_raw();
+        if lim.round {
+            round_mask(w, h, &mut px);
+        }
         bytes += px.len();
         out.push(Raw { w, h, px, delay });
+        merged = 1;
         while out.len() > lim.max_frames || bytes > lim.max_bytes {
             if out.len() < 2 {
                 return Err(AnimError::TooLarge);
             }
+            // An even count pairs the last frame with the one before it.
+            if out.len().is_multiple_of(2) {
+                merged += stride;
+            }
             decimate(&mut out);
+            stride *= 2;
             bytes = out.iter().map(|r| r.px.len()).sum();
         }
     }
@@ -675,6 +742,30 @@ mod tests {
         // Source frame cap.
         let lim = Limits::new(3, 100, MB, 100);
         assert_eq!(decode(&gif(10, 4, 4, 100), &lim).unwrap().frames.len(), 3);
+    }
+
+    #[test]
+    fn decimation_keeps_an_even_pace() {
+        // 45 frames of 33 ms (a decoration) with room for 12: every kept
+        // frame stands for the same number of source frames (the last may
+        // be shorter), never a long first frame then a fast tail.
+        let lim = Limits::new(100, 12, MB, 100);
+        let a = decode(&gif(45, 4, 4, 33), &lim).unwrap();
+        assert!(a.frames.len() <= 12);
+        assert_eq!(a.total, Duration::from_millis(45 * 30));
+        let first = a.frames[0].delay;
+        for f in &a.frames[..a.frames.len() - 1] {
+            assert_eq!(f.delay, first);
+        }
+        assert!(a.frames.last().unwrap().delay <= first);
+    }
+
+    #[test]
+    fn round_mask_clears_the_corners() {
+        let mut px = vec![255u8; 8 * 8 * 4];
+        round_mask(8, 8, &mut px);
+        assert_eq!(px[3], 0);
+        assert_eq!(px[(4 * 8 + 4) * 4 + 3], 255);
     }
 
     #[test]

@@ -61,6 +61,12 @@ fn main() -> iced::Result {
         }
     }
 
+    // Toasts carry the app's own name instead of "Windows PowerShell".
+    #[cfg(windows)]
+    if !cfg.mock {
+        ferrocord::win_app_id::register();
+    }
+
     let theme = ferrocord::ui::theme::FerroTheme::new(cfg.theme).iced_theme();
     // A daemon, not an application: hiding to the tray closes the window
     // (freeing the renderer) while the app keeps running.

@@ -282,13 +282,15 @@ fn small_button<'a>(app: &App, label: &'static str, msg: Ui) -> El<'a> {
 }
 
 fn scroller<'a>(app: &App, col: iced::widget::Column<'a, crate::app::Message>) -> El<'a> {
-    scrollable(col)
-        .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::new().width(4).scroller_width(4),
-        ))
-        .style(theme::thin_scrollbar(app.theme.palette, false))
-        .height(Length::Shrink)
-        .into()
+    super::smooth_scroll::smooth(
+        scrollable(col)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(theme::thin_scrollbar(app.theme.palette, false))
+            .height(Length::Shrink),
+    )
+    .into()
 }
 
 fn pins(app: &App) -> El<'_> {

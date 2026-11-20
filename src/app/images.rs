@@ -86,6 +86,13 @@ impl ImageCache {
     }
 
     pub fn insert_bytes(&mut self, key: String, bytes: Vec<u8>) {
+        if is_avatar_url(&key)
+            && let Some((w, h, px)) = round_avatar(&bytes)
+        {
+            let size = px.len();
+            self.insert(key, Handle::from_rgba(w, h, px), size);
+            return;
+        }
         let size = bytes.len();
         self.insert(key, Handle::from_bytes(bytes), size);
     }
@@ -126,6 +133,24 @@ impl ImageCache {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+/// User avatars (`/avatars/…`, also guild-member and default ones).
+pub fn is_avatar_url(url: &str) -> bool {
+    url.contains("/avatars/")
+}
+
+/// Decodes an avatar and cuts it to a circle. tiny-skia ignores the image
+/// border radius, so the round shape has to be in the pixels.
+fn round_avatar(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    if w > 1024 || h > 1024 {
+        return None;
+    }
+    let mut px = img.into_raw();
+    super::anim::round_mask(w, h, &mut px);
+    Some((w, h, px))
 }
 
 #[cfg(test)]
@@ -169,5 +194,22 @@ mod tests {
         c.insert_bytes("y".into(), vec![1]);
         assert!(!c.want("y"));
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn avatars_are_cut_round() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([200, 10, 10, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let (w, h, px) = round_avatar(&png).unwrap();
+        assert_eq!((w, h), (16, 16));
+        // Corner transparent, centre opaque.
+        assert_eq!(px[3], 0);
+        assert_eq!(px[((8 * 16 + 8) * 4 + 3) as usize], 255);
+        assert!(is_avatar_url(
+            "https://cdn.discordapp.com/avatars/1/abc.png?size=80"
+        ));
+        assert!(!is_avatar_url("https://cdn.discordapp.com/icons/1/abc.png"));
     }
 }

@@ -348,19 +348,21 @@ fn messages<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     }
     col = col.push(Space::new().height(24));
     // `direction` resets the anchor, so it must come first.
-    scrollable(col)
-        .id(jump::list_id())
-        .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::new()
-                .width(8)
-                .scroller_width(8)
-                .margin(2),
-        ))
-        .anchor_bottom()
-        .on_scroll(|vp| Message::Ui(Ui::Scrolled(vp)))
-        .style(theme::thin_scrollbar(p, true))
-        .height(Length::Fill)
-        .into()
+    super::smooth_scroll::smooth(
+        scrollable(col)
+            .id(jump::list_id())
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(8)
+                    .scroller_width(8)
+                    .margin(2),
+            ))
+            .anchor_bottom()
+            .on_scroll(|vp| Message::Ui(Ui::Scrolled(vp)))
+            .style(theme::thin_scrollbar(p, true))
+            .height(Length::Fill),
+    )
+    .into()
 }
 
 fn message<'a>(
