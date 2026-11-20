@@ -37,6 +37,18 @@ emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Voice: Discord's mandatory audio/video E2EE (DAVE, MLS via OpenMLS), pure Rust.
+davey = "0.2"
+# Voice transport encryption modes Discord requires (aead_aes256_gcm_rtpsize,
+# aead_xchacha20_poly1305_rtpsize); same `aead` 0.5 generation davey uses.
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+# Opus codec (Discord voice is Opus 48 kHz stereo).
+opus = "0.3"
+# Same crate opus uses; "static" links libopus.a so the binary needs no libopus package.
+audiopus_sys = { version = "0.2", features = ["static"] }
+# Microphone capture and speaker output (ALSA/PulseAudio/PipeWire via ALSA, WASAPI, CoreAudio).
+cpal = "0.16"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
@@ -45,6 +57,11 @@ ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
 resvg = { version = "0.45", default-features = false }
 
 [dev-dependencies]
+# Fake voice gateway (MLS external sender) for the DAVE loopback test; same
+# versions davey already compiles.
+openmls = "0.8"
+openmls_basic_credential = "0.5"
+openmls_rust_crypto = "0.5"
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"

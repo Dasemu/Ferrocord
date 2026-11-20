@@ -8,6 +8,7 @@ pub mod ratelimit;
 pub mod remote_auth;
 pub mod rest;
 pub mod types;
+pub mod voice;
 pub mod zlib;
 
 use model::*;
