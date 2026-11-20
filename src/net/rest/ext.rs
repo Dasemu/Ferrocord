@@ -6,10 +6,33 @@ use serde_json::{Value, json};
 
 use super::{Method, RestClient};
 use crate::error::{Error, Result};
+use crate::net::cosmetics;
 use crate::net::extras::{self, DiscoverCategory, DiscoverPage, InvitePreview, MuteDuration};
 use crate::net::model::*;
 
 impl RestClient {
+    /// `GET /users/{id}/profile` (the popout request; the guild adds the
+    /// member profile and roles).
+    pub async fn user_profile(
+        &self,
+        user: UserId,
+        guild: Option<GuildId>,
+    ) -> Result<cosmetics::Profile> {
+        let v = self
+            .request(Method::GET, &cosmetics::profile_path(user, guild), None)
+            .await?;
+        cosmetics::parse_profile(&v, guild)
+            .ok_or_else(|| Error::Protocol("profile without user".into()))
+    }
+
+    /// `GET /user-profile-effects`: the frame configs of every effect.
+    pub async fn profile_effects(&self) -> Result<Vec<cosmetics::ProfileEffect>> {
+        let v = self
+            .request(Method::GET, cosmetics::PROFILE_EFFECTS_PATH, None)
+            .await?;
+        Ok(cosmetics::parse_effects(&v))
+    }
+
     /// `GET /channels/{id}/pins` — newest pin first.
     pub async fn pins(&self, channel: ChannelId) -> Result<Vec<Message>> {
         let v = self

@@ -21,7 +21,7 @@ const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
 /// Number of popup slots [`layers`] always returns.
-pub const SLOTS: usize = 8;
+pub const SLOTS: usize = 9;
 
 /// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
 /// popup is an empty placeholder so the widget tree keeps its shape (see
@@ -103,8 +103,12 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
         None => super::empty(),
     };
+    let profile = match super::profile::popout(app) {
+        Some((card, at)) => popup_layer(app, card, at, Ui::CloseProfile),
+        None => super::empty(),
+    };
     vec![
-        status, menu, picker, gif, sticker, delete, popover, rail_menu,
+        status, menu, picker, gif, sticker, delete, popover, rail_menu, profile,
     ]
 }
 

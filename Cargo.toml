@@ -38,7 +38,7 @@ unicode-segmentation = "1"
 emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "gif", "webp"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
@@ -50,6 +50,8 @@ resvg = { version = "0.45", default-features = false }
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"
+# Encodes an APNG fixture in the animation tests (already compiled for `image`).
+png = "0.18"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }
 
 [profile.release]

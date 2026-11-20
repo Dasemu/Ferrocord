@@ -1,0 +1,53 @@
+{
+  "user": {
+    "id": "852892297661906993",
+    "username": "alien",
+    "global_name": "Alien",
+    "avatar": "a_9d52298a3ad006da31ac66a86230d9f2",
+    "avatar_decoration_data": {"sku_id": "1144058844004233369", "asset": "a_fed43ab12698df65902ba06727e20c0e", "expires_at": null},
+    "discriminator": "0",
+    "public_flags": 64,
+    "banner": "a_17a0757cf6121ccc07546de9bff3edb2",
+    "accent_color": null,
+    "bio": "Professional smoothbrain",
+    "primary_guild": {"identity_guild_id": "80351110224678913", "identity_enabled": true, "tag": "MEOW", "badge": "7d1734ae5a615e82bc7a4033b98fade8"},
+    "collectibles": {"nameplate": {"asset": "nameplates/nameplatetest/angel/", "palette": "bubble_gum", "label": "ANGEL", "sku_id": "1344802364934062152"}},
+    "display_name_styles": {"font_id": 3, "effect_id": 2, "colors": [16711680, 255]}
+  },
+  "connected_accounts": [],
+  "premium_since": "2016-01-01T00:00:00.00+00:00",
+  "premium_type": 2,
+  "mutual_friends_count": 100,
+  "mutual_friends": [{"id": "5", "username": "friend", "global_name": "Friend", "avatar": null}],
+  "mutual_guilds": [
+    {"id": "80351110224678913", "nick": "Liena"},
+    {"id": "80351110224678914", "nick": null}
+  ],
+  "badges": [
+    {"id": "premium", "description": "Subscriber since Jan 1, 2016", "icon": "icon1"},
+    {"id": "hypesquad", "description": "HypeSquad", "icon": "icon2", "link": "https://example.com"}
+  ],
+  "guild_member": {
+    "nick": null,
+    "joined_at": "2016-01-01T00:00:00.00+00:00",
+    "roles": ["11", "12"],
+    "user": {"id": "852892297661906993", "username": "alien"}
+  },
+  "user_profile": {
+    "bio": "Professional smoothbrain",
+    "accent_color": null,
+    "pronouns": "gnarp/gnap",
+    "banner": "a_17a0757cf6121ccc07546de9bff3edb2",
+    "theme_colors": [1122867, 4478310],
+    "profile_effect": {"id": "1139323097930027068", "expires_at": null}
+  },
+  "guild_member_profile": {
+    "guild_id": "80351110224678913",
+    "pronouns": "",
+    "bio": "Professional alien",
+    "banner": null,
+    "accent_color": null,
+    "theme_colors": null,
+    "profile_effect": {"id": "1139323097930027068", "expires_at": null}
+  }
+}

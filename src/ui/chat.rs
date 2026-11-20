@@ -11,8 +11,8 @@ use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{
-    El, avatar, fit_size, format_day, format_time, format_timestamp, human_size, markdown,
-    same_day, ui,
+    El, avatar, cosmetics, fit_size, format_day, format_time, format_timestamp, human_size,
+    markdown, same_day, ui,
 };
 use crate::app::actions::{composer_id, edit_id, search_id};
 use crate::app::composer;
@@ -410,15 +410,24 @@ fn message<'a>(
             .author_color(m.guild_id.or(c.guild_id), m)
             .map(theme::from_int)
             .unwrap_or(p.header_text);
-        let mut name_row = row![emoji_text(
-            m.author.display_name(),
-            16.0,
-            name_color,
-            INTER_MEDIUM,
-            false
-        ),]
+        let profile_guild = m.guild_id.or(c.guild_id);
+        let mut name_row = row![cosmetics::clickable(
+            cosmetics::name(
+                app,
+                &m.author,
+                m.author.display_name(),
+                16.0,
+                INTER_MEDIUM,
+                name_color
+            ),
+            &m.author,
+            profile_guild
+        )]
         .spacing(8)
         .align_y(Alignment::Center);
+        if let Some(tag) = cosmetics::tag_chip(app, &m.author) {
+            name_row = name_row.push(tag);
+        }
         if m.author.bot {
             name_row = name_row.push(
                 container(
@@ -437,9 +446,13 @@ fn message<'a>(
                 .color(p.text_muted),
         );
         let main = row![
-            container(avatar(app, &m.author, 40.0))
-                .width(gutter)
-                .padding(Padding::ZERO.left(16).top(2)),
+            container(cosmetics::clickable(
+                avatar(app, &m.author, 40.0),
+                &m.author,
+                profile_guild
+            ))
+            .width(gutter)
+            .padding(Padding::ZERO.left(16).top(2)),
             column![name_row, body].spacing(2).width(Length::Fill)
         ]
         .padding(Padding::from([2, 0]).right(48));
@@ -498,8 +511,14 @@ fn message<'a>(
                 a: 0.04,
                 ..p.text_primary
             }));
+        let h = crate::app::anim::Hover {
+            user: m.author.id,
+            message: Some(m.id),
+        };
         mouse_area(hover(base_el, overlay))
             .on_right_press(ui(Ui::ContextMenu(m.id)))
+            .on_enter(Message::Ui(Ui::HoverEnter(h)))
+            .on_exit(Message::Ui(Ui::HoverLeave(h)))
             .into()
     } else {
         base_el
