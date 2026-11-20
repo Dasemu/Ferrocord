@@ -329,7 +329,7 @@ downloads never carry the token.
 * Caps per asset (source frames read, frames kept, bytes kept, width) are
   per `Class`; extra frames are merged (delay added to the kept frame) so the
   duration is unchanged. Sources above 2048 px are refused.
-* `AnimCache` is an LRU with a 32 MB budget. Banner and effect frames are
+* `AnimCache` is an LRU with a 48 MB budget. Banner and effect frames are
   dropped when the popout closes.
 * Lists and messages show the still image; hovering a row / message starts
   the clock for that avatar, decoration and (in messages) animated emoji.
@@ -338,6 +338,19 @@ downloads never carry the token.
   the popout shows one); "Reduce motion" in Settings turns all of it off.
 * Handles are created once when data arrives (`Handle::from_rgba` in the
   decode task), never in `view`.
+* **Message media** (`app/media_anim.rs`): GIF / animated WebP attachments
+  and embed images, GIF / APNG stickers and animated custom emoji (content
+  and reactions) of the newest 30 messages of the open conversation play by
+  themselves while "Play GIFs automatically" is on (default, as in the
+  official client) and the window is focused. Attachments and stickers are
+  decoded from the bytes the image loader already fetched (classes `Media`,
+  `Sticker`); emoji fetch their `.gif`. They are drawn by
+  `ui::anim_image::AnimImage`, which records the frame time on each redraw and
+  calls `Shell::request_redraw_at` for its next frame change while it is
+  inside the viewport: no `Message`, no `view()`/layout per frame, and
+  tiny-skia repaints only its rectangle. Off-screen or unfocused images ask
+  for nothing. With the setting off, emoji keep the hover behaviour above and
+  GIFs show their first frame; "Reduce motion" stops everything.
 
 ### Display name styles
 

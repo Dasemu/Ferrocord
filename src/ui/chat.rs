@@ -21,6 +21,7 @@ use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
+use crate::ui::anim_image::message_anim;
 
 pub fn view(app: &App) -> El<'_> {
     let p = app.theme.palette;
@@ -606,9 +607,15 @@ fn reactions_row<'a>(app: &'a App, c: &'a Channel, m: &'a model::Message) -> El<
     let mut pills: Vec<El<'a>> = Vec::new();
     for re in &m.reactions {
         let face: El<'a> = match re.emoji.id {
-            Some(id) => match app.image(&emoji_url(&app.cfg.cdn_url, id)) {
-                Some(h) => iced::widget::image(h.clone()).width(18).height(18).into(),
-                None => text(format!(":{}:", re.emoji.name))
+            Some(id) => match (
+                app.emoji_anim(id, re.emoji.animated),
+                app.image(&emoji_url(&app.cfg.cdn_url, id)),
+            ) {
+                (Some(a), _) => message_anim(app, a, 18.0, 18.0)
+                    .content_fit(iced::ContentFit::Contain)
+                    .into(),
+                (None, Some(h)) => iced::widget::image(h.clone()).width(18).height(18).into(),
+                (None, None) => text(format!(":{}:", re.emoji.name))
                     .size(12)
                     .color(p.text_muted)
                     .into(),
@@ -776,6 +783,11 @@ fn detached_bar<'a>(app: &'a App, c: &Channel) -> El<'a> {
 fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32>) -> El<'a> {
     let p = app.theme.palette;
     let (w, h) = fit_size(width.unwrap_or(400), height.unwrap_or(300), 400, 300);
+    if let Some(a) = app.media_anim(key) {
+        return message_anim(app, a, w as f32, h as f32)
+            .border_radius(8.0)
+            .into();
+    }
     match app.image(key) {
         Some(handle) => iced::widget::image(handle.clone())
             .width(w as f32)
@@ -799,6 +811,14 @@ const STICKER_SIZE: f32 = 160.0;
 /// stickers (vector animations, not rendered).
 pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a> {
     let p = app.theme.palette;
+    if let Some(a) = s
+        .image_url(&app.cfg.cdn_url)
+        .and_then(|url| app.media_anim(&url))
+    {
+        return message_anim(app, a, size, size)
+            .content_fit(iced::ContentFit::Contain)
+            .into();
+    }
     if let Some(handle) = s
         .image_url(&app.cfg.cdn_url)
         .and_then(|url| app.image(&url))

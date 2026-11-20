@@ -69,6 +69,13 @@ pub fn view(app: &App) -> El<'_> {
             app.prefs.reduce_motion,
             Ui::ToggleReduceMotion,
         ))
+        .push(toggle_row(
+            app,
+            "Play GIFs automatically",
+            "GIFs, animated emoji and stickers in messages play while Ferrocord is focused. Off: only while you hover the message.",
+            app.prefs.autoplay_gifs,
+            Ui::ToggleAutoplayGifs,
+        ))
         .push(
             text("Notifications")
                 .size(t.metrics.font_s)

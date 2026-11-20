@@ -796,7 +796,49 @@ fn showcase() -> Vec<Message> {
     g.stickers = vec![mock_stickers()[1].clone()];
     let mut h = gm(CH_SHOWCASE, 2, 0, 4, &[], "");
     h.stickers = vec![mock_stickers()[3].clone()];
-    vec![d, b, c, a, e, f, g, h]
+    // An animated GIF attachment (plays by itself, see `app::media_anim`).
+    let mut i = gm(CH_SHOWCASE, 1, 0, 5, &[], "");
+    i.attachments = vec![Attachment {
+        id: Snowflake(5101),
+        filename: "bounce.gif".into(),
+        size: 96_512,
+        url: MOCK_ANIM_GIF.into(),
+        proxy_url: None,
+        content_type: Some("image/gif".into()),
+        width: Some(MOCK_ANIM_SIZE.0),
+        height: Some(MOCK_ANIM_SIZE.1),
+    }];
+    vec![d, b, c, a, e, f, g, h, i]
+}
+
+/// Key of the mock animated GIF attachment.
+pub const MOCK_ANIM_GIF: &str = "mock://anim/bounce.gif";
+pub const MOCK_ANIM_SIZE: (u32, u32) = (240, 160);
+
+/// Frames of the mock GIF: a ball bouncing across a gradient, 12 frames.
+pub fn mock_anim_frames() -> Vec<(u32, u32, Vec<u8>, std::time::Duration)> {
+    let (w, h) = MOCK_ANIM_SIZE;
+    (0..12u32)
+        .map(|f| {
+            let t = f as f32 / 12.0;
+            let cx = 30.0 + t * (w as f32 - 60.0);
+            let cy = h as f32 - 30.0 - (t * std::f32::consts::PI).sin() * (h as f32 - 60.0);
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                    let c = if d < 22.0 {
+                        [242, 63, 66, 255]
+                    } else {
+                        let g = (60.0 + 80.0 * y as f32 / h as f32) as u8;
+                        [g / 2, g / 2, g, 255]
+                    };
+                    px.extend_from_slice(&c);
+                }
+            }
+            (w, h, px, std::time::Duration::from_millis(80))
+        })
+        .collect()
 }
 
 /// Images behind the embed demo channels: (key, width, height, hue shift).
