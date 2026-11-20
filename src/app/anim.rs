@@ -30,8 +30,8 @@ pub const RETRY_AFTER: Duration = Duration::from_secs(300);
 /// Frames are never shown for less than this (GIF delay 0 means "default").
 pub const MIN_DELAY: Duration = Duration::from_millis(20);
 const DEFAULT_DELAY: Duration = Duration::from_millis(100);
-/// Tick period while animating (about 20 fps).
-pub const TICK: Duration = Duration::from_millis(50);
+/// Tick period while animating (about 15 fps).
+pub const TICK: Duration = Duration::from_millis(66);
 /// Larger sources are refused before decoding.
 pub const MAX_SOURCE_DIM: u32 = 2048;
 

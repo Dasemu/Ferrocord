@@ -333,7 +333,7 @@ downloads never carry the token.
   dropped when the popout closes.
 * Lists and messages show the still image; hovering a row / message starts
   the clock for that avatar, decoration and (in messages) animated emoji.
-  The popout animates everything. A `time::every(50 ms)` subscription exists
+  The popout animates everything. A `time::every(66 ms)` subscription exists
   only while `AnimState::active` is true (something animated is hovered or
   the popout shows one); "Reduce motion" in Settings turns all of it off.
 * Handles are created once when data arrives (`Handle::from_rgba` in the
