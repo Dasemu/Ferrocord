@@ -96,7 +96,8 @@ impl App {
             status: self.chat.my_status,
             muted: self.prefs.muted,
             start_minimized: self.prefs.start_minimized,
-            mentions: self.chat.attention_count(),
+            // An incoming call asks for attention like an unread mention.
+            mentions: self.chat.attention_count() + u32::from(self.voice.incoming.is_some()),
         }
     }
 
@@ -107,7 +108,7 @@ impl App {
         }
     }
 
-    fn save_pref(&self, key: &'static str, on: bool) -> Task<Message> {
+    pub(super) fn save_pref(&self, key: &'static str, on: bool) -> Task<Message> {
         let store = self.store.clone();
         Task::perform(
             async move {
@@ -139,7 +140,9 @@ impl App {
             Ui::OpenSettings => {
                 self.settings_open = true;
                 self.status_menu = false;
-                Task::none()
+                // Device names for the voice section (blocking enumeration
+                // runs off the UI thread).
+                self.update_voice(super::voice::VoiceUi::RefreshDevices)
             }
             Ui::CloseSettings => {
                 self.settings_open = false;

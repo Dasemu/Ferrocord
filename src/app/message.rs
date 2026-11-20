@@ -24,6 +24,8 @@ pub enum Message {
     Done(Done),
     /// Events from the system tray service.
     Tray(crate::tray::Event),
+    /// Events from the running voice connection.
+    Voice(crate::net::voice::VoiceEvent),
 }
 
 /// User input.
@@ -44,9 +46,23 @@ pub enum Ui {
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
     OpenUrl(String),
+    // -- video player
+    /// Play a video attachment or embed (downloads it first).
+    PlayVideo(Box<crate::media::clip::Clip>),
+    /// Stop the video and close its full-screen view.
+    CloseVideo,
+    VideoToggle,
+    /// The seek slider moved to this position (ms).
+    VideoSeekDrag(u64),
+    VideoSeekRelease,
+    VideoVolume(u8),
+    VideoMute,
+    VideoFullscreen,
     /// A link whose visible text differs from its target: ask first.
     ConfirmLink(String),
     CancelLink,
+    /// The "X" on a message's embeds: sets `SUPPRESS_EMBEDS` on the message.
+    SuppressEmbeds(MessageId),
     Logout,
     WindowFocus(bool),
     WindowOpened,
@@ -129,6 +145,18 @@ pub enum Ui {
     /// Tray "Mute notifications" / settings toggle.
     ToggleMuted,
     ToggleAutostart,
+    /// "Reduce motion": no avatar, emoji, decoration or effect animation.
+    ToggleReduceMotion,
+    // -- profile popout and animation
+    OpenProfile {
+        user: UserId,
+        guild: Option<GuildId>,
+    },
+    CloseProfile,
+    /// The pointer entered a row / message with an avatar to animate.
+    HoverEnter(super::anim::Hover),
+    HoverLeave(super::anim::Hover),
+    AnimTick(std::time::Instant),
     // -- channel header popovers
     TogglePopover(Popover),
     ClosePopover,
@@ -179,6 +207,8 @@ pub enum Ui {
     FolderColor(Option<u32>),
     SaveFolder,
     CloseFolderSettings,
+    // -- voice channels and calls
+    Voice(super::voice::VoiceUi),
 }
 
 /// Completion of a `Task`.
@@ -217,12 +247,25 @@ pub enum Done {
         key: String,
         bytes: Option<Vec<u8>>,
     },
+    /// Download progress or helper event of a video playback session.
+    Video {
+        session: u32,
+        progress: super::video::Progress,
+    },
     Edited {
         channel: ChannelId,
         message: MessageId,
         result: Result<Box<crate::net::model::Message>, String>,
     },
     ActionFailed(String),
+    /// `SUPPRESS_EMBEDS` was refused: put the embeds back.
+    SuppressFailed {
+        channel: ChannelId,
+        message: MessageId,
+        embeds: Vec<Embed>,
+        flags: u64,
+        error: String,
+    },
     ReactionFailed {
         channel: ChannelId,
         message: MessageId,
@@ -311,6 +354,18 @@ pub enum Done {
     FoldersSaved {
         previous: Folders,
         result: Result<(), String>,
+    },
+    Voice(super::voice::VoiceDone),
+    Profile {
+        key: super::profile::Key,
+        result: Result<Box<crate::net::cosmetics::Profile>, String>,
+    },
+    ProfileEffects(Result<Vec<crate::net::cosmetics::ProfileEffect>, String>),
+    /// A decoded animation (or `None` when it failed / is not animated).
+    Anim {
+        key: String,
+        class: super::anim::Class,
+        anim: Option<std::sync::Arc<super::anim::Anim>>,
     },
     Screenshot(iced::window::Screenshot),
     ScreenshotReady,

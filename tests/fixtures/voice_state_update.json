@@ -1,0 +1,18 @@
+{
+  "guild_id": "1000000000000000001",
+  "channel_id": "1000000000000000140",
+  "user_id": "1000000000000000003",
+  "session_id": "fixture-voice-session",
+  "deaf": false,
+  "mute": true,
+  "self_deaf": false,
+  "self_mute": true,
+  "self_video": false,
+  "self_stream": false,
+  "suppress": false,
+  "request_to_speak_timestamp": null,
+  "member": {
+    "roles": [],
+    "user": { "id": "1000000000000000003", "username": "bob", "global_name": "Bob", "avatar": null }
+  }
+}

@@ -10,9 +10,10 @@ use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::video;
 use super::{
-    El, avatar, fit_size, format_day, format_time, format_timestamp, human_size, markdown,
-    same_day, ui,
+    El, avatar, cosmetics, fit_size, format_day, format_time, format_timestamp, human_size,
+    markdown, same_day, ui,
 };
 use crate::app::actions::{composer_id, edit_id, search_id};
 use crate::app::composer;
@@ -20,7 +21,8 @@ use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
-use crate::net::model::{self as model, Attachment, Channel, ChannelKind, Embed};
+use crate::media::clip::Clip;
+use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 
 pub fn view(app: &App) -> El<'_> {
     let p = app.theme.palette;
@@ -28,6 +30,7 @@ pub fn view(app: &App) -> El<'_> {
     let body: El<'_> = match channel {
         Some(c) => column![
             header(app, c),
+            super::voice::dm_call_area(app, c).unwrap_or_else(super::empty),
             messages(app, c),
             detached_bar(app, c),
             composer(app, c)
@@ -211,6 +214,29 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     ]
     .spacing(16)
     .align_y(Alignment::Center);
+    // DMs and groups get the "Start Voice Call" phone first, like the
+    // official header.
+    let tools: El<'a> = if c.kind.is_private() {
+        let in_call = app.voice.connected_channel() == Some(c.id);
+        row![
+            tool(
+                Icon::Phone,
+                if in_call {
+                    "In Call"
+                } else {
+                    "Start Voice Call"
+                },
+                Ui::Voice(crate::app::voice::VoiceUi::StartCall(c.id)),
+                in_call,
+            ),
+            tools
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        tools.into()
+    };
     container(
         row![container(r).width(Length::Fill).clip(true), tools]
             .spacing(16)
@@ -310,7 +336,12 @@ fn messages<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
                 col = col.push(day_divider(app, m.timestamp_ms()));
             }
             let grouped = !new_day && prev.is_some_and(|pm| continues_group(pm, m));
-            col = col.push(message(app, c, m, grouped, now));
+            if m.kind == 3 {
+                // Call service message.
+                col = col.push(super::voice::call_message(app, m, now));
+            } else {
+                col = col.push(message(app, c, m, grouped, now));
+            }
             prev = Some(m);
         }
     }
@@ -368,11 +399,8 @@ fn message<'a>(
     for s in &m.stickers {
         body = body.push(sticker(app, s, STICKER_SIZE));
     }
-    for e in &m.embeds {
-        body = body.push(match e.bare_media() {
-            Some(media) => image_box(app, &media.url, media.width, media.height),
-            None => embed(app, m, e),
-        });
+    for card in super::embeds::message_embeds(app, m) {
+        body = body.push(card);
     }
     if !m.reactions.is_empty() {
         body = body.push(reactions_row(app, c, m));
@@ -410,15 +438,24 @@ fn message<'a>(
             .author_color(m.guild_id.or(c.guild_id), m)
             .map(theme::from_int)
             .unwrap_or(p.header_text);
-        let mut name_row = row![emoji_text(
-            m.author.display_name(),
-            16.0,
-            name_color,
-            INTER_MEDIUM,
-            false
-        ),]
+        let profile_guild = m.guild_id.or(c.guild_id);
+        let mut name_row = row![cosmetics::clickable(
+            cosmetics::name(
+                app,
+                &m.author,
+                m.author.display_name(),
+                16.0,
+                INTER_MEDIUM,
+                name_color
+            ),
+            &m.author,
+            profile_guild
+        )]
         .spacing(8)
         .align_y(Alignment::Center);
+        if let Some(tag) = cosmetics::tag_chip(app, &m.author) {
+            name_row = name_row.push(tag);
+        }
         if m.author.bot {
             name_row = name_row.push(
                 container(
@@ -437,9 +474,13 @@ fn message<'a>(
                 .color(p.text_muted),
         );
         let main = row![
-            container(avatar(app, &m.author, 40.0))
-                .width(gutter)
-                .padding(Padding::ZERO.left(16).top(2)),
+            container(cosmetics::clickable(
+                avatar(app, &m.author, 40.0),
+                &m.author,
+                profile_guild
+            ))
+            .width(gutter)
+            .padding(Padding::ZERO.left(16).top(2)),
             column![name_row, body].spacing(2).width(Length::Fill)
         ]
         .padding(Padding::from([2, 0]).right(48));
@@ -498,8 +539,14 @@ fn message<'a>(
                 a: 0.04,
                 ..p.text_primary
             }));
+        let h = crate::app::anim::Hover {
+            user: m.author.id,
+            message: Some(m.id),
+        };
         mouse_area(hover(base_el, overlay))
             .on_right_press(ui(Ui::ContextMenu(m.id)))
+            .on_enter(Message::Ui(Ui::HoverEnter(h)))
+            .on_exit(Message::Ui(Ui::HoverLeave(h)))
             .into()
     } else {
         base_el
@@ -755,13 +802,6 @@ fn detached_bar<'a>(app: &'a App, c: &Channel) -> El<'a> {
     .into()
 }
 
-trait Pipe: Sized {
-    fn pipe<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
-
 /// An image (attachment, GIF or image link) fitted into 400x300, with a
 /// placeholder until it has loaded.
 fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32>) -> El<'a> {
@@ -825,6 +865,9 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     if a.is_image() {
         return image_box(app, &preview_key(a), a.width, a.height);
     }
+    if let Some(clip) = Clip::from_attachment(a) {
+        return video::inline(app, &clip);
+    }
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())
             .color(p.link)
@@ -859,145 +902,6 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
         },
         ..Default::default()
     })
-    .into()
-}
-
-fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
-    let t = &app.theme;
-    let p = t.palette;
-    let mut col = column![].spacing(8).width(Length::Fill);
-    if let Some(pn) = &e.provider_name {
-        col = col.push(text(pn.clone()).size(12).color(p.text_secondary));
-    }
-    if let Some(an) = &e.author_name {
-        col = col.push(
-            text(an.clone())
-                .size(14)
-                .font(INTER_SEMIBOLD)
-                .color(p.header_text),
-        );
-    }
-    if let Some(title) = &e.title {
-        let mut sp = span::<Ui, Font>(title.clone())
-            .font(INTER_SEMIBOLD)
-            .size(16)
-            .color(if e.url.is_some() {
-                p.link
-            } else {
-                p.header_text
-            });
-        if let Some(u) = &e.url {
-            // The title is arbitrary text: confirm the real target.
-            sp = sp.link(Ui::ConfirmLink(u.clone()));
-        }
-        col = col.push(rich_text(vec![sp]).on_link_click(Message::Ui));
-    }
-    if let Some(d) = &e.description {
-        col = col.push(markdown::render(app, m.id, d, p.text_normal, 14.0));
-    }
-    if !e.fields.is_empty() {
-        let mut fields = column![].spacing(8);
-        let mut line = row![].spacing(8);
-        let mut n = 0;
-        for f in &e.fields {
-            let cell = column![
-                text(f.name.clone())
-                    .size(14)
-                    .font(INTER_SEMIBOLD)
-                    .color(p.header_text),
-                markdown::render(app, m.id, &f.value, p.text_normal, 14.0),
-            ]
-            .spacing(2)
-            .width(Length::Fill);
-            if !f.inline || n == 3 {
-                if n > 0 {
-                    fields = fields.push(line);
-                }
-                line = row![].spacing(8);
-                n = 0;
-            }
-            line = line.push(cell);
-            n += 1;
-            if !f.inline {
-                fields = fields.push(line);
-                line = row![].spacing(8);
-                n = 0;
-            }
-        }
-        if n > 0 {
-            fields = fields.push(line);
-        }
-        col = col.push(fields);
-    }
-    if let Some(img) = &e.image {
-        let (w, h) = fit_size(
-            img.width.unwrap_or(400),
-            img.height.unwrap_or(300),
-            400,
-            300,
-        );
-        if let Some(handle) = app.image(&img.url) {
-            col = col.push(
-                iced::widget::image(handle.clone())
-                    .width(w as f32)
-                    .height(h as f32)
-                    .border_radius(4.0),
-            );
-        }
-    }
-    if let Some(f) = &e.footer {
-        col = col.push(
-            text(f.clone())
-                .size(12)
-                .font(INTER_MEDIUM)
-                .color(p.text_secondary),
-        );
-    }
-    let mut inner = row![col].spacing(16);
-    if let (Some(th), None) = (&e.thumbnail, &e.image)
-        && let Some(handle) = app.image(&th.url)
-    {
-        inner = inner.push(
-            iced::widget::image(handle.clone())
-                .width(80)
-                .height(80)
-                .border_radius(4.0),
-        );
-    }
-    let bar = e.color.map(theme::from_int).unwrap_or(p.bg_app);
-    container(
-        container(inner)
-            .padding(Padding::from([8, 16]).top(8).bottom(16).left(12))
-            .width(Length::Fill),
-    )
-    .max_width(t.metrics.embed_max_width)
-    .style(move |_| container::Style {
-        background: Some(Background::Color(p.embed_bg)),
-        border: Border {
-            radius: 4.0.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
-        ..Default::default()
-    })
-    .pipe(|c| {
-        row![
-            container(text(""))
-                .width(4)
-                .height(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(bar)),
-                    border: Border {
-                        radius: iced::border::Radius::default().left(4.0),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            c
-        ]
-        .height(Length::Shrink)
-    })
-    .pipe(|r| container(r).max_width(t.metrics.embed_max_width + 4.0))
     .into()
 }
 

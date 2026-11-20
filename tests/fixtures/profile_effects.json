@@ -1,0 +1,29 @@
+{
+  "profile_effect_configs": [
+    {
+      "type": 1,
+      "id": "1139323097930027068",
+      "sku_id": "1139323095841247333",
+      "title": "Sparkles",
+      "description": "d",
+      "accessibilityLabel": "a",
+      "animationType": 1,
+      "thumbnailPreviewSrc": "https://cdn.discordapp.com/assets/profile_effects/configs/x/thumb.png",
+      "reducedMotionSrc": "https://cdn.discordapp.com/assets/profile_effects/configs/x/reduced.png",
+      "staticFrameSrc": "https://cdn.discordapp.com/assets/profile_effects/configs/x/static.png",
+      "effects": [
+        {"src": "https://cdn.discordapp.com/assets/profile_effects/configs/x/b.png", "loop": false, "height": 880, "width": 450, "duration": 2000, "start": 0, "loopDelay": 0, "position": {"x": 0, "y": 0}, "zIndex": 5, "randomizedSources": []},
+        {"src": "https://cdn.discordapp.com/assets/profile_effects/configs/x/a.png", "loop": true, "height": 880, "width": 450, "duration": 3000, "start": 500, "loopDelay": 2000, "position": {"x": 10, "y": 20}, "zIndex": 9}
+      ]
+    },
+    {
+      "type": 1,
+      "id": "1139323097930027069",
+      "title": "Rain",
+      "effects": [
+        {"src": "https://cdn.discordapp.com/assets/profile_effects/configs/y/r.png", "loop": true, "height": 880, "width": 450, "duration": 1000, "start": 0, "loopDelay": 0, "position": {"x": 0, "y": 0}, "zIndex": 1,
+         "randomizedSources": [{"src": "https://cdn.discordapp.com/assets/profile_effects/configs/y/r1.png"}, {"src": "https://cdn.discordapp.com/assets/profile_effects/configs/y/r2.png"}]}
+      ]
+    }
+  ]
+}

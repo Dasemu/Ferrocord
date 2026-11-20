@@ -1,6 +1,8 @@
 //! Views: pure functions `&App -> Element<Message>`.
 
 pub mod chat;
+pub mod cosmetics;
+pub mod embeds;
 pub mod emoji_font;
 pub mod icons;
 pub mod login;
@@ -8,12 +10,15 @@ pub mod markdown;
 pub mod members;
 pub mod popovers;
 pub mod popups;
+pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
+pub mod video;
+pub mod voice;
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
 use iced::widget::{column, container, row, stack, text};
@@ -77,6 +82,8 @@ pub fn view(app: &App) -> El<'_> {
     layers.push(content);
     layers.push(servers::discover(app).unwrap_or_else(empty));
     layers.extend(popups::layers(app));
+    layers.push(voice::user_menu(app).unwrap_or_else(empty));
+    layers.push(voice::incoming_overlay(app).unwrap_or_else(empty));
     layers.push(servers::add_server(app).unwrap_or_else(empty));
     layers.push(servers::folder_dialog(app).unwrap_or_else(empty));
     layers.push(if app.settings_open {
@@ -88,6 +95,7 @@ pub fn view(app: &App) -> El<'_> {
         Some(url) => leave_dialog(t, url),
         None => empty(),
     });
+    layers.push(video::fullscreen(app).unwrap_or_else(empty));
     container(stack(layers))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -95,9 +103,10 @@ pub fn view(app: &App) -> El<'_> {
         .into()
 }
 
-/// Base content + discover page + popup slots + add-server dialog + folder
-/// dialog + settings + link dialog.
-pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 4;
+/// Base content + discover page + popup slots + voice user menu + incoming
+/// call + add-server dialog + folder dialog + settings + link dialog +
+/// full-screen video.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 4 + 1;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {
@@ -314,10 +323,26 @@ fn banner(app: &App) -> Option<El<'_>> {
     )
 }
 
-/// Round avatar: the downloaded image, or a coloured circle with the
-/// user's initial.
+/// Round avatar with its decoration: animated while its row or message is
+/// hovered (see `App::phase_of`).
 pub fn avatar<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
-    if let Some(h) = app.avatar_handle(user) {
+    cosmetics::avatar_decorated(app, user, size, app.phase_of(user.id))
+}
+
+/// The avatar circle alone: the downloaded image (the animated frame in
+/// `phase`), or a coloured circle with the user's initial.
+pub fn avatar_circle<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    phase: crate::app::cosmetics::Phase,
+) -> El<'a> {
+    let cdn_size = if size > 64.0 {
+        crate::app::cosmetics::AV_POP
+    } else {
+        crate::app::cosmetics::AV_LIST
+    };
+    if let Some(h) = app.avatar_frame(user, cdn_size, phase) {
         return iced::widget::image(h.clone())
             .width(size)
             .height(size)
@@ -372,6 +397,17 @@ pub fn avatar_with_presence<'a>(
     status: crate::net::model::Presence,
     ring_color: iced::Color,
 ) -> El<'a> {
+    with_presence(app, avatar(app, user, size), size, status, ring_color)
+}
+
+/// Puts the presence dot on `base` (an avatar slot of `size`).
+pub fn with_presence<'a>(
+    app: &'a App,
+    base: El<'a>,
+    size: f32,
+    status: crate::net::model::Presence,
+    ring_color: iced::Color,
+) -> El<'a> {
     let p = app.theme.palette;
     let dot = size * 0.3;
     let ring = container(
@@ -386,7 +422,7 @@ pub fn avatar_with_presence<'a>(
     .padding(2)
     .style(theme::rounded_bg(ring_color, dot));
     stack![
-        avatar(app, user, size),
+        base,
         container(ring)
             .width(size + 2.0)
             .height(size + 2.0)

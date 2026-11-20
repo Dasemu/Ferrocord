@@ -58,9 +58,22 @@ pub enum Icon {
     Upload,
     ArrowLeft,
     PinOff,
+    MicOff,
+    HeadphoneOff,
+    Phone,
+    PhoneOff,
+    Signal,
+    ShieldCheck,
+    VolumeX,
+    Play,
+    Pause,
+    Maximize,
+    Minimize,
+    RotateCcw,
+    ExternalLink,
 }
 
-const ALL: [(Icon, &[u8]); 50] = [
+const ALL: [(Icon, &[u8]); 63] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -206,6 +219,49 @@ const ALL: [(Icon, &[u8]); 50] = [
     (
         Icon::PinOff,
         include_bytes!("../../assets/icons/pin-off.svg"),
+    ),
+    (
+        Icon::MicOff,
+        include_bytes!("../../assets/icons/mic-off.svg"),
+    ),
+    (
+        Icon::HeadphoneOff,
+        include_bytes!("../../assets/icons/headphone-off.svg"),
+    ),
+    (Icon::Phone, include_bytes!("../../assets/icons/phone.svg")),
+    (
+        Icon::PhoneOff,
+        include_bytes!("../../assets/icons/phone-off.svg"),
+    ),
+    (
+        Icon::Signal,
+        include_bytes!("../../assets/icons/signal.svg"),
+    ),
+    (
+        Icon::ShieldCheck,
+        include_bytes!("../../assets/icons/shield-check.svg"),
+    ),
+    (
+        Icon::VolumeX,
+        include_bytes!("../../assets/icons/volume-x.svg"),
+    ),
+    (Icon::Play, include_bytes!("../../assets/icons/play.svg")),
+    (Icon::Pause, include_bytes!("../../assets/icons/pause.svg")),
+    (
+        Icon::Maximize,
+        include_bytes!("../../assets/icons/maximize.svg"),
+    ),
+    (
+        Icon::Minimize,
+        include_bytes!("../../assets/icons/minimize.svg"),
+    ),
+    (
+        Icon::RotateCcw,
+        include_bytes!("../../assets/icons/rotate-ccw.svg"),
+    ),
+    (
+        Icon::ExternalLink,
+        include_bytes!("../../assets/icons/external-link.svg"),
     ),
 ];
 

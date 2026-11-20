@@ -2,8 +2,11 @@
 //! everything that touches the network, disk or keyring runs in a `Task`.
 
 pub mod actions;
+pub mod anim;
 mod background;
 pub mod composer;
+pub mod cosmetics;
+pub mod embeds;
 pub mod emoji;
 pub mod features;
 pub mod folders;
@@ -15,12 +18,15 @@ pub mod markdown;
 pub mod members;
 pub mod message;
 pub mod panels;
+pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
 pub mod state;
 pub mod stickers;
 pub mod upload;
+pub mod video;
+pub mod voice;
 pub mod window;
 
 use std::collections::{HashMap, HashSet};
@@ -39,6 +45,7 @@ use crate::auth::secrets::{self, KeyringStore, MemoryStore, Secret, SecretStore}
 use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
 use crate::config::{Config, ScreenshotScreen};
 use crate::error::Redacted;
+use crate::media::clip::Clip;
 use crate::mock;
 use crate::net::gateway::{self, GatewayConfig, GatewayHandle};
 use crate::net::model::*;
@@ -153,8 +160,17 @@ pub struct App {
     /// "Open at login" (the autostart file exists).
     pub autostart: bool,
     pub settings_open: bool,
+    /// Animation clock, hover target and decoded frames.
+    pub anim: anim::AnimState,
+    /// Profile popout, fetched profiles and effect configs.
+    pub profiles: profile::ProfileState,
     /// Handle to the running tray, once it registered.
     tray_control: Option<tray::Control>,
+    /// Voice channels, calls and voice settings.
+    pub voice: voice::Voice,
+    /// The one video that is downloading or playing.
+    pub video: Option<video::Playback>,
+    video_session: u32,
 }
 
 pub fn now_ms() -> u64 {
@@ -193,6 +209,7 @@ impl App {
         });
 
         let prefs = Prefs::load(&store);
+        let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
         let start_hidden = cfg.minimized || prefs.start_minimized;
         let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
         let mut app = App {
@@ -253,7 +270,12 @@ impl App {
             prefs,
             autostart: false,
             settings_open: false,
+            anim: anim::AnimState::default(),
+            profiles: profile::ProfileState::default(),
             tray_control: None,
+            voice,
+            video: None,
+            video_session: 0,
             cfg,
         };
         app.window_focused = app.win.visible;
@@ -306,12 +328,18 @@ impl App {
                 Message::Done(Done::TokenRestored(r.map_err(|e| e.user_message())))
             })
         };
-        (app, Task::batch([open_window, fonts, restore, autostart]))
+        let sweep = app.sweep_videos();
+        (
+            app,
+            Task::batch([open_window, fonts, restore, autostart, sweep]),
+        )
     }
 
     fn boot_mock(&mut self) {
         let ready = mock::ready();
         self.chat.load_ready(&ready);
+        let me = ready.me.as_ref().map(|u| u.id);
+        let _ = self.voice.apply(&Event::Ready(Box::new(ready.clone())), me);
         for c in ready.channels.iter().filter(|c| c.kind.is_textual()) {
             let mut h = mock::history(c.id);
             for m in &mut h {
@@ -345,6 +373,20 @@ impl App {
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
+        let (w, h, px) = mock::mock_image(400, 225);
+        self.images.insert(
+            "mock://video/poster".into(),
+            iced::widget::image::Handle::from_rgba(w, h, px),
+            (w * h * 4) as usize,
+        );
+        for (key, w, h, shift) in mock::MOCK_EMBED_IMAGES {
+            let (w, h, px) = mock::mock_embed_image(w, h, shift);
+            self.images.insert(
+                key.into(),
+                iced::widget::image::Handle::from_rgba(w, h, px),
+                (w * h * 4) as usize,
+            );
+        }
         // Raster avatars for the users of the long mock DM.
         for (n, rgb) in [(1u64, [120u8, 200, 255]), (3, [250, 170, 40])] {
             let mut u = mock::user(n);
@@ -360,6 +402,7 @@ impl App {
                 }
             }
         }
+        self.mock_load_cosmetics();
         // Mock sticker images, under the CDN URLs the views ask for.
         for (st, rgb) in mock::mock_stickers().into_iter().zip([
             [255u8, 140, 60],
@@ -429,6 +472,36 @@ impl App {
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
             }
+            Some(s @ (ScreenshotScreen::Video | ScreenshotScreen::VideoFullscreen)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_SHOWCASE),
+                };
+                self.chat.mark_read(mock::CH_SHOWCASE);
+                self.mock_video_screen(s == ScreenshotScreen::VideoFullscreen);
+            }
+            Some(
+                s @ (ScreenshotScreen::EmbedMedia
+                | ScreenshotScreen::EmbedRich
+                | ScreenshotScreen::EmbedGrid),
+            ) => {
+                let channel = match s {
+                    ScreenshotScreen::EmbedMedia => mock::CH_EMBED_MEDIA,
+                    ScreenshotScreen::EmbedGrid => mock::CH_EMBED_GRID,
+                    _ => mock::CH_EMBED_RICH,
+                };
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(channel),
+                };
+                self.chat.mark_read(channel);
+            }
             Some(s @ (ScreenshotScreen::Search | ScreenshotScreen::Compose)) => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -492,6 +565,29 @@ impl App {
                     }
                 }
             }
+            Some(s) if s.is_voice() => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.mock_voice_screen(s);
+            }
+            Some(ScreenshotScreen::ProfileDm) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(Some(mock::DM_ALICE));
+                self.chat.mark_read(mock::DM_ALICE);
+            }
+            Some(ScreenshotScreen::Profile) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+            }
             Some(s) if s.is_round3() => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -519,6 +615,18 @@ impl App {
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        if screen == Some(ScreenshotScreen::Profile) {
+            let _ = self.update_ui(Ui::OpenProfile {
+                user: Snowflake(2),
+                guild: Some(mock::GUILD_RUST),
+            });
+            if let Some(p) = self.profiles.popout.as_mut() {
+                p.at = iced::Point::new(690.0, 70.0);
+            }
+        }
+        if screen == Some(ScreenshotScreen::ProfileDm) {
+            let _ = self.request_images();
+        }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
             self.chat.my_status = Presence::Dnd;
@@ -653,8 +761,14 @@ impl App {
             Message::Net(ev) => self.on_net(ev),
             Message::Done(d) => self.on_done(d),
             Message::Tray(ev) => self.on_tray(ev),
+            Message::Voice(ev) => self.on_voice_event(ev),
         };
         self.sync_tray();
+        let task = if self.video.is_some() {
+            Task::batch([task, self.stop_video_if_left()])
+        } else {
+            task
+        };
         if !self.first_frame_logged
             && self.cfg.trace_startup
             && self.fonts_ready
@@ -781,9 +895,11 @@ impl App {
                 Task::none()
             }
             Ui::ConfirmLink(url) => {
-                self.pending_link = Some(url);
+                // Only http(s) ever reaches the dialog, let alone the browser.
+                self.pending_link = embeds::web_url(&url).map(str::to_owned);
                 Task::none()
             }
+            Ui::SuppressEmbeds(m) => self.suppress_embeds(m),
             Ui::CancelLink => {
                 self.pending_link = None;
                 Task::none()
@@ -796,6 +912,7 @@ impl App {
                 Task::perform(open_url(url), |_| Message::Done(Done::Ignored))
             }
             Ui::Logout => self.logout(),
+            Ui::Voice(v) => self.update_voice(v),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -822,6 +939,12 @@ impl App {
                 self.chat.prune_typing(now_ms());
                 Task::none()
             }
+            Ui::OpenProfile { .. }
+            | Ui::CloseProfile
+            | Ui::HoverEnter(_)
+            | Ui::HoverLeave(_)
+            | Ui::AnimTick(_)
+            | Ui::ToggleReduceMotion => self.update_cosmetics(u),
             other => self.update_action(other),
         }
     }
@@ -1095,6 +1218,9 @@ impl App {
 
     fn logout(&mut self) -> Task<Message> {
         self.settings_open = false;
+        let me = self.chat.me_id();
+        let _ = self.voice.leave(me);
+        self.voice = voice::Voice::with_prefs(self.voice.prefs.clone());
         self.token = None;
         self.gateway_generation += 1;
         self.auth = self.auth.apply(AuthEvent::LoggedOut);
@@ -1220,6 +1346,7 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        tasks.push(self.voice_on_gateway(&ev));
         if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
             self.cache_folders();
         }
@@ -1273,6 +1400,9 @@ impl App {
     fn on_done(&mut self, d: Done) -> Task<Message> {
         match d {
             Done::Ignored => Task::none(),
+            d @ (Done::Profile { .. } | Done::ProfileEffects(_) | Done::Anim { .. }) => {
+                self.on_cosmetics_done(d)
+            }
             Done::AutostartLoaded(on) => {
                 self.autostart = on;
                 Task::none()
@@ -1306,6 +1436,7 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Voice(d) => self.on_voice_done(d),
             Done::ScreenshotReady => iced::window::latest()
                 .and_then(iced::window::screenshot)
                 .map(|s| Message::Done(Done::Screenshot(s))),
@@ -1464,6 +1595,17 @@ impl App {
                 }
                 Task::none()
             }
+            Done::SuppressFailed {
+                channel,
+                message,
+                embeds,
+                flags,
+                error,
+            } => {
+                self.chat.restore_embeds(channel, message, embeds, flags);
+                self.toast = Some(format!("Could not remove the embeds: {error}"));
+                Task::none()
+            }
             Done::ActionFailed(e) => {
                 self.toast = Some(e);
                 Task::none()
@@ -1539,6 +1681,7 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Video { session, progress } => self.on_video(session, progress),
             Done::Image { key, bytes } => {
                 match bytes {
                     Some(b) => self.images.insert_bytes(key, b),
@@ -1576,10 +1719,12 @@ impl App {
 
     /// Fetches avatars / icons / attachment previews that are visible now.
     fn request_images(&mut self) -> Task<Message> {
+        let profiles = self.request_profiles();
         if self.cfg.mock {
-            return Task::none();
+            return profiles;
         }
-        let mut urls: Vec<String> = Vec::new();
+        let anims = self.request_anims();
+        let mut urls: Vec<String> = self.cosmetic_urls();
         for g in &self.chat.guilds {
             if let Some(u) = self.rest.guild_icon_url(g, 96) {
                 urls.push(u);
@@ -1638,11 +1783,13 @@ impl App {
                     let blocks = self.parsed_markdown(m.id, &m.content);
                     collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
                 }
-                for e in &m.embeds {
-                    if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
-                        urls.push(i.url.clone());
-                    }
-                }
+                urls.extend(crate::ui::embeds::media_keys(m));
+                urls.extend(
+                    m.attachments
+                        .iter()
+                        .filter_map(Clip::from_attachment)
+                        .filter_map(|c| c.poster),
+                );
             }
         }
         if self.emoji_picker.is_some()
@@ -1700,7 +1847,7 @@ impl App {
             .into_iter()
             .filter(|u| self.rest.is_allowed_media_url(u))
             .filter(|u| self.images.want(u))
-            .take(64)
+            .take(96)
             .map(|url| {
                 let rest = self.rest.clone();
                 Task::perform(
@@ -1720,7 +1867,7 @@ impl App {
                 )
             })
             .collect();
-        Task::batch(tasks)
+        Task::batch(tasks.into_iter().chain([profiles, anims]))
     }
 
     /// Parsed markdown for a message body (cached, bounded).
@@ -1743,6 +1890,11 @@ impl App {
         }
         cache.insert(key, blocks.clone());
         blocks
+    }
+
+    /// Whether `url` may be downloaded (Discord's CDN / media proxy only).
+    pub fn is_allowed_media(&self, url: &str) -> bool {
+        self.rest.is_allowed_media_url(url)
     }
 
     pub fn image(&self, key: &str) -> Option<&iced::widget::image::Handle> {
@@ -1797,6 +1949,11 @@ impl App {
                     .map(|()| Message::Ui(Ui::ShowWindow)),
             );
         }
+        // Ticks exist only while something animated is hovered or the
+        // popout shows one: idle CPU stays flat otherwise.
+        if self.anim.active(self.prefs.reduce_motion) {
+            subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
+        }
         if self.cfg.mock {
             return Subscription::batch(subs);
         }
@@ -1835,6 +1992,13 @@ impl App {
         }
         if !self.chat.typing.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Ui(Ui::Tick)));
+        }
+        if let Some(v) = self.voice_subscription() {
+            subs.push(v);
+        }
+        // Live microphone meter in the voice settings while connected.
+        if self.settings_open && self.voice.conn.is_some() && !self.cfg.mock {
+            subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Ui(Ui::Tick)));
         }
         Subscription::batch(subs)
     }

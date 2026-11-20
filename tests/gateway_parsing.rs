@@ -159,12 +159,12 @@ fn message_create_full() {
     assert_eq!(e.author_name.as_deref(), Some("Author"));
     assert_eq!(e.footer.as_deref(), Some("Footer"));
     assert_eq!(e.fields.len(), 1);
-    // Proxy URLs are preferred for media.
+    // Proxy URLs are what gets downloaded.
     assert!(
         e.thumbnail
             .as_ref()
             .unwrap()
-            .url
+            .download_url()
             .contains("images-ext-1.discordapp.net")
     );
     // Debug output never contains the body.
@@ -235,6 +235,7 @@ fn typing_ack_delete_supplemental_guild_channel() {
         guild,
         channels,
         partial,
+        ..
     } = parse_dispatch("GUILD_CREATE", fixture("guild_create.json"))
         .unwrap()
         .unwrap()
@@ -673,4 +674,274 @@ fn stickers_parse_on_messages_guilds_and_updates() {
         &Ctx::default(),
     );
     assert_eq!(s.guild(Snowflake(5)).unwrap().stickers.len(), 2);
+}
+
+// -- voice and calls ----------------------------------------------------------
+
+#[test]
+fn voice_state_update_parses() {
+    let Event::VoiceState(v) =
+        parse_dispatch("VOICE_STATE_UPDATE", fixture("voice_state_update.json"))
+            .unwrap()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v.channel_id, Some(sf("1000000000000000140")));
+    assert_eq!(v.guild_id, Some(sf("1000000000000000001")));
+    assert!(v.mute && v.self_mute && !v.self_deaf);
+    assert_eq!(v.user.as_ref().unwrap().display_name(), "Bob");
+    // Leaving: channel_id null.
+    let mut d = fixture("voice_state_update.json");
+    d["channel_id"] = serde_json::Value::Null;
+    let Event::VoiceState(v) = parse_dispatch("VOICE_STATE_UPDATE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(v.channel_id, None);
+}
+
+#[test]
+fn voice_server_update_for_a_call() {
+    let Event::VoiceServer(s) =
+        parse_dispatch("VOICE_SERVER_UPDATE", fixture("voice_server_update.json"))
+            .unwrap()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(s.guild_id, None);
+    assert_eq!(s.channel_id, Some(sf("1000000000000000600")));
+    assert_eq!(
+        s.endpoint.as_deref(),
+        Some("c-fra08-1234abcd.discord.media:443")
+    );
+    // The token never shows up in Debug output.
+    assert!(!format!("{s:?}").contains("fixture-voice-token"));
+    // A null endpoint (server being reallocated) is kept as None.
+    let mut d = fixture("voice_server_update.json");
+    d["endpoint"] = serde_json::Value::Null;
+    let Event::VoiceServer(s) = parse_dispatch("VOICE_SERVER_UPDATE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(s.endpoint, None);
+}
+
+#[test]
+fn call_events_parse() {
+    let Event::Call(c) = parse_dispatch("CALL_CREATE", fixture("call_create.json"))
+        .unwrap()
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(c.channel_id, sf("1000000000000000600"));
+    assert_eq!(c.ringing, vec![sf("1000000000000000001")]);
+    assert_eq!(c.voice_states.len(), 1);
+    assert_eq!(c.voice_states[0].user_id, sf("1000000000000000002"));
+    let d = serde_json::json!({"channel_id": "1000000000000000600"});
+    let Event::CallDelete(ch) = parse_dispatch("CALL_DELETE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(ch, sf("1000000000000000600"));
+}
+
+#[test]
+fn call_service_message_parses() {
+    let Event::MessageCreate(m) =
+        parse_dispatch("MESSAGE_CREATE", fixture("message_create_call.json"))
+            .unwrap()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(m.kind, 3);
+    let call = m.call.as_ref().unwrap();
+    assert_eq!(call.participants.len(), 2);
+    let ended = call.ended_ms.unwrap();
+    // 2026-11-20T10:05:30Z
+    assert_eq!(ended % 1000, 0);
+    assert_eq!(ended, 1_795_169_130_000);
+}
+
+#[test]
+fn hostile_voice_payloads_do_not_panic() {
+    for t in [
+        "VOICE_STATE_UPDATE",
+        "VOICE_SERVER_UPDATE",
+        "CALL_CREATE",
+        "CALL_UPDATE",
+        "CALL_DELETE",
+    ] {
+        for d in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({"user_id": "x"}),
+            serde_json::json!({"channel_id": 5, "ringing": "no", "voice_states": [1]}),
+            serde_json::json!({"endpoint": "x".repeat(10_000), "token": 5}),
+        ] {
+            let _ = parse_dispatch(t, d);
+        }
+    }
+    // A huge endpoint is dropped rather than used.
+    let d = serde_json::json!({"token": "t", "guild_id": "1", "endpoint": "a".repeat(1000)});
+    let Event::VoiceServer(s) = parse_dispatch("VOICE_SERVER_UPDATE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(s.endpoint, None);
+}
+
+#[test]
+fn ready_and_guild_create_carry_voice_states() {
+    let mut g = fixture("guild_create.json");
+    g["voice_states"] = serde_json::json!([fixture("voice_state_update.json")]);
+    let Event::GuildUpsert { voice_states, .. } =
+        parse_dispatch("GUILD_CREATE", g).unwrap().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(voice_states.len(), 1);
+    assert!(voice_states[0].guild_id.is_some());
+}
+
+#[test]
+fn op4_payload_shape() {
+    let p = ferrocord::net::types::voice_state_payload(None, Some(sf("600")), true, false);
+    let v = serde_json::to_value(&p).unwrap();
+    assert_eq!(v["op"], 4);
+    assert_eq!(v["d"]["guild_id"], serde_json::Value::Null);
+    assert_eq!(v["d"]["channel_id"], "600");
+    assert_eq!(v["d"]["self_mute"], true);
+    assert_eq!(v["d"]["self_deaf"], false);
+    let leave = ferrocord::net::types::voice_state_payload(Some(sf("1")), None, false, false);
+    assert_eq!(
+        serde_json::to_value(&leave).unwrap()["d"]["channel_id"],
+        serde_json::Value::Null
+    );
+}
+
+// -- profile cosmetics ------------------------------------------------------------
+
+#[test]
+fn presence_update_carries_activities() {
+    let mut d = fixture("presence_update.json");
+    d["activities"] = json!([
+        {"type": 4, "name": "Custom Status", "state": "away", "emoji": {"name": "zzz"}},
+        {"type": 0, "name": "Factorio", "application_id": "7", "timestamps": {"start": 1700000000000u64}}
+    ]);
+    let Event::PresenceUpdate {
+        user_id,
+        status,
+        activities,
+    } = parse_dispatch("PRESENCE_UPDATE", d).unwrap().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (user_id, status),
+        (sf("1000000000000000002"), Presence::Dnd)
+    );
+    assert_eq!(activities.len(), 2);
+    let mut s = ChatState::default();
+    s.set_activities(user_id, activities);
+    assert_eq!(s.activities_of(user_id).len(), 2);
+    // An update without activities clears them.
+    s.apply_event(
+        &parse("PRESENCE_UPDATE", "presence_update.json"),
+        &Ctx::default(),
+    );
+    assert!(s.activities_of(user_id).is_empty());
+}
+
+#[test]
+fn ready_presences_carry_activities() {
+    let mut d = fixture("ready.json");
+    d["presences"] = json!([
+        {"user": {"id": "1000000000000000002"}, "status": "online",
+         "activities": [{"type": 2, "name": "Spotify", "details": "Song"}]},
+        {"user": {"id": "1000000000000000003"}, "status": "online", "activities": []}
+    ]);
+    let Event::Ready(r) = parse_dispatch("READY", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(r.presences.len(), 2);
+    assert_eq!(r.activities.len(), 1);
+    let mut s = ChatState::default();
+    s.load_ready(&r);
+    assert_eq!(
+        s.activities_of(sf("1000000000000000002"))[0].name,
+        "Spotify"
+    );
+}
+
+#[test]
+fn message_authors_and_member_lists_carry_cosmetics() {
+    let mut d = fixture("message_create.json");
+    d["author"]["avatar_decoration_data"] =
+        json!({"asset": "a_deco", "sku_id": "5", "expires_at": null});
+    d["author"]["primary_guild"] =
+        json!({"identity_guild_id": "9", "identity_enabled": true, "tag": "TAG", "badge": "b"});
+    d["author"]["collectibles"] = json!({"nameplate": {"asset": "nameplates/x/y/", "palette": "sky", "label": "l", "sku_id": "1"}});
+    d["author"]["display_name_styles"] =
+        json!({"font_id": 11, "effect_id": 2, "colors": [255, 65280]});
+    let Event::MessageCreate(m) = parse_dispatch("MESSAGE_CREATE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    let a = &m.author;
+    assert_eq!(a.avatar_decoration.as_ref().unwrap().asset, "a_deco");
+    assert_eq!(a.primary_guild.as_ref().unwrap().visible_tag(), Some("TAG"));
+    assert!(a.collectibles.as_ref().unwrap().nameplate.is_some());
+    assert_eq!(a.name_style.as_ref().unwrap().colors, vec![255, 65280]);
+
+    // Member list: the member's server decoration wins, activities flow in,
+    // and the user in the cache is refreshed.
+    let mut d = fixture("member_list_update.json");
+    // Every member object of alice (the fixture re-sends her later).
+    fn decorate(v: &mut serde_json::Value, touched: &mut u32) {
+        match v {
+            serde_json::Value::Object(o) => {
+                if o.get("user")
+                    .is_some_and(|u| u["id"] == "1000000000000000002")
+                    && o.contains_key("roles")
+                {
+                    o.insert(
+                        "avatar_decoration_data".into(),
+                        json!({"asset": "guilddeco"}),
+                    );
+                    o.insert(
+                        "presence".into(),
+                        json!({"status": "online", "activities": [{"type": 0, "name": "Game"}]}),
+                    );
+                    *touched += 1;
+                }
+                o.values_mut().for_each(|c| decorate(c, touched));
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|c| decorate(c, touched)),
+            _ => {}
+        }
+    }
+    let mut touched = 0;
+    decorate(&mut d, &mut touched);
+    assert!(touched > 0);
+    let ev = parse_dispatch("GUILD_MEMBER_LIST_UPDATE", d)
+        .unwrap()
+        .unwrap();
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    s.member_list = Some(ferrocord::app::members::MemberListState::new(sf(
+        "2000000000000000001",
+    )));
+    s.apply_event(&ev, &Ctx::default());
+    let alice = sf("1000000000000000002");
+    assert_eq!(
+        s.users[&alice].avatar_decoration.as_ref().unwrap().asset,
+        "guilddeco"
+    );
+    assert_eq!(s.activities_of(alice)[0].name, "Game");
+}
+
+#[test]
+fn guild_subscription_asks_for_activities() {
+    let p = ferrocord::net::types::member_subscribe_payload(sf("1"), sf("2"), &[(0, 99)]);
+    let s = serde_json::to_value(&p).unwrap();
+    assert_eq!(s["d"]["activities"], json!(true));
 }

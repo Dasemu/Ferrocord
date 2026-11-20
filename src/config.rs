@@ -27,6 +27,12 @@ pub enum ScreenshotScreen {
     Guild,
     Dms,
     Embeds,
+    /// YouTube card and link preview.
+    EmbedMedia,
+    /// Bot embed with every decoration and a photo grid.
+    EmbedRich,
+    /// Twitter-style photo grid.
+    EmbedGrid,
     Search,
     Compose,
     Settings,
@@ -45,11 +51,31 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// Joined voice channel with users, speaking ring and the
+    /// "Voice Connected" panel.
+    Voice,
+    /// Active DM call.
+    Call,
+    /// Incoming call overlay.
+    IncomingCall,
+    /// The inline video player, playing.
+    Video,
+    /// The full-screen video view.
+    VideoFullscreen,
+    /// Profile popout with banner, theme colours, decoration and effect.
+    Profile,
+    /// The 1:1 DM profile panel.
+    ProfileDm,
     /// Multi-line composer and multi-line / emoji messages in a DM.
     Multiline,
 }
 
 impl ScreenshotScreen {
+    /// Voice channel and call screens.
+    pub fn is_voice(self) -> bool {
+        matches!(self, Self::Voice | Self::Call | Self::IncomingCall)
+    }
+
     /// Screens added with the header popovers, server dialogs and folders.
     pub fn is_round3(self) -> bool {
         matches!(
@@ -71,9 +97,12 @@ impl ScreenshotScreen {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "login" => Some(Self::Login),
-            "guild" | "server" => Some(Self::Guild),
+            "guild" | "server" | "members" => Some(Self::Guild),
             "dms" | "dm" => Some(Self::Dms),
             "embeds" | "attachments" => Some(Self::Embeds),
+            "embeds-media" => Some(Self::EmbedMedia),
+            "embeds-rich" => Some(Self::EmbedRich),
+            "embeds-grid" => Some(Self::EmbedGrid),
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
@@ -90,6 +119,13 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "voice" => Some(Self::Voice),
+            "call" => Some(Self::Call),
+            "incoming-call" => Some(Self::IncomingCall),
+            "video" => Some(Self::Video),
+            "video-fullscreen" => Some(Self::VideoFullscreen),
+            "profile" | "popout" => Some(Self::Profile),
+            "profile-dm" => Some(Self::ProfileDm),
             "multiline" | "emoji" => Some(Self::Multiline),
             _ => None,
         }

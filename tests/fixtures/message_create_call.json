@@ -1,0 +1,13 @@
+{
+  "id": "1000000000000000777",
+  "channel_id": "1000000000000000600",
+  "author": { "id": "1000000000000000002", "username": "alice", "global_name": "Alice", "avatar": null },
+  "content": "",
+  "type": 3,
+  "timestamp": "2026-11-20T10:00:00.000000+00:00",
+  "edited_timestamp": null,
+  "mentions": [],
+  "attachments": [],
+  "embeds": [],
+  "call": { "participants": ["1000000000000000002", "1000000000000000001"], "ended_timestamp": "2026-11-20T10:05:30.000000+00:00" }
+}

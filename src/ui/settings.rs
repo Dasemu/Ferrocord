@@ -57,6 +57,19 @@ pub fn view(app: &App) -> El<'_> {
     }
     rows = rows
         .push(
+            text("Appearance")
+                .size(t.metrics.font_s)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_secondary),
+        )
+        .push(toggle_row(
+            app,
+            "Reduce motion",
+            "Keep animated avatars, decorations, emoji, banners and profile effects still.",
+            app.prefs.reduce_motion,
+            Ui::ToggleReduceMotion,
+        ))
+        .push(
             text("Notifications")
                 .size(t.metrics.font_s)
                 .font(INTER_SEMIBOLD)
@@ -72,6 +85,7 @@ pub fn view(app: &App) -> El<'_> {
     if let Some(note) = tray_note {
         rows = rows.push(text(note).size(t.metrics.font_s).color(p.text_muted));
     }
+    rows = rows.push(super::voice::settings_section(app));
     rows = rows
         .push(
             text("Account")

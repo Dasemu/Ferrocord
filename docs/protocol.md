@@ -256,3 +256,235 @@ Rail gestures (`app/rail.rs`): press on a server, release on another -> new
 folder in place; release on a folder -> joins it; release on the same item ->
 click; a release anywhere else (`DragEnd`) cancels. Folders open/closed state
 is local only.
+
+## 10. Profile cosmetics and animations
+
+Field names and URLs were checked against the public user-account docs
+(discord-userdoccers `resources/user`, `resources/collectibles`,
+`resources/presence`, `reference#cdn-formatting`) and Discord's official API
+docs. What could not be confirmed against a live account is listed at the end.
+
+### Payload fields (`net/cosmetics.rs`)
+
+All of these are parsed leniently (`lenient`): a wrong shape drops the field,
+never the message or member list.
+
+| Where | Field | Use |
+|---|---|---|
+| user / partial user / member | `avatar_decoration_data { asset, sku_id }` | frame over the avatar |
+| user | `collectibles.nameplate { asset, palette, label, sku_id }` | row background |
+| user | `primary_guild { identity_guild_id, identity_enabled, tag, badge }` | server tag chip |
+| user | `display_name_styles { font_id, effect_id, colors[] }` | name colour / gradient |
+| user | `banner`, `accent_color` | popout banner |
+| presence | `activities[]` (type, name, details, state, emoji, timestamps, assets, application_id) | popout activity and custom status |
+
+`GUILD_MEMBER_LIST_UPDATE` member items may carry the member's own
+`avatar_decoration_data`; it replaces the user's. The member-list
+subscription (op 14) now sends `"activities": true`, like the official
+client, so presences include activities.
+
+### Profile popout
+
+`GET /users/{id}/profile?type=popout&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true[&guild_id=..]`.
+The body's `user_profile` and `guild_member_profile` are layered (the guild
+value wins when set; an empty guild bio / pronouns falls through). Used:
+`bio`, `pronouns`, `banner`, `accent_color`, `theme_colors[2]`,
+`profile_effect.id`, `badges[]`, `premium_since`, `guild_member`
+(`roles`, `joined_at`), `mutual_guilds[]`, `mutual_friends[]`,
+`mutual_friends_count`. Profiles are cached (48, LRU) and refreshed when
+older than 5 minutes; a failed refresh keeps the old card.
+
+### Profile effects
+
+`GET /user-profile-effects` (once, lazily, when a shown profile has an
+effect) returns the layer configs: `src`, `loop`, `width`, `height`,
+`duration`, `start`, `loopDelay`, `position {x,y}`, `zIndex`,
+`randomizedSources[]`. Layers are drawn over the popout card with the
+timeline in `net::cosmetics::layer_time` (one-shot layers end, looping ones
+repeat after `loopDelay`), scaled so the union of the layer rectangles spans
+the card width. Frames are decoded at a reduced width (256 px) and scaled on
+draw; they are dropped when the popout closes.
+
+### CDN URLs
+
+| Asset | URL |
+|---|---|
+| avatar (still) | `/avatars/{uid}/{hash}.png?size=80` (160 in the popout) |
+| avatar (animated, `a_`) | same with `.gif` |
+| decoration | `/avatar-decoration-presets/{asset}.png?size=96&passthrough=false` (still) / `passthrough=true` (APNG, `a_` assets) |
+| banner | `/banners/{uid}/{hash}.png|gif?size=600`; member banner `/guilds/{gid}/users/{uid}/banners/{hash}` |
+| nameplate | `/assets/collectibles/{asset}static.png` (the animated variant is `asset.webm`: not decoded) |
+| server tag badge | `/guild-tag-badges/{gid}/{badge}.png?size=32` |
+| profile badge | `/badge-icons/{icon}.png` (fetched from the CDN, not bundled; a neutral dot shows until loaded) |
+| activity art | application asset `/app-assets/{app}/{id}.png`, `mp:` -> `media.discordapp.net`, `spotify:` -> `i.scdn.co/image` |
+| animated emoji | `/emojis/{id}.gif?size=96` |
+
+`i.scdn.co` was added to the media host allow-list for Spotify album art;
+downloads never carry the token.
+
+### Animation engine (`app/anim.rs`)
+
+* GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
+  `image` crate; single-frame images are left to the static path.
+* Caps per asset (source frames read, frames kept, bytes kept, width) are
+  per `Class`; extra frames are merged (delay added to the kept frame) so the
+  duration is unchanged. Sources above 2048 px are refused.
+* `AnimCache` is an LRU with a 32 MB budget. Banner and effect frames are
+  dropped when the popout closes.
+* Lists and messages show the still image; hovering a row / message starts
+  the clock for that avatar, decoration and (in messages) animated emoji.
+  The popout animates everything. A `time::every(66 ms)` subscription exists
+  only while `AnimState::active` is true (something animated is hovered or
+  the popout shows one); "Reduce motion" in Settings turns all of it off.
+* Handles are created once when data arrives (`Handle::from_rgba` in the
+  decode task), never in `view`.
+
+### Display name styles
+
+Effects `solid`, `gradient`, `glow` (falls back to gradient), `prism` and
+`gummy` are drawn as a solid colour or a per-character gradient; `neon`,
+`toon` and `pop` (glow, outline, drop shadow) are drawn as the first colour.
+Animation (prism scroll, gummy squash) is not drawn. Fonts other than the
+default gg Sans are not bundled: a bold weight of Inter stands in for them.
+
+### Not verified against a live account
+
+* The response key of `GET /user-profile-effects` (`profile_effect_configs`
+  is what clients use; a bare array and `configs` are accepted too) and the
+  coordinate system of effect layers (the scale-to-card rule is inferred).
+* `passthrough=true` for decoration assets not prefixed `a_` (those are
+  treated as still).
+* Server-specific display name styles and nameplates in member objects.
+
+## 11. Embeds (`app/embeds.rs`, `ui/embeds.rs`)
+
+* **Model.** `Embed` keeps `author.icon_url`/`proxy_icon_url` (the proxy one
+  wins), `footer.icon_url`, `timestamp`, `provider.url`, `video`, `flags`;
+  `EmbedMedia` keeps both `url` and `proxy_url`. Only the proxy URL is
+  downloaded (`EmbedMedia::download_url`), through the same host allowlist as
+  every CDN fetch (`cdn.discordapp.com`, `media.discordapp.net`,
+  `images-ext-*.discordapp.net`, no token). Messages carry `flags`; bit 2 is
+  `SUPPRESS_EMBEDS`. Cached JSON from older versions loads (`#[serde(default)]`).
+* **Layout** is decided by pure functions: `plan` (small 80 px thumbnail on the
+  right, large image / large `article`/`link` thumbnail (>= 300 px wide) /
+  video poster below, 400x300 box, no upscaling, boxes fixed before the
+  download so history does not jump), `field_rows` (3 inline fields per row,
+  2 beside a thumbnail, non-inline on their own row), `group_embeds` +
+  `grid_columns` (embeds sharing a `url` and carrying only an image join the
+  lead; 2/3/4 photos as a grid).
+* **Video cards** show the poster with a play button. `video_action` routes a
+  click: a direct mp4/webm on the media proxy -> `Ui::PlayVideo(url)` (the
+  hook for the inline player; today it asks via the confirm-link dialog and
+  opens the browser), anything else (YouTube, Twitch iframes) -> the page
+  link through `Ui::ConfirmLink`. `gifv` stays a bare still frame;
+  `gifv_source` returns the looping MP4 for the animation engine.
+* **Safety.** Only http(s) reaches `pending_link`/the browser; texts are cut
+  to Discord's own limits (`clip`), at most 10 embeds and 25 fields are drawn.
+* **Live updates.** `MESSAGE_UPDATE` is a `MessagePatch` of `Option`s: an
+  embeds-only update (link unfurl) never touches the content, and `embeds: []`
+  removes them. The same patch is applied to the SQLite cache.
+* **Suppress.** The "X" (author or `MANAGE_MESSAGES`) hides the embeds at once and
+  sends `PATCH /channels/{c}/messages/{m}` with `{"flags": flags | 4}`; a
+  refusal puts them back. Messages with the flag draw no embeds.
+* **Spoilers.** An embed whose URL appears inside `||...||` in the message
+  text shows its media behind a click (`Ui::RevealSpoiler`).
+
+Renderer note: tiny-skia ignores image `crop`, container `clip` and corner
+radii, so an image can never be "covered" into a box. Posters take the aspect
+ratio of their own thumbnail, and grid cells letterbox (`Contain`) on the
+card background.
+
+## 12. Video playback (`media/`, `app/video.rs`, `ui/video.rs`, `bin/ferrocord-player`)
+
+**What plays.** Attachments whose `content_type` is `video/*` or whose name
+ends in `.mp4 .m4v .mov .webm .mkv`, and embeds (`type: video`, a bare video
+link) whose `video.proxy_url` / `video.url` is a file with such an extension
+(`media::clip::Clip`). `gifv` / `image` embeds keep their bare-image rendering,
+and page players (YouTube, ...) stay link cards: their `video.url` is a web
+page, never fetched. The inline box is at most 400x300 px (never enlarged),
+like the official client.
+
+**Embed cards.** `ui::embeds::video_card` routes through `app::embeds::video_action`: a proxied direct file builds a `Clip` (poster = the card's media box, size from `embed.video`) and plays in the inline player inside the card; iframe-only providers (YouTube, Twitch) keep the confirm-link flow to the browser.
+
+**Poster.** Discord's media proxy renders the first frame of a video as an
+image: `{proxy_url}?format=webp&width=W&height=H` (the same URL the official
+client uses). Embeds use their `thumbnail` / `image` when present. The poster
+goes through the normal bounded image cache. While playing, the poster is
+replaced by the live frame.
+
+**Download.** Clicking play downloads the file (`RestClient::download_file`):
+only `cdn.discordapp.com` / `media.discordapp.net` (and the configured CDN
+override) over HTTPS, no token, the final URL after redirects is checked
+again, at most 200 MB, streamed to `<data dir>/videos/ferrocord-video-<pid>-<n>.<ext>`
+(`0600`, `create_new`). The file is deleted when the video closes (`Scratch`
+is dropped), and files older than 6 h left by a crash are swept at start.
+Nothing is downloaded until the user presses play.
+
+**One active video.** `App::video: Option<Playback>`. Starting another video,
+leaving the channel, closing the player or logging out drops it: the helper
+process ends, and the file is deleted. When a video plays to the end the
+helper is released at once (RAM returned); replay starts a new helper on the
+file already on disk.
+
+**Helper process.** `ferrocord-player <file>` (installed next to `ferrocord`)
+demuxes and decodes; the app never links a codec. The container is chosen by
+the file's first bytes, not its name.
+
+| | Container | Video | Audio |
+|---|---|---|---|
+| MP4 / MOV (QuickTime) | `mp4` crate | H.264 Baseline/Main/High incl. B-frames (OpenH264, built from source, static) | AAC-LC (symphonia, pure Rust) |
+| WebM / MKV | `matroska-demuxer` | VP8 (`vp8-decoder`), VP9 profile 0/1 8-bit (`rusty_vp9`), both pure Rust | Opus mono/stereo (libopus, static) |
+
+Anything else (H.265/HEVC, AV1, ProRes, 10-bit VP9, Vorbis-only, ...) ends
+with `Failed { missing: true, text: "<codec>" }` and the player shows "uses
+<codec>, which the built-in player cannot decode" with **Open externally**
+(the only way an external player starts). A video track with unsupported audio
+plays silently. Sound goes out through `cpal`; the audio the device consumed
+drives the clock (picture follows sound), the wall clock takes over without a
+device or when the device stalls. Rotation (`tkhd` matrix) is applied.
+Pictures are scaled to at most 960x540 in the helper (nearest), so a 4K video
+costs the same pipe and RAM as 540p. Frames are sent at most every 30 ms.
+Picture sizes above 8192 per side are refused.
+
+**Wire format** (`media/video_proto.rs`). Helper to app: tag byte + little
+endian fields: `R` ready (w, h, duration ms, 0 = unknown), `F` frame (w, h,
+RGBA), `T` time (position, duration, state), `E` failed (kind, length, UTF-8,
+at most 2 KiB). The reader rejects unknown tags, frame sizes above 4096 per
+side / 32 MB and oversized text before allocating. App to helper: lines
+`play`, `pause`, `seek <ms>`, `volume <0-100>`, `mute <0|1>`, `quit`;
+anything else is ignored. stdin closing (the app died) ends the helper. A
+helper that exits without a message is reported with the dynamic loader's
+last stderr line (missing library) or "the helper exited".
+
+**Frames.** Each `Frame` becomes an `image::Handle` in `App::update` (new id
+per frame, created once, never in `view`). The event stream keeps only the
+newest frame when the UI falls behind.
+
+**Controls.** Play/pause (click on the picture too), time, seek bar (drag
+holds the thumb, the seek is sent on release), mute, volume, full screen. Full
+screen is a layer in the window stack that also switches the window to
+fullscreen (not in mock mode); Esc or the minimise button leaves it and the
+video keeps playing inline. Controls are always laid out: nothing changes
+size on hover.
+
+**Mock mode.** `--mock` plays a scripted test pattern (`media::video::spawn_mock`)
+instead of downloading: no network, no disk, no helper. Screenshots:
+`--screenshot video` and `--screenshot video-fullscreen`.
+
+## 13. Voice and calls
+
+Design, DAVE and the video feasibility pass: `docs/voice.md`.
+
+| Step | Wire |
+|---|---|
+| Join / move / leave | Gateway op 4 `{guild_id\|null, channel_id\|null, self_mute, self_deaf, self_video: false}` (`GatewayHandle::set_voice`; re-sent after a new session) |
+| Session | `VOICE_STATE_UPDATE` (ours: `session_id`) + `VOICE_SERVER_UPDATE` `{token, guild_id \| channel_id, endpoint}` |
+| Voice gateway | `wss://{endpoint}/?v=8`: op 0 IDENTIFY (`max_dave_protocol_version: 1`), 8 HELLO, 2 READY, 1 SELECT PROTOCOL, 4 SESSION DESCRIPTION, 3/6 heartbeat `{t, seq_ack}`, 5 SPEAKING, 7/9 RESUME, 11/13 clients connect/disconnect, 21-31 DAVE (binary frames `seq u16, op u8, payload`) |
+| UDP | IP discovery (type 1/2, length 70, SSRC, 64-byte address, port); RTP PT 120 Opus 48 kHz stereo; `aead_aes256_gcm_rtpsize` preferred, `aead_xchacha20_poly1305_rtpsize` otherwise; 32-bit nonce counter appended; header (+CSRCs, extension preamble) is the AAD |
+| Close codes | 4014 / 4022 / 4021 / 4004 / 4011 / 4016 / 4017 end the call; 4006 / 4009 rejoin through op 4; others resume (5 tries) |
+| Calls | `CALL_CREATE` / `CALL_UPDATE` `{channel_id, message_id, ringing, voice_states}`, `CALL_DELETE`; `POST /channels/{id}/call/ring {recipients: null}` when starting a call; `POST /channels/{id}/call/stop-ringing {recipients: [me]}` to decline |
+| History | Message type 3 with `call {participants, ended_timestamp}` |
+| READY | `guilds[].voice_states` (and `GUILD_CREATE`) fill the users under voice channels |
+
+Voice settings (devices, sensitivity, per-user volume, self mute/deafen)
+are stored in SQLite `meta("pref.voice")` as JSON and kept on logout.

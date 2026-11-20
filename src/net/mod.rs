@@ -1,6 +1,7 @@
 //! Discord protocol client: Gateway (WebSocket), REST API, remote-auth (QR
 //! login). Owns sockets; never touches UI types.
 
+pub mod cosmetics;
 pub mod extras;
 pub mod gateway;
 pub mod model;
@@ -8,6 +9,7 @@ pub mod ratelimit;
 pub mod remote_auth;
 pub mod rest;
 pub mod types;
+pub mod voice;
 pub mod zlib;
 
 use model::*;
@@ -58,6 +60,8 @@ pub enum Event {
         channels: Vec<Channel>,
         /// GUILD_UPDATE carries no channels; keep the known ones.
         partial: bool,
+        /// Users in this server's voice channels (GUILD_CREATE).
+        voice_states: Vec<VoiceState>,
     },
     GuildDelete(GuildId),
     Reaction(ReactionEvent),
@@ -65,6 +69,7 @@ pub enum Event {
     PresenceUpdate {
         user_id: UserId,
         status: Presence,
+        activities: Vec<Activity>,
     },
     MemberList(Box<MemberListUpdate>),
     /// USER_SETTINGS_UPDATE carrying `guild_folders` (another session or
@@ -85,6 +90,13 @@ pub enum Event {
         guild_id: GuildId,
         stickers: Vec<Sticker>,
     },
+    /// VOICE_STATE_UPDATE (anyone, including ourselves).
+    VoiceState(Box<VoiceState>),
+    /// VOICE_SERVER_UPDATE for our own voice session.
+    VoiceServer(Box<VoiceServer>),
+    /// CALL_CREATE / CALL_UPDATE.
+    Call(Box<CallState>),
+    CallDelete(ChannelId),
     /// The token was rejected (close code 4004). The session must be cleared.
     AuthFailed,
     /// Unrecoverable gateway error (bad intents, invalid API version, ...).

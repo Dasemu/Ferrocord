@@ -8,6 +8,10 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use super::cosmetics::{
+    Activity, AvatarDecoration, Collectibles, NameStyle, Nameplate, PrimaryGuild,
+};
+
 /// Discord epoch (2015-01-01T00:00:00Z) in Unix milliseconds.
 pub const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 
@@ -81,7 +85,7 @@ pub type ChannelId = Snowflake;
 pub type MessageId = Snowflake;
 pub type RoleId = Snowflake;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct User {
     pub id: UserId,
     pub username: String,
@@ -91,6 +95,30 @@ pub struct User {
     pub avatar: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    /// Frame drawn around the avatar (`avatar_decoration_data`).
+    #[serde(
+        default,
+        rename = "avatar_decoration_data",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub avatar_decoration: Option<Box<AvatarDecoration>>,
+    /// Equipped collectibles (nameplate).
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub collectibles: Option<Box<Collectibles>>,
+    /// Server tag.
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub primary_guild: Option<Box<PrimaryGuild>>,
+    /// Display name font / effect / colours.
+    #[serde(
+        default,
+        rename = "display_name_styles",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub name_style: Option<Box<NameStyle>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub accent_color: Option<u32>,
 }
 
 impl fmt::Debug for User {
@@ -506,12 +534,46 @@ pub struct EmbedField {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbedMedia {
+    /// The original URL (never fetched).
     pub url: String,
+    /// Discord's media proxy URL (`media.discordapp.net`, `images-ext-*`):
+    /// the only one that is downloaded.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
 
+impl EmbedMedia {
+    /// What to download: the proxy URL, else the plain one (which the host
+    /// allowlist then accepts only when it is Discord's own CDN).
+    pub fn download_url(&self) -> &str {
+        self.proxy_url.as_deref().unwrap_or(&self.url)
+    }
+}
+
+/// `embed.video`: a direct file on the proxy (mp4/webm) or an iframe-only
+/// player page (YouTube, Twitch).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EmbedVideo {
+    pub url: String,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl EmbedVideo {
+    pub fn download_url(&self) -> &str {
+        self.proxy_url.as_deref().unwrap_or(&self.url)
+    }
+}
+
+/// `MESSAGE_FLAGS`: the embeds of the message are hidden.
+pub const FLAG_SUPPRESS_EMBEDS: u64 = 1 << 2;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Embed {
     pub kind: Option<String>,
     pub title: Option<String>,
@@ -520,11 +582,21 @@ pub struct Embed {
     pub color: Option<u32>,
     pub author_name: Option<String>,
     pub author_url: Option<String>,
+    /// Author icon: the proxy URL when there is one.
+    pub author_icon: Option<String>,
     pub provider_name: Option<String>,
+    pub provider_url: Option<String>,
     pub footer: Option<String>,
+    /// Footer icon: the proxy URL when there is one.
+    pub footer_icon: Option<String>,
+    /// `embed.timestamp`, Unix milliseconds.
+    pub timestamp_ms: Option<u64>,
     pub fields: Vec<EmbedField>,
     pub image: Option<EmbedMedia>,
     pub thumbnail: Option<EmbedMedia>,
+    pub video: Option<EmbedVideo>,
+    /// `embed.flags` (unused here, kept for round trips).
+    pub flags: u64,
 }
 
 impl Embed {
@@ -550,6 +622,78 @@ pub struct Gif {
     pub height: u32,
 }
 
+/// Call service message data (message type 3).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallMessage {
+    pub participants: Vec<UserId>,
+    /// When the call ended (Unix ms); `None` while it is ongoing.
+    pub ended_ms: Option<u64>,
+}
+
+/// A user's voice connection (guild voice channel or DM call).
+#[derive(Clone, PartialEq, Default)]
+pub struct VoiceState {
+    pub guild_id: Option<GuildId>,
+    /// `None` = the user left voice.
+    pub channel_id: Option<ChannelId>,
+    pub user_id: UserId,
+    pub session_id: String,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    /// Server mute / deafen.
+    pub mute: bool,
+    pub deaf: bool,
+    pub self_video: bool,
+    pub self_stream: bool,
+    pub suppress: bool,
+    /// From `member.user`, when the server sent it.
+    pub user: Option<User>,
+}
+
+impl fmt::Debug for VoiceState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceState")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("user_id", &self.user_id)
+            .field("self_mute", &self.self_mute)
+            .field("self_deaf", &self.self_deaf)
+            .finish_non_exhaustive()
+    }
+}
+
+/// VOICE_SERVER_UPDATE: where to connect for our voice session.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VoiceServer {
+    pub guild_id: Option<GuildId>,
+    /// Set for DM / group calls.
+    pub channel_id: Option<ChannelId>,
+    /// `None` while the server is being reallocated.
+    pub endpoint: Option<String>,
+    pub token: String,
+}
+
+impl fmt::Debug for VoiceServer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceServer")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("has_endpoint", &self.endpoint.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// CALL_CREATE / CALL_UPDATE: a DM or group call.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CallState {
+    pub channel_id: ChannelId,
+    pub message_id: Option<MessageId>,
+    /// Users being rung right now.
+    pub ringing: Vec<UserId>,
+    pub voice_states: Vec<VoiceState>,
+    pub unavailable: bool,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -560,6 +704,9 @@ pub struct Message {
     pub edited: bool,
     pub attachments: Vec<Attachment>,
     pub embeds: Vec<Embed>,
+    /// `MESSAGE_FLAGS` bit field (SUPPRESS_EMBEDS is bit 2).
+    #[serde(default)]
+    pub flags: u64,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
     pub mentions: Vec<UserId>,
@@ -582,6 +729,9 @@ pub struct Message {
     /// Local-only: sending failed.
     #[serde(default)]
     pub failed: bool,
+    /// Call service message (type 3).
+    #[serde(default)]
+    pub call: Option<CallMessage>,
 }
 
 impl fmt::Debug for Message {
@@ -612,6 +762,11 @@ impl Message {
                 .any(|e| e.kind.as_deref() == Some("gifv") && e.url.as_deref() == Some(c))
     }
 
+    /// The message's embeds are hidden (its author or a moderator chose so).
+    pub fn embeds_suppressed(&self) -> bool {
+        self.flags & FLAG_SUPPRESS_EMBEDS != 0
+    }
+
     /// Applies a MESSAGE_UPDATE patch (only the fields that were sent).
     pub fn apply_patch(&mut self, p: &MessagePatch) {
         if let Some(c) = &p.content {
@@ -622,6 +777,9 @@ impl Message {
         }
         if let Some(a) = &p.attachments {
             self.attachments = a.clone();
+        }
+        if let Some(f) = p.flags {
+            self.flags = f;
         }
         self.edited |= p.edited;
     }
@@ -635,6 +793,7 @@ pub struct MessagePatch {
     pub content: Option<String>,
     pub embeds: Option<Vec<Embed>>,
     pub attachments: Option<Vec<Attachment>>,
+    pub flags: Option<u64>,
     pub edited: bool,
 }
 
@@ -689,6 +848,8 @@ pub struct ReadyData {
     pub suppress_roles: Vec<GuildId>,
     /// Status of friends from READY `presences`.
     pub presences: Vec<(UserId, Presence)>,
+    /// Activities (rich presence, custom status) of those friends.
+    pub activities: Vec<(UserId, Vec<Activity>)>,
     /// The user's own status (`user_settings.status`).
     pub my_status: Option<Presence>,
     /// Nitro type of the current user (0 none, 1 classic, 2 nitro, 3 basic).
@@ -698,6 +859,8 @@ pub struct ReadyData {
     pub guild_folders: Vec<GuildFolder>,
     /// Per-channel notification overrides (level and timed mutes).
     pub channel_notify: Vec<(ChannelId, super::extras::ChannelNotify)>,
+    /// Users in guild voice channels.
+    pub voice_states: Vec<VoiceState>,
 }
 
 /// A member shown in the member list.
@@ -707,6 +870,7 @@ pub struct MemberEntry {
     pub nick: Option<String>,
     pub roles: Vec<RoleId>,
     pub presence: Presence,
+    pub activities: Vec<Activity>,
 }
 
 impl std::fmt::Debug for MemberEntry {
@@ -814,6 +978,7 @@ mod tests {
             url: Some(url.into()),
             provider_name: Some("Tenor".into()),
             thumbnail: Some(EmbedMedia {
+                proxy_url: None,
                 url: "https://media.example/thumb.png".into(),
                 width: Some(220),
                 height: Some(165),
@@ -924,11 +1089,13 @@ mod tests {
                 global_name: None,
                 avatar: None,
                 bot: false,
+                ..Default::default()
             },
             content: "very private words".into(),
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            flags: 0,
             stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],
@@ -941,6 +1108,7 @@ mod tests {
             kind: 0,
             pending: false,
             failed: false,
+            call: None,
         };
         let d = format!("{m:?}");
         assert!(!d.contains("private"));

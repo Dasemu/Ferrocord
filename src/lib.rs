@@ -9,6 +9,7 @@ pub mod app;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod media;
 pub mod mock;
 pub mod net;
 pub mod store;
