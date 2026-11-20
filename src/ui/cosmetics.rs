@@ -192,12 +192,7 @@ pub fn avatar_decorated<'a>(app: &'a App, user: &User, size: f32, phase: Phase) 
 pub fn name<'a>(app: &App, user: &User, name: &str, size: f32, font: Font, base: Color) -> El<'a> {
     let _ = app;
     let plain = |color: Color, font: Font| -> El<'a> {
-        text(name.to_owned())
-            .size(size)
-            .font(font)
-            .color(color)
-            .wrapping(text::Wrapping::None)
-            .into()
+        super::emoji_font::emoji_text(name, size, color, font, false)
     };
     let Some(style) = user.name_style.as_ref() else {
         return plain(base, font);

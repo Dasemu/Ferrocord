@@ -222,21 +222,27 @@ fn push_text<'a>(
     ctx: &Ctx<'a>,
 ) {
     let p = ctx.app.theme.palette;
-    let mut sp = span(s)
-        .font(font_for(st))
-        .size(st.size)
-        .color(st.color)
-        .underline(st.underline)
-        .strikethrough(st.strike);
-    if st.spoiler_hidden {
-        sp = sp
-            .color(p.spoiler)
-            .background(p.spoiler)
-            .link(Ui::RevealSpoiler(ctx.msg));
-    } else if let Some(l) = link {
-        sp = sp.link(l);
+    // Unicode emoji get their own spans with the colour emoji family.
+    for (is_emoji, run) in super::emoji_font::emoji_runs(&s) {
+        let mut sp = span(run)
+            .font(font_for(st))
+            .size(st.size)
+            .color(st.color)
+            .underline(st.underline)
+            .strikethrough(st.strike);
+        if is_emoji {
+            sp = sp.font(super::emoji_font::EMOJI_FONT);
+        }
+        if st.spoiler_hidden {
+            sp = sp
+                .color(p.spoiler)
+                .background(p.spoiler)
+                .link(Ui::RevealSpoiler(ctx.msg));
+        } else if let Some(l) = link.clone() {
+            sp = sp.link(l);
+        }
+        spans.push(sp);
     }
-    spans.push(sp);
 }
 
 fn inline<'a>(

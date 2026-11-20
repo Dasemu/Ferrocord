@@ -49,6 +49,8 @@ pub enum ScreenshotScreen {
     Profile,
     /// The 1:1 DM profile panel.
     ProfileDm,
+    /// Multi-line composer and multi-line / emoji messages in a DM.
+    Multiline,
 }
 
 impl ScreenshotScreen {
@@ -94,6 +96,7 @@ impl ScreenshotScreen {
             "search-filters" => Some(Self::SearchFilters),
             "profile" | "popout" => Some(Self::Profile),
             "profile-dm" => Some(Self::ProfileDm),
+            "multiline" | "emoji" => Some(Self::Multiline),
             _ => None,
         }
     }

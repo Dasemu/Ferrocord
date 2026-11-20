@@ -4,6 +4,7 @@
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Length, Padding};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence, avatar_with_status, initials_circle, mention_badge, ui};
@@ -47,11 +48,7 @@ fn guild_header(app: &App, g: GuildId) -> El<'_> {
         .map(|g| g.name.clone())
         .unwrap_or_default();
     row![
-        text(name)
-            .size(16)
-            .font(INTER_SEMIBOLD)
-            .color(p.header_text)
-            .width(Length::Fill),
+        container(emoji_text(name, 16.0, p.header_text, INTER_SEMIBOLD, false)).width(Length::Fill),
         icon(Icon::ChevronDown, 18.0, p.text_normal),
     ]
     .padding(Padding::from([0, 16]))
@@ -120,12 +117,14 @@ fn channel_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
                 p.channel_icon
             }
         ),
-        text(c.name.clone().unwrap_or_default())
-            .size(16)
-            .font(font)
-            .color(color)
-            .width(Length::Fill)
-            .wrapping(text::Wrapping::None),
+        container(emoji_text(
+            c.name.clone().unwrap_or_default(),
+            16.0,
+            color,
+            font,
+            false
+        ))
+        .width(Length::Fill),
     ]
     .spacing(6)
     .align_y(Alignment::Center);

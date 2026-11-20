@@ -455,6 +455,33 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                 &[],
                 "also ||I already bought the ferris plushie||",
             ),
+            gm(
+                DM_ALICE,
+                20,
+                0,
+                1,
+                &[],
+                "notes for tomorrow:\n- ship the **composer**\n- fix Discover\n\nShift+Enter makes a new line",
+            ),
+            {
+                let mut m = gm(
+                    DM_ALICE,
+                    19,
+                    0,
+                    2,
+                    &[],
+                    "🎉 great! 👍🏽 ❤️ 🇪🇸 1️⃣ 👨‍👩‍👧 🦀 café ☕",
+                );
+                m.reactions = [("🎉", 2, true), ("👍", 1, false), ("❤️", 3, false)]
+                    .into_iter()
+                    .map(|(e, count, me)| Reaction {
+                        emoji: Emoji::unicode(e),
+                        count,
+                        me,
+                    })
+                    .collect();
+                m
+            },
         ],
         DM_GROUP => vec![
             gm(DM_GROUP, 90, 0, 4, &[], "Board games on Saturday?"),

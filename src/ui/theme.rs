@@ -5,7 +5,7 @@
 //! (measured from public screenshots); see `docs/protocol.md` §UI reference.
 
 use iced::gradient::Linear;
-use iced::widget::{button, container, scrollable, text_input, toggler};
+use iced::widget::{button, container, scrollable, text_editor, text_input, toggler};
 use iced::{Background, Border, Color, Font, Gradient, Radians, Shadow, Theme, font};
 
 use crate::config::ThemeChoice;
@@ -254,6 +254,10 @@ pub const INTER_ITALIC: Font = Font {
     ..INTER
 };
 pub const MONO: Font = Font::MONOSPACE;
+
+/// Noto Color Emoji (SIL OFL 1.1), loaded only when the system has no copy
+/// of the family (`emoji_font::needs_bundled_emoji_font`).
+pub const NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../assets/fonts/NotoColorEmoji.ttf");
 
 /// Embedded font files (SIL OFL 1.1).
 pub const FONT_FILES: [&[u8]; 4] = [
@@ -584,6 +588,21 @@ pub fn input(p: Palette, bg: Color) -> impl Fn(&Theme, text_input::Status) -> te
             color: Color::TRANSPARENT,
         },
         icon: p.text_muted,
+        placeholder: p.text_muted,
+        value: p.text_normal,
+        selection: Color { a: 0.4, ..p.accent },
+    }
+}
+
+/// Multi-line editor with the same look as [`input`].
+pub fn editor(p: Palette, bg: Color) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
+    move |_, _| text_editor::Style {
+        background: Background::Color(bg),
+        border: Border {
+            radius: Metrics::DEFAULT.radius.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
         placeholder: p.text_muted,
         value: p.text_normal,
         selection: Color { a: 0.4, ..p.accent },

@@ -12,7 +12,6 @@ pub enum Icon {
     Bell,
     ChevronDown,
     ChevronRight,
-    CircleHelp,
     CirclePlus,
     Compass,
     Download,
@@ -61,7 +60,7 @@ pub enum Icon {
     PinOff,
 }
 
-const ALL: [(Icon, &[u8]); 51] = [
+const ALL: [(Icon, &[u8]); 50] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -74,10 +73,6 @@ const ALL: [(Icon, &[u8]); 51] = [
     (
         Icon::ChevronRight,
         include_bytes!("../../assets/icons/chevron-right.svg"),
-    ),
-    (
-        Icon::CircleHelp,
-        include_bytes!("../../assets/icons/circle-help.svg"),
     ),
     (
         Icon::CirclePlus,

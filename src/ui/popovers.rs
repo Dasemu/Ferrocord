@@ -4,8 +4,9 @@
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Length, Padding, Point, Size};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
-use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, format_timestamp, ui};
 use crate::app::panels::Popover;
 use crate::app::{App, Ui, View, input, now_ms};
@@ -229,10 +230,13 @@ fn message_card<'a>(app: &'a App, m: &'a Msg, place: String, actions: Vec<El<'a>
         snippet
     };
     let head = row![
-        text(m.author.display_name().to_owned())
-            .size(15)
-            .font(INTER_MEDIUM)
-            .color(p.header_text),
+        emoji_text(
+            m.author.display_name(),
+            15.0,
+            p.header_text,
+            INTER_MEDIUM,
+            false
+        ),
         text(format_timestamp(m.timestamp_ms(), now))
             .size(12)
             .color(p.text_muted),
@@ -249,7 +253,7 @@ fn message_card<'a>(app: &'a App, m: &'a Msg, place: String, actions: Vec<El<'a>
         container(
             row![
                 avatar(app, &m.author, 32.0),
-                column![head, text(snippet).size(14).color(p.text_normal)]
+                column![head, emoji_text(snippet, 14.0, p.text_normal, INTER, true)]
                     .spacing(2)
                     .width(Length::Fill),
             ]

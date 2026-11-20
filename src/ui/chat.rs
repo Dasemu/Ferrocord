@@ -3,10 +3,11 @@
 
 use iced::widget::{
     Space, button, column, container, hover, mouse_area, progress_bar, rich_text, row, rule,
-    scrollable, span, text, text_input, tooltip,
+    scrollable, span, text, text_editor, text_input, tooltip,
 };
 use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{
@@ -14,6 +15,7 @@ use super::{
     markdown, same_day, ui,
 };
 use crate::app::actions::{composer_id, edit_id, search_id};
+use crate::app::composer;
 use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
@@ -76,11 +78,13 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     };
     let mut r = row![
         icon(lead, 24.0, p.channel_icon),
-        text(channel_title(app, c))
-            .size(16)
-            .font(INTER_SEMIBOLD)
-            .color(p.header_text)
-            .wrapping(text::Wrapping::None),
+        emoji_text(
+            channel_title(app, c),
+            16.0,
+            p.header_text,
+            INTER_SEMIBOLD,
+            false
+        ),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -204,7 +208,6 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             Ui::TogglePopover(Popover::Inbox),
             open == Some(Popover::Inbox),
         ),
-        tool(Icon::CircleHelp, "Help", Ui::OpenHelp, false),
     ]
     .spacing(16)
     .align_y(Alignment::Center);
@@ -561,13 +564,13 @@ fn reply_header<'a>(
                 )
                 .map(theme::from_int)
                 .unwrap_or(p.text_secondary);
-            inner = inner.push(avatar(app, a, 16.0)).push(
-                text(format!("@{}", a.display_name()))
-                    .size(14)
-                    .font(INTER_MEDIUM)
-                    .color(color)
-                    .wrapping(text::Wrapping::None),
-            );
+            inner = inner.push(avatar(app, a, 16.0)).push(emoji_text(
+                format!("@{}", a.display_name()),
+                14.0,
+                color,
+                INTER_MEDIUM,
+                false,
+            ));
         }
         let snippet = pv.content.replace('\n', " ");
         let snippet = if snippet.is_empty() && pv.has_attachment {
@@ -613,7 +616,7 @@ fn reactions_row<'a>(app: &'a App, c: &'a Channel, m: &'a model::Message) -> El<
                     .color(p.text_muted)
                     .into(),
             },
-            None => text(re.emoji.name.clone()).size(16).into(),
+            None => emoji_text(re.emoji.name.clone(), 16.0, p.text_normal, INTER, false),
         };
         let pill = button(
             row![
@@ -679,17 +682,42 @@ fn action_bar<'a>(app: &'a App, c: &'a Channel, m: &'a model::Message) -> El<'a>
         .into()
 }
 
+/// Maps a composer binding to the app message.
+fn bind(b: text_editor::Binding<Ui>) -> text_editor::Binding<Message> {
+    use text_editor::Binding as B;
+    match b {
+        B::Custom(u) => B::Custom(Message::Ui(u)),
+        B::Sequence(v) => B::Sequence(v.into_iter().map(bind).collect()),
+        B::Unfocus => B::Unfocus,
+        B::Copy => B::Copy,
+        B::Cut => B::Cut,
+        B::Paste => B::Paste,
+        B::Move(m) => B::Move(m),
+        B::Select(m) => B::Select(m),
+        B::SelectWord => B::SelectWord,
+        B::SelectLine => B::SelectLine,
+        B::SelectAll => B::SelectAll,
+        B::Insert(c) => B::Insert(c),
+        B::Enter => B::Enter,
+        B::Backspace => B::Backspace,
+        B::Delete => B::Delete,
+    }
+}
+
 /// Inline editor shown in place of the message text.
 fn edit_box<'a>(app: &'a App, e: &'a crate::app::actions::Editing) -> El<'a> {
     let p = app.theme.palette;
-    let input = text_input("Edit message", &e.text)
+    let input = text_editor(e.text.content())
         .id(edit_id())
-        .on_input(|s| Message::Ui(Ui::EditChanged(s)))
-        .on_submit(Message::Ui(Ui::SubmitEdit))
+        .on_action(|a| Message::Ui(Ui::EditAction(a)))
+        .key_binding(|kp| composer::key_binding(kp, false, Ui::SubmitEdit, None).map(bind))
         .size(16)
         .font(INTER)
         .padding(Padding::from([10, 12]))
-        .style(theme::input(p, p.composer_bg));
+        .max_height(
+            (crate::app::input::window_size().height * composer::MAX_HEIGHT_FRACTION).max(120.0),
+        )
+        .style(theme::editor(p, p.composer_bg));
     let link = |label: &'static str, msg: Ui| -> El<'a> {
         button(text(label).size(12).color(p.link))
             .padding(0)
@@ -1008,28 +1036,39 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             None => icon(i, 24.0, p.text_secondary),
         }
     };
-    let input = text_input(&placeholder, &app.composer)
+    // Enter sends, Shift+Enter breaks the line; the box grows with its text
+    // up to half of the window and then scrolls.
+    let empty = app.composer.is_empty();
+    let max_h = crate::app::input::window_size().height * composer::MAX_HEIGHT_FRACTION;
+    let input = text_editor(app.composer.content())
         .id(composer_id())
-        .on_input(|s| Message::Ui(Ui::ComposerChanged(s)))
-        .on_submit(Message::Ui(Ui::Send))
+        .placeholder(placeholder)
+        .on_action(|a| Message::Ui(Ui::ComposerAction(a)))
+        .key_binding(move |kp| {
+            composer::key_binding(kp, empty, Ui::Send, Some(Ui::EditLast)).map(bind)
+        })
         .size(16)
         .font(INTER)
         .padding(Padding::from([11, 0]))
-        .style(theme::input(p, p.composer_bg));
+        .min_height(46)
+        .max_height(max_h.max(120.0))
+        .style(theme::editor(p, p.composer_bg));
+    // Tools stay level with the last line of a tall box.
+    let tools_end = |e: El<'a>| -> El<'a> { container(e).padding(Padding::ZERO.bottom(11)).into() };
     let bar = container(
         row![
-            tool(Icon::CirclePlus, Some(Ui::PickFiles)),
+            tools_end(tool(Icon::CirclePlus, Some(Ui::PickFiles))),
             input,
-            tool(Icon::Gift, None),
-            tool(Icon::Gif, Some(Ui::OpenGifPicker)),
-            tool(Icon::Sticker, Some(Ui::OpenStickerPicker)),
-            tool(
+            tools_end(tool(Icon::Gift, None)),
+            tools_end(tool(Icon::Gif, Some(Ui::OpenGifPicker))),
+            tools_end(tool(Icon::Sticker, Some(Ui::OpenStickerPicker))),
+            tools_end(tool(
                 Icon::Smile,
                 Some(Ui::OpenEmojiPicker(PickerTarget::Composer))
-            )
+            ))
         ]
         .spacing(16)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::End),
     )
     .padding(Padding::from([0, 16]))
     .style(theme::rounded_bg(p.composer_bg, 8.0));
@@ -1055,11 +1094,14 @@ fn reply_bar<'a>(app: &'a App, c: &Channel) -> Option<El<'a>> {
     let mine = Some(r.author.id) == app.chat.me_id();
     let mut row_ = row![
         text("Replying to ").size(14).color(p.text_secondary),
-        text(r.author.display_name().to_owned())
-            .size(14)
-            .font(INTER_SEMIBOLD)
-            .color(p.text_primary)
-            .width(Length::Fill),
+        container(emoji_text(
+            r.author.display_name(),
+            14.0,
+            p.text_primary,
+            INTER_SEMIBOLD,
+            false
+        ))
+        .width(Length::Fill),
     ]
     .align_y(Alignment::Center)
     .spacing(0);
