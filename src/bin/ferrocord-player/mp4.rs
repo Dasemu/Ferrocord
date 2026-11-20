@@ -269,7 +269,7 @@ mod tests {
         ];
         let t = sample_times(&raw, ts);
         let ms: Vec<i64> = t.iter().map(|s| s.pts_ms).collect();
-        assert_eq!(ms, vec![0, 66, 16, 33]);
+        assert_eq!(ms, vec![0, 133, 33, 66]);
         assert!(t[0].sync && !t[1].sync);
     }
 

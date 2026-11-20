@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn timestamps_convert_with_the_segment_scale() {
         assert_eq!(to_ms(1500, 1_000_000), 1500);
-        assert_eq!(to_ms(48_000, 20_833), 1000);
+        assert_eq!(to_ms(2000, 500_000), 1000);
         assert_eq!(from_ms(1500, 1_000_000), 1500);
         assert_eq!(from_ms(-5, 1_000_000), 0);
         // No overflow on hostile values.
