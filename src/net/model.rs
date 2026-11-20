@@ -8,6 +8,10 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use super::cosmetics::{
+    Activity, AvatarDecoration, Collectibles, NameStyle, Nameplate, PrimaryGuild,
+};
+
 /// Discord epoch (2015-01-01T00:00:00Z) in Unix milliseconds.
 pub const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 
@@ -81,7 +85,7 @@ pub type ChannelId = Snowflake;
 pub type MessageId = Snowflake;
 pub type RoleId = Snowflake;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct User {
     pub id: UserId,
     pub username: String,
@@ -91,6 +95,30 @@ pub struct User {
     pub avatar: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    /// Frame drawn around the avatar (`avatar_decoration_data`).
+    #[serde(
+        default,
+        rename = "avatar_decoration_data",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub avatar_decoration: Option<Box<AvatarDecoration>>,
+    /// Equipped collectibles (nameplate).
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub collectibles: Option<Box<Collectibles>>,
+    /// Server tag.
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub primary_guild: Option<Box<PrimaryGuild>>,
+    /// Display name font / effect / colours.
+    #[serde(
+        default,
+        rename = "display_name_styles",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub name_style: Option<Box<NameStyle>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub accent_color: Option<u32>,
 }
 
 impl fmt::Debug for User {
@@ -689,6 +717,8 @@ pub struct ReadyData {
     pub suppress_roles: Vec<GuildId>,
     /// Status of friends from READY `presences`.
     pub presences: Vec<(UserId, Presence)>,
+    /// Activities (rich presence, custom status) of those friends.
+    pub activities: Vec<(UserId, Vec<Activity>)>,
     /// The user's own status (`user_settings.status`).
     pub my_status: Option<Presence>,
     /// Nitro type of the current user (0 none, 1 classic, 2 nitro, 3 basic).
@@ -707,6 +737,7 @@ pub struct MemberEntry {
     pub nick: Option<String>,
     pub roles: Vec<RoleId>,
     pub presence: Presence,
+    pub activities: Vec<Activity>,
 }
 
 impl std::fmt::Debug for MemberEntry {
@@ -924,6 +955,7 @@ mod tests {
                 global_name: None,
                 avatar: None,
                 bot: false,
+                ..Default::default()
             },
             content: "very private words".into(),
             edited: false,

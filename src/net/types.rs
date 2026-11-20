@@ -148,7 +148,7 @@ pub fn member_subscribe_payload(
             "guild_id": guild.to_string(),
             "typing": true,
             "threads": true,
-            "activities": false,
+            "activities": true,
             "members": [],
             "channels": { channel.to_string(): ranges },
         }),
@@ -187,6 +187,26 @@ pub struct WireUser {
     /// Only present on the current user (READY).
     #[serde(default)]
     pub premium_type: u8,
+    #[serde(
+        default,
+        rename = "avatar_decoration_data",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub avatar_decoration: Option<Box<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub collectibles: Option<Box<Collectibles>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub primary_guild: Option<Box<PrimaryGuild>>,
+    #[serde(
+        default,
+        rename = "display_name_styles",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub name_style: Option<Box<NameStyle>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub accent_color: Option<u32>,
 }
 
 impl From<WireUser> for User {
@@ -197,6 +217,12 @@ impl From<WireUser> for User {
             global_name: w.global_name,
             avatar: w.avatar,
             bot: w.bot,
+            avatar_decoration: w.avatar_decoration,
+            collectibles: w.collectibles,
+            primary_guild: w.primary_guild,
+            name_style: w.name_style,
+            banner: w.banner,
+            accent_color: w.accent_color,
         }
     }
 }
@@ -648,6 +674,7 @@ impl WireMessage {
                 global_name: None,
                 avatar: None,
                 bot: false,
+                ..Default::default()
             }),
             content: self.content.unwrap_or_default(),
             edited: self.edited_timestamp.is_some(),
@@ -828,6 +855,8 @@ pub struct WirePresence {
     pub user_id: Option<Snowflake>,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub activities: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -889,6 +918,14 @@ impl WireReady {
             .presences
             .iter()
             .filter_map(|p| Some((p.user_id()?, Presence::from_wire(&p.status))))
+            .collect();
+        let activities: Vec<(UserId, Vec<Activity>)> = self
+            .presences
+            .iter()
+            .filter_map(|p| {
+                let a = super::cosmetics::parse_activities(&p.activities);
+                (!a.is_empty()).then(|| Some((p.user_id()?, a))).flatten()
+            })
             .collect();
         let my_status = self
             .user_settings
@@ -1004,6 +1041,7 @@ impl WireReady {
             suppress_everyone,
             suppress_roles,
             presences,
+            activities,
             my_status,
             premium_type,
             guild_folders,
@@ -1081,6 +1119,8 @@ pub struct WirePresenceUpdate {
     pub user: Option<WireIdOnlyOpt>,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub activities: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1115,6 +1155,9 @@ pub struct WireListMember {
     pub roles: Vec<Snowflake>,
     #[serde(default)]
     pub presence: Option<WirePresenceUpdate>,
+    /// The member's server-specific decoration (overrides the user's).
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub avatar_decoration_data: Option<Box<AvatarDecoration>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1135,7 +1178,15 @@ impl WireListItem {
             });
         }
         let m = self.member?;
-        let user: User = m.user?.into();
+        let mut user: User = m.user?.into();
+        if m.avatar_decoration_data.is_some() {
+            user.avatar_decoration = m.avatar_decoration_data;
+        }
+        let activities = m
+            .presence
+            .as_ref()
+            .map(|p| super::cosmetics::parse_activities(&p.activities))
+            .unwrap_or_default();
         Some(MemberItem::Member(Box::new(MemberEntry {
             user,
             nick: m.nick,
@@ -1144,6 +1195,7 @@ impl WireListItem {
                 .presence
                 .map(|p| Presence::from_wire(&p.status))
                 .unwrap_or(Presence::Offline),
+            activities,
         })))
     }
 }
@@ -1389,6 +1441,7 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             Event::PresenceUpdate {
                 user_id,
                 status: Presence::from_wire(&p.status),
+                activities: super::cosmetics::parse_activities(&p.activities),
             }
         }
         "GUILD_MEMBER_LIST_UPDATE" => {

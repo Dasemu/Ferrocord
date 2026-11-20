@@ -1,6 +1,7 @@
 //! Discord protocol client: Gateway (WebSocket), REST API, remote-auth (QR
 //! login). Owns sockets; never touches UI types.
 
+pub mod cosmetics;
 pub mod extras;
 pub mod gateway;
 pub mod model;
@@ -65,6 +66,7 @@ pub enum Event {
     PresenceUpdate {
         user_id: UserId,
         status: Presence,
+        activities: Vec<Activity>,
     },
     MemberList(Box<MemberListUpdate>),
     /// USER_SETTINGS_UPDATE carrying `guild_folders` (another session or
