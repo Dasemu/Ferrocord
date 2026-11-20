@@ -1,7 +1,7 @@
 //! Video decoder helper for Ferrocord, with no system codec dependency.
 //!
 //! `ferrocord-player <file>` plays one MP4 (H.264 + AAC) or WebM (VP8 / VP9
-//! + Opus) file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built
+//! and Opus) file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built
 //! from source and linked statically), VP8 and VP9 through pure-Rust
 //! decoders, AAC through symphonia (pure Rust), Opus through a statically
 //! linked libopus, sound through cpal. It writes RGBA frames and playback
@@ -264,10 +264,9 @@ mod player {
         duration_ms: u64,
     }
 
-    fn open_video(
-        path: &Path,
-        container: Container,
-    ) -> Result<Option<(Box<dyn PacketSource>, VideoInfo)>, TrackError> {
+    type Opened = Option<(Box<dyn PacketSource>, VideoInfo)>;
+
+    fn open_video(path: &Path, container: Container) -> Result<Opened, TrackError> {
         Ok(match container {
             Container::Mp4 => mp4::Mp4Video::open(path)?.map(|v| {
                 let info = v.info.clone();
