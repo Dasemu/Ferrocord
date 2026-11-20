@@ -41,6 +41,18 @@ pub enum Ui {
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
     OpenUrl(String),
+    // -- video player
+    /// Play a video attachment or embed (downloads it first).
+    PlayVideo(Box<crate::media::clip::Clip>),
+    /// Stop the video and close its full-screen view.
+    CloseVideo,
+    VideoToggle,
+    /// The seek slider moved to this position (ms).
+    VideoSeekDrag(u64),
+    VideoSeekRelease,
+    VideoVolume(u8),
+    VideoMute,
+    VideoFullscreen,
     /// A link whose visible text differs from its target: ask first.
     ConfirmLink(String),
     CancelLink,
@@ -212,6 +224,11 @@ pub enum Done {
     Image {
         key: String,
         bytes: Option<Vec<u8>>,
+    },
+    /// Download progress or helper event of a video playback session.
+    Video {
+        session: u32,
+        progress: super::video::Progress,
     },
     Edited {
         channel: ChannelId,

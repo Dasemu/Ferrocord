@@ -79,12 +79,20 @@ run `cargo build --release`.
   exponential backoff, `zlib-stream` compression. REST: per-bucket and global
   rate limiting with 429 retry.
 
-Voice and video are out of scope.
+- Videos play in the chat (MP4/MOV with H.264 and AAC, WebM with VP8/VP9 and
+  Opus): inline player with poster, play/pause, seek bar, volume and full
+  screen. Decoding runs in the `ferrocord-player` helper, which links no
+  system codec library; other formats offer "Open externally".
+
+Voice calls are out of scope.
 
 ## Build and run
 
-Requirements: Rust stable (1.88+), and on Linux `pkg-config`, `libssl-dev`,
-`libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`.
+Requirements: Rust stable (1.88+), and on Linux `pkg-config`, `cmake` and a
+C/C++ compiler (the H.264 decoder is built from source), `libssl-dev`,
+`libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`, `libasound2-dev`.
+`cargo build` builds both `ferrocord` and `ferrocord-player`; the helper must
+sit next to the app (use `--no-default-features` to build without video).
 
 ```sh
 cargo build --release

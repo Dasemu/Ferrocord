@@ -20,6 +20,7 @@ pub mod servers;
 pub mod state;
 pub mod stickers;
 pub mod upload;
+pub mod video;
 pub mod window;
 
 use std::collections::{HashMap, HashSet};
@@ -38,6 +39,7 @@ use crate::auth::secrets::{self, KeyringStore, MemoryStore, Secret, SecretStore}
 use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
 use crate::config::{Config, ScreenshotScreen};
 use crate::error::Redacted;
+use crate::media::clip::Clip;
 use crate::mock;
 use crate::net::gateway::{self, GatewayConfig, GatewayHandle};
 use crate::net::model::*;
@@ -153,6 +155,9 @@ pub struct App {
     pub settings_open: bool,
     /// Handle to the running tray, once it registered.
     tray_control: Option<tray::Control>,
+    /// The one video that is downloading or playing.
+    pub video: Option<video::Playback>,
+    video_session: u32,
 }
 
 pub fn now_ms() -> u64 {
@@ -251,6 +256,8 @@ impl App {
             autostart: false,
             settings_open: false,
             tray_control: None,
+            video: None,
+            video_session: 0,
             cfg,
         };
         app.window_focused = app.win.visible;
@@ -303,7 +310,11 @@ impl App {
                 Message::Done(Done::TokenRestored(r.map_err(|e| e.user_message())))
             })
         };
-        (app, Task::batch([open_window, fonts, restore, autostart]))
+        let sweep = app.sweep_videos();
+        (
+            app,
+            Task::batch([open_window, fonts, restore, autostart, sweep]),
+        )
     }
 
     fn boot_mock(&mut self) {
@@ -339,6 +350,12 @@ impl App {
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
             "mock://image/1".into(),
+            iced::widget::image::Handle::from_rgba(w, h, px),
+            (w * h * 4) as usize,
+        );
+        let (w, h, px) = mock::mock_image(400, 225);
+        self.images.insert(
+            "mock://video/poster".into(),
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
@@ -418,6 +435,17 @@ impl App {
                     channel: Some(mock::CH_SHOWCASE),
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
+            }
+            Some(s @ (ScreenshotScreen::Video | ScreenshotScreen::VideoFullscreen)) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_SHOWCASE),
+                };
+                self.chat.mark_read(mock::CH_SHOWCASE);
+                self.mock_video_screen(s == ScreenshotScreen::VideoFullscreen);
             }
             Some(s @ (ScreenshotScreen::Search | ScreenshotScreen::Compose)) => {
                 self.auth = AuthState::LoggedIn {
@@ -645,6 +673,11 @@ impl App {
             Message::Tray(ev) => self.on_tray(ev),
         };
         self.sync_tray();
+        let task = if self.video.is_some() {
+            Task::batch([task, self.stop_video_if_left()])
+        } else {
+            task
+        };
         if !self.first_frame_logged
             && self.cfg.trace_startup
             && self.fonts_ready
@@ -1497,6 +1530,7 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Video { session, progress } => self.on_video(session, progress),
             Done::Image { key, bytes } => {
                 match bytes {
                     Some(b) => self.images.insert_bytes(key, b),
@@ -1596,11 +1630,19 @@ impl App {
                     let blocks = self.parsed_markdown(m.id, &m.content);
                     collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
                 }
-                for e in &m.embeds {
-                    if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
+                for (n, e) in m.embeds.iter().enumerate() {
+                    if let Some(c) = Clip::from_embed(m.id.0, n, e) {
+                        urls.extend(c.poster);
+                    } else if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
                         urls.push(i.url.clone());
                     }
                 }
+                urls.extend(
+                    m.attachments
+                        .iter()
+                        .filter_map(Clip::from_attachment)
+                        .filter_map(|c| c.poster),
+                );
             }
         }
         if self.emoji_picker.is_some()

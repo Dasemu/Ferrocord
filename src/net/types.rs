@@ -478,6 +478,8 @@ pub struct WireEmbed {
     pub image: Option<WireEmbedMedia>,
     #[serde(default)]
     pub thumbnail: Option<WireEmbedMedia>,
+    #[serde(default)]
+    pub video: Option<WireEmbedMedia>,
 }
 
 impl From<WireEmbed> for Embed {
@@ -503,6 +505,12 @@ impl From<WireEmbed> for Embed {
                 .collect(),
             image: w.image.map(Into::into),
             thumbnail: w.thumbnail.map(Into::into),
+            video: w.video.map(|v| EmbedVideo {
+                url: v.url,
+                proxy_url: v.proxy_url,
+                width: v.width,
+                height: v.height,
+            }),
         }
     }
 }

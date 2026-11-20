@@ -45,6 +45,10 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// The inline video player, playing.
+    Video,
+    /// The full-screen video view.
+    VideoFullscreen,
 }
 
 impl ScreenshotScreen {
@@ -88,6 +92,8 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "video" => Some(Self::Video),
+            "video-fullscreen" => Some(Self::VideoFullscreen),
             _ => None,
         }
     }

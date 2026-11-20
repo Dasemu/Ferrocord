@@ -31,3 +31,7 @@ Things learned while building Ferrocord that are worth remembering.
 - `image::Handle::from_rgba` in `view()` gets a new id per frame (re-upload, blinking): cache handles in the app (`App::qr_handle`).
 - Under Xvfb with tiny-skia a window repaints only when the next input event arrives, so screenshots taken right after an xdotool action can be one event stale; wiggle the pointer before capturing.
 - A button captures press and release, so drag and drop between rail items uses `mouse_area` tiles (press/release/enter/exit) plus a global left-release `DragEnd`.
+- **Video helper**: decoding runs in `ferrocord-player` (a separate process), so the app links no codec and a decoder crash or hostile file cannot take the chat down; the helper's only non-glibc library is ALSA's `libasound` (cpal), checked by `.github/scripts/check-helper-libs.sh`. OpenH264 is C++: link libstdc++ statically in CI/release (`CXXSTDLIB=static=stdc++` plus `-L` to `libstdc++.a`).
+- `matroska-demuxer`'s `seek` lands on the first frame AFTER a timestamp, not on a keyframe: the helper scans the keyframe timestamps once and seeks to `key - 1`; seeking to 0 reopens the file (browser-recorded WebM has neither cues nor a duration).
+- With a sound device the audio the device consumed is the playback clock; a stream whose callbacks never run (device opened, not playing) must fall back to the wall clock or the picture freezes.
+- Image handles for video frames are created in `update` per frame; the event stream drops stale frames so a slow UI never queues megabytes.

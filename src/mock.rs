@@ -662,6 +662,7 @@ fn showcase() -> Vec<Message> {
         ],
         image: None,
         thumbnail: None,
+        video: None,
     }];
     let mut b = gm(
         CH_SHOWCASE,
@@ -724,6 +725,7 @@ fn showcase() -> Vec<Message> {
         ],
         image: None,
         thumbnail: None,
+        video: None,
     }];
     let e = gm(
         CH_SHOWCASE,
@@ -752,7 +754,27 @@ fn showcase() -> Vec<Message> {
     g.stickers = vec![mock_stickers()[1].clone()];
     let mut h = gm(CH_SHOWCASE, 2, 0, 4, &[], "");
     h.stickers = vec![mock_stickers()[3].clone()];
-    vec![d, b, c, a, e, f, g, h]
+    // A video attachment: the poster is `mock://video/poster`; playing it
+    // starts the scripted mock player instead of downloading.
+    let mut v = gm(
+        CH_SHOWCASE,
+        1,
+        0,
+        2,
+        &[ROLE_CORE],
+        "demo of the new renderer",
+    );
+    v.attachments = vec![Attachment {
+        id: Snowflake(5003),
+        filename: "renderer-demo.mp4".into(),
+        size: 7_412_902,
+        url: "mock://video/1".into(),
+        proxy_url: Some("mock://video/poster".into()),
+        content_type: Some("video/mp4".into()),
+        width: Some(1280),
+        height: Some(720),
+    }];
+    vec![d, b, c, a, e, f, g, h, v]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for

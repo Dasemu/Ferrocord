@@ -9,6 +9,7 @@ use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::video;
 use super::{
     El, avatar, fit_size, format_day, format_time, format_timestamp, human_size, markdown,
     same_day, ui,
@@ -18,6 +19,7 @@ use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
+use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind, Embed};
 
 pub fn view(app: &App) -> El<'_> {
@@ -365,10 +367,18 @@ fn message<'a>(
     for s in &m.stickers {
         body = body.push(sticker(app, s, STICKER_SIZE));
     }
-    for e in &m.embeds {
+    for (n, e) in m.embeds.iter().enumerate() {
         body = body.push(match e.bare_media() {
             Some(media) => image_box(app, &media.url, media.width, media.height),
-            None => embed(app, m, e),
+            None => match Clip::from_embed(m.id.0, n, e) {
+                // A bare video link: the player alone, as in the official client.
+                Some(clip)
+                    if e.title.is_none() && e.description.is_none() && e.fields.is_empty() =>
+                {
+                    video::inline(app, &clip)
+                }
+                _ => embed(app, m, n, e),
+            },
         });
     }
     if !m.reactions.is_empty() {
@@ -796,6 +806,9 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     if a.is_image() {
         return image_box(app, &preview_key(a), a.width, a.height);
     }
+    if let Some(clip) = Clip::from_attachment(a) {
+        return video::inline(app, &clip);
+    }
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())
             .color(p.link)
@@ -833,7 +846,8 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     .into()
 }
 
-fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
+fn embed<'a>(app: &'a App, m: &'a model::Message, index: usize, e: &'a Embed) -> El<'a> {
+    let clip = Clip::from_embed(m.id.0, index, e);
     let t = &app.theme;
     let p = t.palette;
     let mut col = column![].spacing(8).width(Length::Fill);
@@ -900,7 +914,9 @@ fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
         }
         col = col.push(fields);
     }
-    if let Some(img) = &e.image {
+    if let Some(clip) = &clip {
+        col = col.push(video::inline(app, clip));
+    } else if let Some(img) = &e.image {
         let (w, h) = fit_size(
             img.width.unwrap_or(400),
             img.height.unwrap_or(300),
@@ -925,7 +941,7 @@ fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
         );
     }
     let mut inner = row![col].spacing(16);
-    if let (Some(th), None) = (&e.thumbnail, &e.image)
+    if let (Some(th), None, None) = (&e.thumbnail, &e.image, &clip)
         && let Some(handle) = app.image(&th.url)
     {
         inner = inner.push(

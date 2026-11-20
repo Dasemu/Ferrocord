@@ -511,6 +511,16 @@ pub struct EmbedMedia {
     pub height: Option<u32>,
 }
 
+/// The `video` of an embed: the file itself when Discord hosts it, else a
+/// player page (YouTube and the like) that is never fetched.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EmbedVideo {
+    pub url: String,
+    pub proxy_url: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Embed {
     pub kind: Option<String>,
@@ -525,6 +535,8 @@ pub struct Embed {
     pub fields: Vec<EmbedField>,
     pub image: Option<EmbedMedia>,
     pub thumbnail: Option<EmbedMedia>,
+    #[serde(default)]
+    pub video: Option<EmbedVideo>,
 }
 
 impl Embed {
