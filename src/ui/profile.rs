@@ -119,11 +119,17 @@ fn body<'a>(
 
     // Banner or accent colour.
     let banner: El<'a> = match profile.and_then(|pr| app.banner_frame(pr)) {
-        Some(h) => image(h.clone())
-            .width(Length::Fill)
-            .height(BANNER_H)
-            .content_fit(iced::ContentFit::Cover)
-            .into(),
+        // `clip`: tiny-skia does not clip a covering image to its bounds.
+        Some(h) => container(
+            image(h.clone())
+                .width(Length::Fill)
+                .height(BANNER_H)
+                .content_fit(iced::ContentFit::Cover),
+        )
+        .width(Length::Fill)
+        .height(BANNER_H)
+        .clip(true)
+        .into(),
         None => {
             let c = profile
                 .and_then(|pr| pr.accent_color)

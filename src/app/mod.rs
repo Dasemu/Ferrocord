@@ -492,6 +492,23 @@ impl App {
                     }
                 }
             }
+            Some(ScreenshotScreen::ProfileDm) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(Some(mock::DM_ALICE));
+                self.chat.mark_read(mock::DM_ALICE);
+            }
+            Some(ScreenshotScreen::Profile) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+            }
             Some(s) if s.is_round3() => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -519,6 +536,18 @@ impl App {
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        if screen == Some(ScreenshotScreen::Profile) {
+            let _ = self.update_ui(Ui::OpenProfile {
+                user: Snowflake(2),
+                guild: Some(mock::GUILD_RUST),
+            });
+            if let Some(p) = self.profiles.popout.as_mut() {
+                p.at = iced::Point::new(690.0, 70.0);
+            }
+        }
+        if screen == Some(ScreenshotScreen::ProfileDm) {
+            let _ = self.request_images();
+        }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
             self.chat.my_status = Presence::Dnd;
