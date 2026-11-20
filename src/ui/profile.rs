@@ -17,7 +17,10 @@ use crate::app::profile::CARD_W;
 use crate::net::cosmetics::{self as cos, Activity, ActivityKind, Profile, elapsed_label};
 use crate::net::model::*;
 
-const BANNER_H: f32 = 100.0;
+/// Banners are 17:6 (600x212 and 340x120 on the official card).
+fn banner_height(width: f32) -> f32 {
+    (width * 6.0 / 17.0).round()
+}
 const AVATAR: f32 = 80.0;
 const OVERLAP: f32 = 40.0;
 const RADIUS: f32 = 8.0;
@@ -118,18 +121,15 @@ fn body<'a>(
     let colors = profile.and_then(|pr| pr.theme_colors);
 
     // Banner or accent colour.
+    let banner_h = banner_height(width);
     let banner: El<'a> = match profile.and_then(|pr| app.banner_frame(pr)) {
-        // `clip`: tiny-skia does not clip a covering image to its bounds.
-        Some(h) => container(
-            image(h.clone())
-                .width(Length::Fill)
-                .height(BANNER_H)
-                .content_fit(iced::ContentFit::Cover),
-        )
-        .width(Length::Fill)
-        .height(BANNER_H)
-        .clip(true)
-        .into(),
+        // Same aspect as the card: no cropping is needed (tiny-skia does not
+        // clip a covering image to its bounds).
+        Some(h) => image(h.clone())
+            .width(Length::Fill)
+            .height(banner_h)
+            .content_fit(iced::ContentFit::Fill)
+            .into(),
         None => {
             let c = profile
                 .and_then(|pr| pr.accent_color)
@@ -139,7 +139,7 @@ fn body<'a>(
                 .unwrap_or(p.accent);
             container(Space::new())
                 .width(Length::Fill)
-                .height(BANNER_H)
+                .height(banner_h)
                 .style(theme::bg(c))
                 .into()
         }
@@ -154,7 +154,7 @@ fn body<'a>(
     );
     let head = iced::widget::stack![
         column![banner, Space::new().height(OVERLAP)].width(Length::Fill),
-        container(avatar).padding(Padding::ZERO.top(BANNER_H - OVERLAP).left(16)),
+        container(avatar).padding(Padding::ZERO.top(banner_h - OVERLAP).left(16)),
     ];
 
     // Name, username, pronouns, badges.
