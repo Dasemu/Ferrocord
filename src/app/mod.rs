@@ -4,6 +4,7 @@
 pub mod actions;
 mod background;
 pub mod composer;
+pub mod embeds;
 pub mod emoji;
 pub mod features;
 pub mod folders;
@@ -345,6 +346,14 @@ impl App {
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
+        for (key, w, h, shift) in mock::MOCK_EMBED_IMAGES {
+            let (w, h, px) = mock::mock_embed_image(w, h, shift);
+            self.images.insert(
+                key.into(),
+                iced::widget::image::Handle::from_rgba(w, h, px),
+                (w * h * 4) as usize,
+            );
+        }
         // Raster avatars for the users of the long mock DM.
         for (n, rgb) in [(1u64, [120u8, 200, 255]), (3, [250, 170, 40])] {
             let mut u = mock::user(n);
@@ -428,6 +437,21 @@ impl App {
                     channel: Some(mock::CH_SHOWCASE),
                 };
                 self.chat.mark_read(mock::CH_SHOWCASE);
+            }
+            Some(s @ (ScreenshotScreen::EmbedMedia | ScreenshotScreen::EmbedRich)) => {
+                let channel = if s == ScreenshotScreen::EmbedMedia {
+                    mock::CH_EMBED_MEDIA
+                } else {
+                    mock::CH_EMBED_RICH
+                };
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(channel),
+                };
+                self.chat.mark_read(channel);
             }
             Some(s @ (ScreenshotScreen::Search | ScreenshotScreen::Compose)) => {
                 self.auth = AuthState::LoggedIn {
@@ -781,9 +805,16 @@ impl App {
                 Task::none()
             }
             Ui::ConfirmLink(url) => {
-                self.pending_link = Some(url);
+                // Only http(s) ever reaches the dialog, let alone the browser.
+                self.pending_link = embeds::web_url(&url).map(str::to_owned);
                 Task::none()
             }
+            Ui::PlayVideo(url) => {
+                // VIDEO-HOOK: replace with the inline player.
+                self.pending_link = embeds::web_url(&url).map(str::to_owned);
+                Task::none()
+            }
+            Ui::SuppressEmbeds(m) => self.suppress_embeds(m),
             Ui::CancelLink => {
                 self.pending_link = None;
                 Task::none()
@@ -1464,6 +1495,17 @@ impl App {
                 }
                 Task::none()
             }
+            Done::SuppressFailed {
+                channel,
+                message,
+                embeds,
+                flags,
+                error,
+            } => {
+                self.chat.restore_embeds(channel, message, embeds, flags);
+                self.toast = Some(format!("Could not remove the embeds: {error}"));
+                Task::none()
+            }
             Done::ActionFailed(e) => {
                 self.toast = Some(e);
                 Task::none()
@@ -1638,11 +1680,7 @@ impl App {
                     let blocks = self.parsed_markdown(m.id, &m.content);
                     collect_emoji(&blocks, &self.cfg.cdn_url, &mut urls);
                 }
-                for e in &m.embeds {
-                    if let Some(i) = e.image.as_ref().or(e.thumbnail.as_ref()) {
-                        urls.push(i.url.clone());
-                    }
-                }
+                urls.extend(crate::ui::embeds::media_keys(m));
             }
         }
         if self.emoji_picker.is_some()
@@ -1743,6 +1781,11 @@ impl App {
         }
         cache.insert(key, blocks.clone());
         blocks
+    }
+
+    /// Whether `url` may be downloaded (Discord's CDN / media proxy only).
+    pub fn is_allowed_media(&self, url: &str) -> bool {
+        self.rest.is_allowed_media_url(url)
     }
 
     pub fn image(&self, key: &str) -> Option<&iced::widget::image::Handle> {

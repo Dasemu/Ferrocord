@@ -20,7 +20,7 @@ use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
-use crate::net::model::{self as model, Attachment, Channel, ChannelKind, Embed};
+use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 
 pub fn view(app: &App) -> El<'_> {
     let p = app.theme.palette;
@@ -368,11 +368,8 @@ fn message<'a>(
     for s in &m.stickers {
         body = body.push(sticker(app, s, STICKER_SIZE));
     }
-    for e in &m.embeds {
-        body = body.push(match e.bare_media() {
-            Some(media) => image_box(app, &media.url, media.width, media.height),
-            None => embed(app, m, e),
-        });
+    for card in super::embeds::message_embeds(app, m) {
+        body = body.push(card);
     }
     if !m.reactions.is_empty() {
         body = body.push(reactions_row(app, c, m));
@@ -755,13 +752,6 @@ fn detached_bar<'a>(app: &'a App, c: &Channel) -> El<'a> {
     .into()
 }
 
-trait Pipe: Sized {
-    fn pipe<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
-
 /// An image (attachment, GIF or image link) fitted into 400x300, with a
 /// placeholder until it has loaded.
 fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32>) -> El<'a> {
@@ -859,145 +849,6 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
         },
         ..Default::default()
     })
-    .into()
-}
-
-fn embed<'a>(app: &'a App, m: &'a model::Message, e: &'a Embed) -> El<'a> {
-    let t = &app.theme;
-    let p = t.palette;
-    let mut col = column![].spacing(8).width(Length::Fill);
-    if let Some(pn) = &e.provider_name {
-        col = col.push(text(pn.clone()).size(12).color(p.text_secondary));
-    }
-    if let Some(an) = &e.author_name {
-        col = col.push(
-            text(an.clone())
-                .size(14)
-                .font(INTER_SEMIBOLD)
-                .color(p.header_text),
-        );
-    }
-    if let Some(title) = &e.title {
-        let mut sp = span::<Ui, Font>(title.clone())
-            .font(INTER_SEMIBOLD)
-            .size(16)
-            .color(if e.url.is_some() {
-                p.link
-            } else {
-                p.header_text
-            });
-        if let Some(u) = &e.url {
-            // The title is arbitrary text: confirm the real target.
-            sp = sp.link(Ui::ConfirmLink(u.clone()));
-        }
-        col = col.push(rich_text(vec![sp]).on_link_click(Message::Ui));
-    }
-    if let Some(d) = &e.description {
-        col = col.push(markdown::render(app, m.id, d, p.text_normal, 14.0));
-    }
-    if !e.fields.is_empty() {
-        let mut fields = column![].spacing(8);
-        let mut line = row![].spacing(8);
-        let mut n = 0;
-        for f in &e.fields {
-            let cell = column![
-                text(f.name.clone())
-                    .size(14)
-                    .font(INTER_SEMIBOLD)
-                    .color(p.header_text),
-                markdown::render(app, m.id, &f.value, p.text_normal, 14.0),
-            ]
-            .spacing(2)
-            .width(Length::Fill);
-            if !f.inline || n == 3 {
-                if n > 0 {
-                    fields = fields.push(line);
-                }
-                line = row![].spacing(8);
-                n = 0;
-            }
-            line = line.push(cell);
-            n += 1;
-            if !f.inline {
-                fields = fields.push(line);
-                line = row![].spacing(8);
-                n = 0;
-            }
-        }
-        if n > 0 {
-            fields = fields.push(line);
-        }
-        col = col.push(fields);
-    }
-    if let Some(img) = &e.image {
-        let (w, h) = fit_size(
-            img.width.unwrap_or(400),
-            img.height.unwrap_or(300),
-            400,
-            300,
-        );
-        if let Some(handle) = app.image(&img.url) {
-            col = col.push(
-                iced::widget::image(handle.clone())
-                    .width(w as f32)
-                    .height(h as f32)
-                    .border_radius(4.0),
-            );
-        }
-    }
-    if let Some(f) = &e.footer {
-        col = col.push(
-            text(f.clone())
-                .size(12)
-                .font(INTER_MEDIUM)
-                .color(p.text_secondary),
-        );
-    }
-    let mut inner = row![col].spacing(16);
-    if let (Some(th), None) = (&e.thumbnail, &e.image)
-        && let Some(handle) = app.image(&th.url)
-    {
-        inner = inner.push(
-            iced::widget::image(handle.clone())
-                .width(80)
-                .height(80)
-                .border_radius(4.0),
-        );
-    }
-    let bar = e.color.map(theme::from_int).unwrap_or(p.bg_app);
-    container(
-        container(inner)
-            .padding(Padding::from([8, 16]).top(8).bottom(16).left(12))
-            .width(Length::Fill),
-    )
-    .max_width(t.metrics.embed_max_width)
-    .style(move |_| container::Style {
-        background: Some(Background::Color(p.embed_bg)),
-        border: Border {
-            radius: 4.0.into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
-        ..Default::default()
-    })
-    .pipe(|c| {
-        row![
-            container(text(""))
-                .width(4)
-                .height(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(bar)),
-                    border: Border {
-                        radius: iced::border::Radius::default().left(4.0),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            c
-        ]
-        .height(Length::Shrink)
-    })
-    .pipe(|r| container(r).max_width(t.metrics.embed_max_width + 4.0))
     .into()
 }
 
