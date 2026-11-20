@@ -163,9 +163,8 @@ fn flow<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
     for i in v {
         match i {
             Inline::LineBreak => lines = lines.push(finish(&mut line)),
-            Inline::Emoji { name, id, .. } => {
-                let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
-                match ctx.app.image(&key) {
+            Inline::Emoji { name, id, animated } => {
+                match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                     Some(h) => line.push(
                         iced::widget::image(h.clone())
                             .width(emoji_size)
@@ -421,9 +420,8 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
     };
     let mut r = row![].spacing(4);
     for i in v {
-        if let Inline::Emoji { name, id, .. } = i {
-            let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
-            let el: El<'a> = match ctx.app.image(&key) {
+        if let Inline::Emoji { name, id, animated } = i {
+            let el: El<'a> = match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                 Some(h) => iced::widget::image(h.clone()).width(48).height(48).into(),
                 None => container(text(format!(":{name}:")).size(16).color(p.text_secondary))
                     .padding(Padding::from([10, 6]))

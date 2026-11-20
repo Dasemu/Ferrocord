@@ -7,7 +7,7 @@ use iced::{Alignment, Length, Padding};
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence, avatar_with_status, initials_circle, mention_badge, ui};
-use crate::app::{App, Ui, View};
+use crate::app::{App, Message, Ui, View};
 use crate::net::model::*;
 
 pub fn view(app: &App) -> El<'_> {
@@ -291,15 +291,31 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
     if mentions > 0 {
         r = r.push(mention_badge(&p, mentions, p.bg_sidebar));
     }
-    container(
-        button(r)
-            .padding(Padding::from([6, 8]))
-            .width(Length::Fill)
-            .on_press(ui(Ui::SelectChannel(c.id)))
-            .style(theme::list_row(p, selected)),
-    )
-    .padding(Padding::from([0, 8]))
-    .into()
+    let btn: El<'a> = button(r)
+        .padding(Padding::from([6, 8]))
+        .width(Length::Fill)
+        .on_press(ui(Ui::SelectChannel(c.id)))
+        .style(theme::list_row(p, selected))
+        .into();
+    let user = match (c.kind, c.recipients.first()) {
+        (ChannelKind::Dm, Some(u)) => app.chat.users.get(u),
+        _ => None,
+    };
+    let btn = match user {
+        Some(u) => super::cosmetics::with_nameplate(app, u, btn),
+        None => btn,
+    };
+    let hover = user.map(|u| crate::app::anim::Hover {
+        user: u.id,
+        message: None,
+    });
+    let mut area = iced::widget::mouse_area(btn);
+    if let Some(h) = hover {
+        area = area
+            .on_enter(Message::Ui(Ui::HoverEnter(h)))
+            .on_exit(Message::Ui(Ui::HoverLeave(h)));
+    }
+    container(area).padding(Padding::from([0, 8])).into()
 }
 
 /// Width of every user-panel icon button.
@@ -332,6 +348,7 @@ fn user_panel(app: &App) -> El<'_> {
         global_name: None,
         avatar: None,
         bot: false,
+        ..Default::default()
     });
     let small = |i: Icon, on: Option<Ui>| {
         let enabled = on.is_some();
