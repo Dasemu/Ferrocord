@@ -569,6 +569,10 @@ impl App {
         {
             return Task::none();
         }
+        if self.profiles.popout.take().is_some() {
+            self.anim.close_popout();
+            return Task::none();
+        }
         if self.rail.menu.take().is_some() || self.panels.open.take().is_some() {
             return Task::none();
         }

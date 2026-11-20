@@ -145,10 +145,12 @@ mod tests {
                 global_name: None,
                 avatar: None,
                 bot: false,
+                ..Default::default()
             },
             nick: None,
             roles: vec![],
             presence: p,
+            activities: vec![],
         }))
     }
 

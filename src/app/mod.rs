@@ -2,7 +2,9 @@
 //! everything that touches the network, disk or keyring runs in a `Task`.
 
 pub mod actions;
+pub mod anim;
 mod background;
+pub mod cosmetics;
 pub mod emoji;
 pub mod features;
 pub mod folders;
@@ -14,6 +16,7 @@ pub mod markdown;
 pub mod members;
 pub mod message;
 pub mod panels;
+pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
@@ -151,6 +154,10 @@ pub struct App {
     /// "Open at login" (the autostart file exists).
     pub autostart: bool,
     pub settings_open: bool,
+    /// Animation clock, hover target and decoded frames.
+    pub anim: anim::AnimState,
+    /// Profile popout, fetched profiles and effect configs.
+    pub profiles: profile::ProfileState,
     /// Handle to the running tray, once it registered.
     tray_control: Option<tray::Control>,
 }
@@ -250,6 +257,8 @@ impl App {
             prefs,
             autostart: false,
             settings_open: false,
+            anim: anim::AnimState::default(),
+            profiles: profile::ProfileState::default(),
             tray_control: None,
             cfg,
         };
@@ -357,6 +366,7 @@ impl App {
                 }
             }
         }
+        self.mock_load_cosmetics();
         // Mock sticker images, under the CDN URLs the views ask for.
         for (st, rgb) in mock::mock_stickers().into_iter().zip([
             [255u8, 140, 60],
@@ -816,6 +826,12 @@ impl App {
                 self.chat.prune_typing(now_ms());
                 Task::none()
             }
+            Ui::OpenProfile { .. }
+            | Ui::CloseProfile
+            | Ui::HoverEnter(_)
+            | Ui::HoverLeave(_)
+            | Ui::AnimTick(_)
+            | Ui::ToggleReduceMotion => self.update_cosmetics(u),
             other => self.update_action(other),
         }
     }
@@ -1237,6 +1253,9 @@ impl App {
     fn on_done(&mut self, d: Done) -> Task<Message> {
         match d {
             Done::Ignored => Task::none(),
+            d @ (Done::Profile { .. } | Done::ProfileEffects(_) | Done::Anim { .. }) => {
+                self.on_cosmetics_done(d)
+            }
             Done::AutostartLoaded(on) => {
                 self.autostart = on;
                 Task::none()
@@ -1534,10 +1553,12 @@ impl App {
 
     /// Fetches avatars / icons / attachment previews that are visible now.
     fn request_images(&mut self) -> Task<Message> {
+        let profiles = self.request_profiles();
         if self.cfg.mock {
-            return Task::none();
+            return profiles;
         }
-        let mut urls: Vec<String> = Vec::new();
+        let anims = self.request_anims();
+        let mut urls: Vec<String> = self.cosmetic_urls();
         for g in &self.chat.guilds {
             if let Some(u) = self.rest.guild_icon_url(g, 96) {
                 urls.push(u);
@@ -1658,7 +1679,7 @@ impl App {
             .into_iter()
             .filter(|u| self.rest.is_allowed_media_url(u))
             .filter(|u| self.images.want(u))
-            .take(64)
+            .take(96)
             .map(|url| {
                 let rest = self.rest.clone();
                 Task::perform(
@@ -1678,7 +1699,7 @@ impl App {
                 )
             })
             .collect();
-        Task::batch(tasks)
+        Task::batch(tasks.into_iter().chain([profiles, anims]))
     }
 
     /// Parsed markdown for a message body (cached, bounded).
@@ -1754,6 +1775,11 @@ impl App {
                 Subscription::run(tray::instance::show_requests)
                     .map(|()| Message::Ui(Ui::ShowWindow)),
             );
+        }
+        // Ticks exist only while something animated is hovered or the
+        // popout shows one: idle CPU stays flat otherwise.
+        if self.anim.active(self.prefs.reduce_motion) {
+            subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
         }
         if self.cfg.mock {
             return Subscription::batch(subs);
