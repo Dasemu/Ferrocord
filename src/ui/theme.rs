@@ -5,7 +5,7 @@
 //! (measured from public screenshots); see `docs/protocol.md` §UI reference.
 
 use iced::gradient::Linear;
-use iced::widget::{button, container, scrollable, text_editor, text_input, toggler};
+use iced::widget::{button, container, scrollable, slider, text_editor, text_input, toggler};
 use iced::{Background, Border, Color, Font, Gradient, Radians, Shadow, Theme, font};
 
 use crate::config::ThemeChoice;
@@ -648,6 +648,104 @@ pub fn thin_scrollbar(
 pub fn default_avatar_color(id: u64) -> Color {
     const COLORS: [u32; 6] = [0x5865f2, 0x757e8a, 0x3ba55c, 0xfaa61a, 0xed4245, 0xeb459f];
     rgb(COLORS[((id >> 22) % 6) as usize].max(COLORS[(id % 6) as usize]) & 0xffffff)
+}
+
+// -- Video player ------------------------------------------------------------
+//
+// The player chrome is dark in both themes (it sits on top of a picture), so
+// these do not depend on the palette.
+
+/// Behind the picture of a video (letterbox bars).
+pub fn video_bg() -> Color {
+    rgb(0x000000)
+}
+
+/// Translucent black under the controls and over a paused picture.
+pub fn video_scrim() -> Color {
+    rgba(0x000000, 0.62)
+}
+
+/// Text and icons on the player chrome.
+pub fn video_fg() -> Color {
+    rgb(0xffffff)
+}
+
+/// Dimmed text on the player chrome.
+pub fn video_fg_dim() -> Color {
+    rgba(0xffffff, 0.72)
+}
+
+/// The round play button over a poster.
+pub fn video_play_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(if hovered {
+                p.accent
+            } else {
+                video_scrim()
+            })),
+            text_color: video_fg(),
+            border: Border {
+                radius: 32.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// A button that is invisible until hovered: the click target over a picture.
+pub fn video_surface() -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| button::Style {
+        background: matches!(status, button::Status::Hovered)
+            .then_some(Background::Color(rgba(0x000000, 0.12))),
+        text_color: video_fg(),
+        ..Default::default()
+    }
+}
+
+/// Small icon buttons of the control bar.
+pub fn video_control(_p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| button::Style {
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then_some(Background::Color(rgba(0xffffff, 0.16))),
+        text_color: video_fg(),
+        border: Border {
+            radius: Metrics::DEFAULT.radius_small.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Seek and volume sliders: accent for the played part, a round handle.
+pub fn video_slider(p: Palette) -> impl Fn(&Theme, slider::Status) -> slider::Style {
+    move |_, status| {
+        let handle = match status {
+            slider::Status::Hovered | slider::Status::Dragged => 7.0,
+            slider::Status::Active => 5.0,
+        };
+        slider::Style {
+            rail: slider::Rail {
+                backgrounds: (
+                    Background::Color(p.accent),
+                    Background::Color(rgba(0xffffff, 0.3)),
+                ),
+                width: 4.0,
+                border: Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Circle { radius: handle },
+                background: Background::Color(video_fg()),
+                border_width: 0.0,
+                border_color: Color::TRANSPARENT,
+            },
+        }
+    }
 }
 
 #[cfg(test)]

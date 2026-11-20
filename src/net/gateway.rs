@@ -49,12 +49,25 @@ pub struct MemberSubscription {
     pub ranges: Vec<(usize, usize)>,
 }
 
+/// The voice state the app wants (op 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceRequest {
+    /// `None` for DM / group calls.
+    pub guild: Option<GuildId>,
+    /// `None` = leave voice.
+    pub channel: Option<ChannelId>,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+}
+
 #[derive(Debug)]
 struct Desired {
     status: Presence,
     status_dirty: bool,
     members: Option<MemberSubscription>,
     members_dirty: bool,
+    voice: Option<VoiceRequest>,
+    voice_dirty: bool,
 }
 
 /// Cheaply clonable handle to the running gateway. The app records what it
@@ -86,6 +99,8 @@ impl GatewayHandle {
                 status_dirty: false,
                 members: None,
                 members_dirty: false,
+                voice: None,
+                voice_dirty: false,
             })),
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         }
@@ -134,9 +149,29 @@ impl GatewayHandle {
         self.with(|d| d.members.clone()).flatten()
     }
 
+    /// Joins, updates or leaves voice (op 4). Identical requests are not
+    /// re-sent.
+    pub fn set_voice(&self, req: VoiceRequest) {
+        self.with(|d| {
+            if d.voice != Some(req) {
+                d.voice = Some(req);
+                d.voice_dirty = true;
+            }
+        });
+        self.notify.notify_one();
+    }
+
+    pub fn voice(&self) -> Option<VoiceRequest> {
+        self.with(|d| d.voice).flatten()
+    }
+
     /// Called once READY/RESUMED arrived: pending state must be re-sent.
+    /// A voice channel we are in is re-joined (a new session drops it).
     fn on_connected(&self) {
-        self.with(|d| d.members_dirty = d.members.is_some());
+        self.with(|d| {
+            d.members_dirty = d.members.is_some();
+            d.voice_dirty |= d.voice.is_some_and(|v| v.channel.is_some());
+        });
     }
 
     /// Drops a pending status change (IDENTIFY already carries it).
@@ -151,6 +186,17 @@ impl GatewayHandle {
             if d.status_dirty {
                 d.status_dirty = false;
                 out.push(to_json(&types::presence_payload(d.status)));
+            }
+            if d.voice_dirty {
+                d.voice_dirty = false;
+                if let Some(v) = d.voice {
+                    out.push(to_json(&types::voice_state_payload(
+                        v.guild,
+                        v.channel,
+                        v.self_mute,
+                        v.self_deaf,
+                    )));
+                }
             }
             if d.members_dirty {
                 d.members_dirty = false;

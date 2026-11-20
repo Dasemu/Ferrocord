@@ -1,12 +1,36 @@
 [package]
 name = "ferrocord"
-version = "0.9.2"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
 license = "MIT"
 repository = "https://github.com/Dasemu/Ferrocord"
 publish = false
+default-run = "ferrocord"
+
+[features]
+default = ["video"]
+# In-chat video playback: the `ferrocord-player` helper process decodes MP4
+# (H.264 + AAC) and WebM (VP8/VP9 + Opus) with statically linked / pure-Rust
+# decoders; no system codec libraries. The main binary links none of them.
+video = [
+    "dep:openh264", "dep:mp4", "dep:symphonia", "dep:matroska-demuxer",
+    "dep:rusty_vp9", "dep:vp8-decoder",
+]
+
+[[bin]]
+name = "ferrocord"
+path = "src/main.rs"
+
+[[bin]]
+name = "ferrocord-player"
+path = "src/bin/ferrocord-player/main.rs"
+required-features = ["video"]
+
+[[test]]
+name = "video_player"
+required-features = ["video"]
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio", "image", "advanced", "svg"] }
@@ -39,6 +63,37 @@ emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png", "gif", "webp"] }
+# Voice: Discord's mandatory audio/video E2EE (DAVE, MLS via OpenMLS), pure Rust.
+davey = "0.2"
+# Voice transport encryption modes Discord requires (aead_aes256_gcm_rtpsize,
+# aead_xchacha20_poly1305_rtpsize); same `aead` 0.5 generation davey uses.
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+# Opus codec (Discord voice is Opus 48 kHz stereo; also the video helper's WebM audio).
+opus = "0.3"
+# Same crate opus uses; "static" links libopus.a so the binary needs no libopus package.
+audiopus_sys = { version = "0.2", features = ["static"] }
+# Microphone capture and speaker output (ALSA/PulseAudio/PipeWire via ALSA, WASAPI, CoreAudio);
+# also the video helper's sound output.
+cpal = "0.16"
+
+# Video helper (`ferrocord-player` only). Unix only: other platforms build the
+# helper as a stub and the app offers "Open externally".
+[target.'cfg(unix)'.dependencies]
+# H.264 decoder: Cisco's BSD OpenH264, built from source and linked statically (Baseline/Main/High, B-frames).
+openh264 = { version = "0.9", optional = true }
+# Pure-Rust MP4 demuxer for the H.264 track (sample table, avcC, rotation).
+mp4 = { version = "0.14", optional = true }
+# Pure-Rust AAC decoder + MP4 audio demuxer.
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"], optional = true }
+# Pure-Rust WebM/Matroska demuxer (VP8/VP9 video and Opus audio tracks).
+matroska-demuxer = { version = "0.8", optional = true }
+# Pure-Rust VP9 decoder (Apache-2.0, no C, bit-exact against libvpx's conformance vectors).
+rusty_vp9 = { version = "0.3", optional = true }
+# Pure-Rust VP8 decoder (RFC 6386, conformance-tested on the WebM vectors).
+vp8-decoder = { version = "0.1", optional = true }
+# Opus, audiopus_sys (static libopus) and cpal are shared with voice: see
+# [dependencies] (one version each, always built).
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
@@ -47,6 +102,11 @@ ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
 resvg = { version = "0.45", default-features = false }
 
 [dev-dependencies]
+# Fake voice gateway (MLS external sender) for the DAVE loopback test; same
+# versions davey already compiles.
+openmls = "0.8"
+openmls_basic_credential = "0.5"
+openmls_rust_crypto = "0.5"
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"

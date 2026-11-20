@@ -92,6 +92,7 @@ pub fn view(app: &App) -> El<'_> {
     if let Some(note) = tray_note {
         rows = rows.push(text(note).size(t.metrics.font_s).color(p.text_muted));
     }
+    rows = rows.push(super::voice::settings_section(app));
     rows = rows
         .push(
             text("Account")

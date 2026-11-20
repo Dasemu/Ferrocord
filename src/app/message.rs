@@ -24,6 +24,8 @@ pub enum Message {
     Done(Done),
     /// Events from the system tray service.
     Tray(crate::tray::Event),
+    /// Events from the running voice connection.
+    Voice(crate::net::voice::VoiceEvent),
 }
 
 /// User input.
@@ -44,13 +46,21 @@ pub enum Ui {
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
     OpenUrl(String),
+    // -- video player
+    /// Play a video attachment or embed (downloads it first).
+    PlayVideo(Box<crate::media::clip::Clip>),
+    /// Stop the video and close its full-screen view.
+    CloseVideo,
+    VideoToggle,
+    /// The seek slider moved to this position (ms).
+    VideoSeekDrag(u64),
+    VideoSeekRelease,
+    VideoVolume(u8),
+    VideoMute,
+    VideoFullscreen,
     /// A link whose visible text differs from its target: ask first.
     ConfirmLink(String),
     CancelLink,
-    /// Play a direct video file (embed or attachment) in the inline player.
-    /// VIDEO-HOOK: until the player is wired this opens the link externally
-    /// (after the confirm dialog).
-    PlayVideo(String),
     /// The "X" on a message's embeds: sets `SUPPRESS_EMBEDS` on the message.
     SuppressEmbeds(MessageId),
     Logout,
@@ -199,6 +209,8 @@ pub enum Ui {
     FolderColor(Option<u32>),
     SaveFolder,
     CloseFolderSettings,
+    // -- voice channels and calls
+    Voice(super::voice::VoiceUi),
 }
 
 /// Completion of a `Task`.
@@ -236,6 +248,11 @@ pub enum Done {
     Image {
         key: String,
         bytes: Option<Vec<u8>>,
+    },
+    /// Download progress or helper event of a video playback session.
+    Video {
+        session: u32,
+        progress: super::video::Progress,
     },
     Edited {
         channel: ChannelId,
@@ -340,6 +357,7 @@ pub enum Done {
         previous: Folders,
         result: Result<(), String>,
     },
+    Voice(super::voice::VoiceDone),
     Profile {
         key: super::profile::Key,
         result: Result<Box<crate::net::cosmetics::Profile>, String>,

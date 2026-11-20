@@ -412,6 +412,7 @@ impl ChatState {
                 guild,
                 channels,
                 partial,
+                ..
             } => {
                 if !partial {
                     self.channels.retain(|_, c| c.guild_id != Some(guild.id));
@@ -489,7 +490,15 @@ impl ChatState {
                     g.stickers.clone_from(stickers);
                 }
             }
-            Event::Connection(_) | Event::Resumed | Event::AuthFailed | Event::Fatal(_) => {}
+            // Voice and calls are handled by `app::voice`.
+            Event::VoiceState(_)
+            | Event::VoiceServer(_)
+            | Event::Call(_)
+            | Event::CallDelete(_)
+            | Event::Connection(_)
+            | Event::Resumed
+            | Event::AuthFailed
+            | Event::Fatal(_) => {}
         }
         fx
     }
@@ -1229,6 +1238,7 @@ impl ChatState {
             kind: if reply.is_some() { 19 } else { 0 },
             pending: true,
             failed: false,
+            call: None,
         };
         self.messages.entry(c).or_default().upsert(m.clone());
         Some(m)
@@ -1758,6 +1768,7 @@ mod tests {
                 guild: Box::new(g.clone()),
                 channels: vec![ch.clone()],
                 partial: false,
+                voice_states: vec![],
             },
             &ctx(),
         );

@@ -622,6 +622,78 @@ pub struct Gif {
     pub height: u32,
 }
 
+/// Call service message data (message type 3).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallMessage {
+    pub participants: Vec<UserId>,
+    /// When the call ended (Unix ms); `None` while it is ongoing.
+    pub ended_ms: Option<u64>,
+}
+
+/// A user's voice connection (guild voice channel or DM call).
+#[derive(Clone, PartialEq, Default)]
+pub struct VoiceState {
+    pub guild_id: Option<GuildId>,
+    /// `None` = the user left voice.
+    pub channel_id: Option<ChannelId>,
+    pub user_id: UserId,
+    pub session_id: String,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    /// Server mute / deafen.
+    pub mute: bool,
+    pub deaf: bool,
+    pub self_video: bool,
+    pub self_stream: bool,
+    pub suppress: bool,
+    /// From `member.user`, when the server sent it.
+    pub user: Option<User>,
+}
+
+impl fmt::Debug for VoiceState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceState")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("user_id", &self.user_id)
+            .field("self_mute", &self.self_mute)
+            .field("self_deaf", &self.self_deaf)
+            .finish_non_exhaustive()
+    }
+}
+
+/// VOICE_SERVER_UPDATE: where to connect for our voice session.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VoiceServer {
+    pub guild_id: Option<GuildId>,
+    /// Set for DM / group calls.
+    pub channel_id: Option<ChannelId>,
+    /// `None` while the server is being reallocated.
+    pub endpoint: Option<String>,
+    pub token: String,
+}
+
+impl fmt::Debug for VoiceServer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceServer")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("has_endpoint", &self.endpoint.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// CALL_CREATE / CALL_UPDATE: a DM or group call.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CallState {
+    pub channel_id: ChannelId,
+    pub message_id: Option<MessageId>,
+    /// Users being rung right now.
+    pub ringing: Vec<UserId>,
+    pub voice_states: Vec<VoiceState>,
+    pub unavailable: bool,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -657,6 +729,9 @@ pub struct Message {
     /// Local-only: sending failed.
     #[serde(default)]
     pub failed: bool,
+    /// Call service message (type 3).
+    #[serde(default)]
+    pub call: Option<CallMessage>,
 }
 
 impl fmt::Debug for Message {
@@ -784,6 +859,8 @@ pub struct ReadyData {
     pub guild_folders: Vec<GuildFolder>,
     /// Per-channel notification overrides (level and timed mutes).
     pub channel_notify: Vec<(ChannelId, super::extras::ChannelNotify)>,
+    /// Users in guild voice channels.
+    pub voice_states: Vec<VoiceState>,
 }
 
 /// A member shown in the member list.
@@ -1031,6 +1108,7 @@ mod tests {
             kind: 0,
             pending: false,
             failed: false,
+            call: None,
         };
         let d = format!("{m:?}");
         assert!(!d.contains("private"));

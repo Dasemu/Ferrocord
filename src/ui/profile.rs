@@ -261,9 +261,33 @@ fn body<'a>(
         .width(Length::Fill)
         .style(theme::rounded_bg(inner_bg, RADIUS));
 
+    // "Call" for someone we have a DM with (the official popout offers a
+    // voice call next to the message box).
+    let mut ident_col = column![ident].spacing(12);
+    if let Some(dm) = app.dm_with(user.id) {
+        let in_call = app.voice.connected_channel() == Some(dm);
+        ident_col = ident_col.push(
+            iced::widget::button(
+                row![
+                    super::icons::icon(super::icons::Icon::Phone, 16.0, p.header_text),
+                    text(if in_call { "In Call" } else { "Call" })
+                        .size(14)
+                        .font(INTER_SEMIBOLD)
+                        .color(p.header_text),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .padding(Padding::from([6, 12]))
+            .on_press(crate::app::Message::Ui(crate::app::Ui::Voice(
+                crate::app::voice::VoiceUi::StartCall(dm),
+            )))
+            .style(theme::icon_button(p)),
+        );
+    }
     column![
         head,
-        container(column![ident, inner].spacing(12))
+        container(column![ident_col, inner].spacing(12))
             .padding(Padding::from([0, 16]).top(4).bottom(16))
             .width(width),
     ]

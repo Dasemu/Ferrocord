@@ -10,6 +10,7 @@ use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::video;
 use super::{
     El, avatar, cosmetics, fit_size, format_day, format_time, format_timestamp, human_size,
     markdown, same_day, ui,
@@ -20,6 +21,7 @@ use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
+use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 use crate::ui::anim_image::message_anim;
 
@@ -29,6 +31,7 @@ pub fn view(app: &App) -> El<'_> {
     let body: El<'_> = match channel {
         Some(c) => column![
             header(app, c),
+            super::voice::dm_call_area(app, c).unwrap_or_else(super::empty),
             messages(app, c),
             detached_bar(app, c),
             composer(app, c)
@@ -212,6 +215,29 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     ]
     .spacing(16)
     .align_y(Alignment::Center);
+    // DMs and groups get the "Start Voice Call" phone first, like the
+    // official header.
+    let tools: El<'a> = if c.kind.is_private() {
+        let in_call = app.voice.connected_channel() == Some(c.id);
+        row![
+            tool(
+                Icon::Phone,
+                if in_call {
+                    "In Call"
+                } else {
+                    "Start Voice Call"
+                },
+                Ui::Voice(crate::app::voice::VoiceUi::StartCall(c.id)),
+                in_call,
+            ),
+            tools
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        tools.into()
+    };
     container(
         row![container(r).width(Length::Fill).clip(true), tools]
             .spacing(16)
@@ -311,7 +337,12 @@ fn messages<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
                 col = col.push(day_divider(app, m.timestamp_ms()));
             }
             let grouped = !new_day && prev.is_some_and(|pm| continues_group(pm, m));
-            col = col.push(message(app, c, m, grouped, now));
+            if m.kind == 3 {
+                // Call service message.
+                col = col.push(super::voice::call_message(app, m, now));
+            } else {
+                col = col.push(message(app, c, m, grouped, now));
+            }
             prev = Some(m);
         }
     }
@@ -853,6 +884,9 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     let p = app.theme.palette;
     if a.is_image() {
         return image_box(app, &preview_key(a), a.width, a.height);
+    }
+    if let Some(clip) = Clip::from_attachment(a) {
+        return video::inline(app, &clip);
     }
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())

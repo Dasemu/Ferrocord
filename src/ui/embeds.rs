@@ -7,12 +7,13 @@ use iced::{Alignment, Background, Border, Color, ContentFit, Font, Length, Paddi
 
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
-use super::{El, format_timestamp, markdown, ui};
+use super::{El, format_timestamp, markdown, ui, video};
 use crate::app::embeds::{
     self, Group, MAX_AUTHOR, MAX_DESCRIPTION, MAX_FIELD_NAME, MAX_FIELD_VALUE, MAX_FOOTER,
     MAX_TITLE, MediaBox, Plan, VideoAction, clip, web_url,
 };
 use crate::app::{App, Message, Ui, now_ms};
+use crate::media::clip::Clip;
 use crate::net::model::{self as model, Embed};
 
 /// All embed cards of a message, grouped (Twitter-style photo sets become one
@@ -240,6 +241,30 @@ fn video_view<'a>(
     spoiler: bool,
 ) -> El<'a> {
     let p = app.theme.palette;
+    // A direct file on the media proxy plays in the inline player.
+    if let VideoAction::Play(u) = embeds::video_action(e, &|u| app.is_allowed_media(u)) {
+        let (width, height) = e
+            .video
+            .as_ref()
+            .map_or((None, None), |v| (v.width, v.height));
+        let name = u
+            .split(['?', '#'])
+            .next()
+            .and_then(|x| x.rsplit('/').next())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("video")
+            .to_owned();
+        let clip = Clip {
+            id: format!("emb:{}:{u}", m.id.0),
+            url: u,
+            name,
+            size: 0,
+            width: width.or(Some(b.w)),
+            height: height.or(Some(b.h)),
+            poster: b.key.clone(),
+        };
+        return video::inline(app, &clip);
+    }
     let poster = media(app, m, b, ContentFit::Contain, 4.0, spoiler);
     let play = container(icon(Icon::Play, 26.0, Color::WHITE))
         .width(56)
@@ -260,9 +285,8 @@ fn video_view<'a>(
         .center_y(b.h as f32);
     let stacked: El<'a> = stack![poster, overlay].into();
     let msg = match embeds::video_action(e, &|u| app.is_allowed_media(u)) {
-        VideoAction::Play(u) => Some(Ui::PlayVideo(u)),
         VideoAction::Browser(u) => Some(Ui::ConfirmLink(u)),
-        VideoAction::None => None,
+        _ => None,
     };
     let mut btn = button(stacked).padding(0).style(theme::link_button(p));
     if let Some(msg) = msg {

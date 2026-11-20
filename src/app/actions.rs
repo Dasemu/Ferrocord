@@ -101,6 +101,10 @@ impl App {
     }
 
     pub(super) fn update_action(&mut self, u: Ui) -> Task<Message> {
+        let u = match self.on_ui_video(u) {
+            Ok(task) => return task,
+            Err(u) => u,
+        };
         match u {
             Ui::StartReply(m) => self.start_reply(m),
             Ui::CancelReply => {
@@ -601,6 +605,9 @@ impl App {
     }
 
     fn escape(&mut self) -> Task<Message> {
+        if let Some(task) = self.escape_video() {
+            return task;
+        }
         if self.emoji_picker.take().is_some()
             || self.gif_picker.take().is_some()
             || self.sticker_picker.take().is_some()

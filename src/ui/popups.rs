@@ -299,7 +299,7 @@ fn picker_position(open: &OpenPicker, window: Size) -> Point {
 }
 
 /// A click-away backdrop plus the popup at `at`.
-fn popup_layer<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui) -> El<'a> {
+pub(crate) fn popup_layer<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui) -> El<'a> {
     popup_layer_from(app, card, at, close, 0.0)
 }
 
