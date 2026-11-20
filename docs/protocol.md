@@ -257,7 +257,106 @@ folder in place; release on a folder -> joins it; release on the same item ->
 click; a release anywhere else (`DragEnd`) cancels. Folders open/closed state
 is local only.
 
-## 10. Voice and calls
+## 10. Profile cosmetics and animations
+
+Field names and URLs were checked against the public user-account docs
+(discord-userdoccers `resources/user`, `resources/collectibles`,
+`resources/presence`, `reference#cdn-formatting`) and Discord's official API
+docs. What could not be confirmed against a live account is listed at the end.
+
+### Payload fields (`net/cosmetics.rs`)
+
+All of these are parsed leniently (`lenient`): a wrong shape drops the field,
+never the message or member list.
+
+| Where | Field | Use |
+|---|---|---|
+| user / partial user / member | `avatar_decoration_data { asset, sku_id }` | frame over the avatar |
+| user | `collectibles.nameplate { asset, palette, label, sku_id }` | row background |
+| user | `primary_guild { identity_guild_id, identity_enabled, tag, badge }` | server tag chip |
+| user | `display_name_styles { font_id, effect_id, colors[] }` | name colour / gradient |
+| user | `banner`, `accent_color` | popout banner |
+| presence | `activities[]` (type, name, details, state, emoji, timestamps, assets, application_id) | popout activity and custom status |
+
+`GUILD_MEMBER_LIST_UPDATE` member items may carry the member's own
+`avatar_decoration_data`; it replaces the user's. The member-list
+subscription (op 14) now sends `"activities": true`, like the official
+client, so presences include activities.
+
+### Profile popout
+
+`GET /users/{id}/profile?type=popout&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true[&guild_id=..]`.
+The body's `user_profile` and `guild_member_profile` are layered (the guild
+value wins when set; an empty guild bio / pronouns falls through). Used:
+`bio`, `pronouns`, `banner`, `accent_color`, `theme_colors[2]`,
+`profile_effect.id`, `badges[]`, `premium_since`, `guild_member`
+(`roles`, `joined_at`), `mutual_guilds[]`, `mutual_friends[]`,
+`mutual_friends_count`. Profiles are cached (48, LRU) and refreshed when
+older than 5 minutes; a failed refresh keeps the old card.
+
+### Profile effects
+
+`GET /user-profile-effects` (once, lazily, when a shown profile has an
+effect) returns the layer configs: `src`, `loop`, `width`, `height`,
+`duration`, `start`, `loopDelay`, `position {x,y}`, `zIndex`,
+`randomizedSources[]`. Layers are drawn over the popout card with the
+timeline in `net::cosmetics::layer_time` (one-shot layers end, looping ones
+repeat after `loopDelay`), scaled so the union of the layer rectangles spans
+the card width. Frames are decoded at a reduced width (256 px) and scaled on
+draw; they are dropped when the popout closes.
+
+### CDN URLs
+
+| Asset | URL |
+|---|---|
+| avatar (still) | `/avatars/{uid}/{hash}.png?size=80` (160 in the popout) |
+| avatar (animated, `a_`) | same with `.gif` |
+| decoration | `/avatar-decoration-presets/{asset}.png?size=96&passthrough=false` (still) / `passthrough=true` (APNG, `a_` assets) |
+| banner | `/banners/{uid}/{hash}.png|gif?size=600`; member banner `/guilds/{gid}/users/{uid}/banners/{hash}` |
+| nameplate | `/assets/collectibles/{asset}static.png` (the animated variant is `asset.webm`: not decoded) |
+| server tag badge | `/guild-tag-badges/{gid}/{badge}.png?size=32` |
+| profile badge | `/badge-icons/{icon}.png` (fetched from the CDN, not bundled; a neutral dot shows until loaded) |
+| activity art | application asset `/app-assets/{app}/{id}.png`, `mp:` -> `media.discordapp.net`, `spotify:` -> `i.scdn.co/image` |
+| animated emoji | `/emojis/{id}.gif?size=96` |
+
+`i.scdn.co` was added to the media host allow-list for Spotify album art;
+downloads never carry the token.
+
+### Animation engine (`app/anim.rs`)
+
+* GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
+  `image` crate; single-frame images are left to the static path.
+* Caps per asset (source frames read, frames kept, bytes kept, width) are
+  per `Class`; extra frames are merged (delay added to the kept frame) so the
+  duration is unchanged. Sources above 2048 px are refused.
+* `AnimCache` is an LRU with a 32 MB budget. Banner and effect frames are
+  dropped when the popout closes.
+* Lists and messages show the still image; hovering a row / message starts
+  the clock for that avatar, decoration and (in messages) animated emoji.
+  The popout animates everything. A `time::every(66 ms)` subscription exists
+  only while `AnimState::active` is true (something animated is hovered or
+  the popout shows one); "Reduce motion" in Settings turns all of it off.
+* Handles are created once when data arrives (`Handle::from_rgba` in the
+  decode task), never in `view`.
+
+### Display name styles
+
+Effects `solid`, `gradient`, `glow` (falls back to gradient), `prism` and
+`gummy` are drawn as a solid colour or a per-character gradient; `neon`,
+`toon` and `pop` (glow, outline, drop shadow) are drawn as the first colour.
+Animation (prism scroll, gummy squash) is not drawn. Fonts other than the
+default gg Sans are not bundled: a bold weight of Inter stands in for them.
+
+### Not verified against a live account
+
+* The response key of `GET /user-profile-effects` (`profile_effect_configs`
+  is what clients use; a bare array and `configs` are accepted too) and the
+  coordinate system of effect layers (the scale-to-card rule is inferred).
+* `passthrough=true` for decoration assets not prefixed `a_` (those are
+  treated as still).
+* Server-specific display name styles and nameplates in member objects.
+
+## 11. Voice and calls
 
 Design, DAVE and the video feasibility pass: `docs/voice.md`.
 

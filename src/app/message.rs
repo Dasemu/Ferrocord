@@ -38,7 +38,10 @@ pub enum Ui {
     SelectGuild(GuildId),
     SelectChannel(ChannelId),
     ToggleCategory(ChannelId),
+    /// Test/automation hook: replace the composer text.
     ComposerChanged(String),
+    /// An editor action in the composer.
+    ComposerAction(iced::widget::text_editor::Action),
     Send,
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
@@ -62,6 +65,8 @@ pub enum Ui {
     // -- edit and delete
     StartEdit(MessageId),
     EditChanged(String),
+    /// An editor action in the inline edit box.
+    EditAction(iced::widget::text_editor::Action),
     SubmitEdit,
     CancelEdit,
     /// Up arrow in an empty composer.
@@ -126,6 +131,18 @@ pub enum Ui {
     /// Tray "Mute notifications" / settings toggle.
     ToggleMuted,
     ToggleAutostart,
+    /// "Reduce motion": no avatar, emoji, decoration or effect animation.
+    ToggleReduceMotion,
+    // -- profile popout and animation
+    OpenProfile {
+        user: UserId,
+        guild: Option<GuildId>,
+    },
+    CloseProfile,
+    /// The pointer entered a row / message with an avatar to animate.
+    HoverEnter(super::anim::Hover),
+    HoverLeave(super::anim::Hover),
+    AnimTick(std::time::Instant),
     // -- channel header popovers
     TogglePopover(Popover),
     ClosePopover,
@@ -135,7 +152,6 @@ pub enum Ui {
     Unpin(ChannelId, MessageId),
     InboxMore,
     InboxGuildOnly(bool),
-    OpenHelp,
     // -- add a server
     OpenAddServer,
     CloseAddServer,
@@ -313,6 +329,17 @@ pub enum Done {
         result: Result<(), String>,
     },
     Voice(super::voice::VoiceDone),
+    Profile {
+        key: super::profile::Key,
+        result: Result<Box<crate::net::cosmetics::Profile>, String>,
+    },
+    ProfileEffects(Result<Vec<crate::net::cosmetics::ProfileEffect>, String>),
+    /// A decoded animation (or `None` when it failed / is not animated).
+    Anim {
+        key: String,
+        class: super::anim::Class,
+        anim: Option<std::sync::Arc<super::anim::Anim>>,
+    },
     Screenshot(iced::window::Screenshot),
     ScreenshotReady,
     Ignored,

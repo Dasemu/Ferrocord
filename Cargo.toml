@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.8.1"
+version = "0.9.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -33,10 +33,12 @@ sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false }
+# Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
+unicode-segmentation = "1"
 emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "gif", "webp"] }
 # Voice: Discord's mandatory audio/video E2EE (DAVE, MLS via OpenMLS), pure Rust.
 davey = "0.2"
 # Voice transport encryption modes Discord requires (aead_aes256_gcm_rtpsize,
@@ -65,6 +67,8 @@ openmls_rust_crypto = "0.5"
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"
+# Encodes an APNG fixture in the animation tests (already compiled for `image`).
+png = "0.18"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }
 
 [profile.release]

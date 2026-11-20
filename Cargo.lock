@@ -1684,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.8.1"
+version = "0.9.1"
 dependencies = [
  "aes-gcm",
  "arboard",
@@ -1708,6 +1708,7 @@ dependencies = [
  "openmls_basic_credential",
  "openmls_rust_crypto",
  "opus",
+ "png 0.18.1",
  "qrcode",
  "rand 0.8.8",
  "reqwest",
@@ -1725,6 +1726,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
  "url",
  "zbus",
 ]

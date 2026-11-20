@@ -2,7 +2,10 @@
 //! everything that touches the network, disk or keyring runs in a `Task`.
 
 pub mod actions;
+pub mod anim;
 mod background;
+pub mod composer;
+pub mod cosmetics;
 pub mod emoji;
 pub mod features;
 pub mod folders;
@@ -14,6 +17,7 @@ pub mod markdown;
 pub mod members;
 pub mod message;
 pub mod panels;
+pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
@@ -93,7 +97,8 @@ pub struct App {
     pub connection: ConnectionState,
     pub chat: ChatState,
     pub view: View,
-    pub composer: String,
+    pub composer: composer::Composer,
+    drafts: composer::Drafts,
     last_typing_sent: HashMap<ChannelId, u64>,
     pub collapsed: HashSet<ChannelId>,
     pub revealed_spoilers: HashSet<MessageId>,
@@ -152,6 +157,10 @@ pub struct App {
     /// "Open at login" (the autostart file exists).
     pub autostart: bool,
     pub settings_open: bool,
+    /// Animation clock, hover target and decoded frames.
+    pub anim: anim::AnimState,
+    /// Profile popout, fetched profiles and effect configs.
+    pub profiles: profile::ProfileState,
     /// Handle to the running tray, once it registered.
     tray_control: Option<tray::Control>,
     /// Voice channels, calls and voice settings.
@@ -211,7 +220,8 @@ impl App {
             connection: ConnectionState::Disconnected,
             chat: ChatState::default(),
             view: View::Home(None),
-            composer: String::new(),
+            composer: composer::Composer::new(),
+            drafts: composer::Drafts::default(),
             last_typing_sent: HashMap::new(),
             collapsed: HashSet::new(),
             revealed_spoilers: HashSet::new(),
@@ -254,6 +264,8 @@ impl App {
             prefs,
             autostart: false,
             settings_open: false,
+            anim: anim::AnimState::default(),
+            profiles: profile::ProfileState::default(),
             tray_control: None,
             voice,
             cfg,
@@ -364,6 +376,7 @@ impl App {
                 }
             }
         }
+        self.mock_load_cosmetics();
         // Mock sticker images, under the CDN URLs the views ask for.
         for (st, rgb) in mock::mock_stickers().into_iter().zip([
             [255u8, 140, 60],
@@ -401,6 +414,13 @@ impl App {
             Some(ScreenshotScreen::Login) => {
                 self.auth = AuthState::LoggedOut { error: None };
                 self.qr = Some(qr_ready("https://discord.com/ra/mock-fingerprint-not-real"));
+            }
+            Some(ScreenshotScreen::Multiline) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(Some(mock::DM_ALICE));
+                self.chat.mark_read(mock::DM_ALICE);
             }
             Some(ScreenshotScreen::Dms) => {
                 self.auth = AuthState::LoggedIn {
@@ -495,6 +515,23 @@ impl App {
                 };
                 self.mock_voice_screen(s);
             }
+            Some(ScreenshotScreen::ProfileDm) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(Some(mock::DM_ALICE));
+                self.chat.mark_read(mock::DM_ALICE);
+            }
+            Some(ScreenshotScreen::Profile) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Guild {
+                    guild: mock::GUILD_RUST,
+                    channel: Some(mock::CH_GENERAL),
+                };
+                self.chat.mark_read(mock::CH_GENERAL);
+            }
             Some(s) if s.is_round3() => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -522,6 +559,18 @@ impl App {
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        if screen == Some(ScreenshotScreen::Profile) {
+            let _ = self.update_ui(Ui::OpenProfile {
+                user: Snowflake(2),
+                guild: Some(mock::GUILD_RUST),
+            });
+            if let Some(p) = self.profiles.popout.as_mut() {
+                p.at = iced::Point::new(690.0, 70.0);
+            }
+        }
+        if screen == Some(ScreenshotScreen::ProfileDm) {
+            let _ = self.request_images();
+        }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
             self.chat.my_status = Presence::Dnd;
@@ -700,6 +749,8 @@ impl App {
                 Task::none()
             }
             Ui::SelectHome => {
+                // Like the official client, picking a destination leaves Discover.
+                self.discover = None;
                 let last_dm = self.chat.dm_list().first().map(|c| c.id);
                 let target = match self.view {
                     View::Home(c) => c,
@@ -709,6 +760,7 @@ impl App {
                 self.switch_view(View::Home(target))
             }
             Ui::SelectGuild(g) => {
+                self.discover = None;
                 if let View::Guild { guild, .. } = self.view
                     && guild == g
                 {
@@ -725,6 +777,7 @@ impl App {
                 self.switch_view(View::Guild { guild: g, channel })
             }
             Ui::SelectChannel(c) => {
+                self.discover = None;
                 let view = match self.chat.channels.get(&c) {
                     Some(ch) if ch.kind.is_private() => View::Home(Some(c)),
                     Some(ch) => match ch.guild_id {
@@ -753,23 +806,15 @@ impl App {
                 Task::none()
             }
             Ui::ComposerChanged(s) => {
-                self.composer = s;
-                let Some(c) = self.open_channel() else {
-                    return Task::none();
-                };
-                let now = now_ms();
-                let last = self.last_typing_sent.get(&c).copied().unwrap_or(0);
-                if self.cfg.mock
-                    || self.composer.is_empty()
-                    || now.saturating_sub(last) < TYPING_INTERVAL_MS
-                {
-                    return Task::none();
+                self.composer.set_text(&s);
+                self.after_composer_edit()
+            }
+            Ui::ComposerAction(a) => {
+                if self.composer.perform(a) {
+                    self.after_composer_edit()
+                } else {
+                    Task::none()
                 }
-                self.last_typing_sent.insert(c, now);
-                let rest = self.rest.clone();
-                Task::perform(async move { rest.trigger_typing(c).await }, |_| {
-                    Message::Done(Done::Ignored)
-                })
             }
             Ui::Send => self.send(),
             Ui::Scrolled(vp) => {
@@ -831,16 +876,52 @@ impl App {
                 self.chat.prune_typing(now_ms());
                 Task::none()
             }
+            Ui::OpenProfile { .. }
+            | Ui::CloseProfile
+            | Ui::HoverEnter(_)
+            | Ui::HoverLeave(_)
+            | Ui::AnimTick(_)
+            | Ui::ToggleReduceMotion => self.update_cosmetics(u),
             other => self.update_action(other),
         }
     }
 
+    /// Typing indicator after the composer text changed.
+    fn after_composer_edit(&mut self) -> Task<Message> {
+        let Some(c) = self.open_channel() else {
+            return Task::none();
+        };
+        let now = now_ms();
+        let last = self.last_typing_sent.get(&c).copied().unwrap_or(0);
+        if self.cfg.mock
+            || self.composer.is_empty()
+            || now.saturating_sub(last) < TYPING_INTERVAL_MS
+        {
+            return Task::none();
+        }
+        self.last_typing_sent.insert(c, now);
+        let rest = self.rest.clone();
+        Task::perform(async move { rest.trigger_typing(c).await }, |_| {
+            Message::Done(Done::Ignored)
+        })
+    }
+
     fn switch_view(&mut self, view: View) -> Task<Message> {
-        if let Some(prev) = self.open_channel() {
+        let prev = self.open_channel();
+        if let Some(prev) = prev {
             self.chat.trim_inactive(prev);
+            // Keep the unsent text of the channel we leave.
+            self.drafts.save(prev, self.composer.text());
         }
         self.view = view;
         self.composer.clear();
+        let next = match view {
+            View::Home(c) => c,
+            View::Guild { channel, .. } => channel,
+        };
+        if let Some(t) = next.and_then(|c| self.drafts.take(c)) {
+            self.composer.set_text(&t);
+        }
         self.reset_channel_ui();
         let members = self.sync_members();
         let (g, c) = match view {
@@ -990,7 +1071,7 @@ impl App {
     }
 
     fn send(&mut self) -> Task<Message> {
-        let content = self.composer.trim().to_owned();
+        let content = self.composer.text().trim().to_owned();
         let Some(c) = self.open_channel() else {
             return Task::none();
         };
@@ -1256,6 +1337,9 @@ impl App {
     fn on_done(&mut self, d: Done) -> Task<Message> {
         match d {
             Done::Ignored => Task::none(),
+            d @ (Done::Profile { .. } | Done::ProfileEffects(_) | Done::Anim { .. }) => {
+                self.on_cosmetics_done(d)
+            }
             Done::AutostartLoaded(on) => {
                 self.autostart = on;
                 Task::none()
@@ -1269,7 +1353,13 @@ impl App {
             }
             Done::FontsLoaded => {
                 self.fonts_ready = true;
-                if let Some((_, _)) = &self.cfg.screenshot {
+                if let Some((screen, _)) = &self.cfg.screenshot {
+                    // The editor buffer must be shaped once the fonts exist.
+                    if *screen == ScreenshotScreen::Multiline {
+                        self.composer.set_text(
+                            "Dinner at 8? 🍕\nI booked the table by the window.\nShift+Enter breaks the line,\nEnter sends it 🦀",
+                        );
+                    }
                     return Task::perform(
                         async { tokio::time::sleep(Duration::from_millis(600)).await },
                         |_| Message::Done(Done::ScreenshotReady),
@@ -1554,10 +1644,12 @@ impl App {
 
     /// Fetches avatars / icons / attachment previews that are visible now.
     fn request_images(&mut self) -> Task<Message> {
+        let profiles = self.request_profiles();
         if self.cfg.mock {
-            return Task::none();
+            return profiles;
         }
-        let mut urls: Vec<String> = Vec::new();
+        let anims = self.request_anims();
+        let mut urls: Vec<String> = self.cosmetic_urls();
         for g in &self.chat.guilds {
             if let Some(u) = self.rest.guild_icon_url(g, 96) {
                 urls.push(u);
@@ -1678,7 +1770,7 @@ impl App {
             .into_iter()
             .filter(|u| self.rest.is_allowed_media_url(u))
             .filter(|u| self.images.want(u))
-            .take(64)
+            .take(96)
             .map(|url| {
                 let rest = self.rest.clone();
                 Task::perform(
@@ -1698,7 +1790,7 @@ impl App {
                 )
             })
             .collect();
-        Task::batch(tasks)
+        Task::batch(tasks.into_iter().chain([profiles, anims]))
     }
 
     /// Parsed markdown for a message body (cached, bounded).
@@ -1774,6 +1866,11 @@ impl App {
                 Subscription::run(tray::instance::show_requests)
                     .map(|()| Message::Ui(Ui::ShowWindow)),
             );
+        }
+        // Ticks exist only while something animated is hovered or the
+        // popout shows one: idle CPU stays flat otherwise.
+        if self.anim.active(self.prefs.reduce_motion) {
+            subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
         }
         if self.cfg.mock {
             return Subscription::batch(subs);

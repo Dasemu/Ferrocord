@@ -163,9 +163,8 @@ fn flow<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
     for i in v {
         match i {
             Inline::LineBreak => lines = lines.push(finish(&mut line)),
-            Inline::Emoji { name, id, .. } => {
-                let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
-                match ctx.app.image(&key) {
+            Inline::Emoji { name, id, animated } => {
+                match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                     Some(h) => line.push(
                         iced::widget::image(h.clone())
                             .width(emoji_size)
@@ -223,21 +222,27 @@ fn push_text<'a>(
     ctx: &Ctx<'a>,
 ) {
     let p = ctx.app.theme.palette;
-    let mut sp = span(s)
-        .font(font_for(st))
-        .size(st.size)
-        .color(st.color)
-        .underline(st.underline)
-        .strikethrough(st.strike);
-    if st.spoiler_hidden {
-        sp = sp
-            .color(p.spoiler)
-            .background(p.spoiler)
-            .link(Ui::RevealSpoiler(ctx.msg));
-    } else if let Some(l) = link {
-        sp = sp.link(l);
+    // Unicode emoji get their own spans with the colour emoji family.
+    for (is_emoji, run) in super::emoji_font::emoji_runs(&s) {
+        let mut sp = span(run)
+            .font(font_for(st))
+            .size(st.size)
+            .color(st.color)
+            .underline(st.underline)
+            .strikethrough(st.strike);
+        if is_emoji {
+            sp = sp.font(super::emoji_font::EMOJI_FONT);
+        }
+        if st.spoiler_hidden {
+            sp = sp
+                .color(p.spoiler)
+                .background(p.spoiler)
+                .link(Ui::RevealSpoiler(ctx.msg));
+        } else if let Some(l) = link.clone() {
+            sp = sp.link(l);
+        }
+        spans.push(sp);
     }
-    spans.push(sp);
 }
 
 fn inline<'a>(
@@ -421,9 +426,8 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
     };
     let mut r = row![].spacing(4);
     for i in v {
-        if let Inline::Emoji { name, id, .. } = i {
-            let key = crate::app::emoji_url(&ctx.app.cfg.cdn_url, *id);
-            let el: El<'a> = match ctx.app.image(&key) {
+        if let Inline::Emoji { name, id, animated } = i {
+            let el: El<'a> = match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                 Some(h) => iced::widget::image(h.clone()).width(48).height(48).into(),
                 None => container(text(format!(":{name}:")).size(16).color(p.text_secondary))
                     .padding(Padding::from([10, 6]))

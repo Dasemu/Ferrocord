@@ -1,4 +1,4 @@
-//! Channel-header popovers (notification settings, pins, inbox, help), the
+//! Channel-header popovers (notification settings, pins, inbox), the
 //! "Add a Server" dialogs and the Discover page.
 
 use iced::Task;
@@ -13,9 +13,6 @@ use crate::net::extras::{
 };
 use crate::net::model::Message as Msg;
 use crate::net::model::*;
-
-/// What the official client's "?" button opens.
-pub const HELP_URL: &str = "https://support.discord.com/";
 
 /// Header popovers' state.
 #[derive(Debug, Clone, Default)]
@@ -53,7 +50,6 @@ impl App {
                     Task::none()
                 }
             }
-            Ui::OpenHelp => self.update_ui(Ui::OpenUrl(HELP_URL.into())),
             // -- add a server
             Ui::OpenAddServer => {
                 self.close_overlays();

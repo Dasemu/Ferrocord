@@ -64,7 +64,7 @@ fn main() -> iced::Result {
     let theme = ferrocord::ui::theme::FerroTheme::new(cfg.theme).iced_theme();
     // A daemon, not an application: hiding to the tray closes the window
     // (freeing the renderer) while the app keeps running.
-    iced::daemon(
+    let app = iced::daemon(
         move || App::boot(cfg.clone()),
         App::update,
         ferrocord::ui::view_window,
@@ -73,6 +73,11 @@ fn main() -> iced::Result {
     .subscription(App::subscription)
     .theme(move |_: &App, _window: iced::window::Id| theme.clone())
     .default_font(ferrocord::ui::theme::INTER)
-    .antialiasing(true)
-    .run()
+    .antialiasing(true);
+    // Colour emoji without a system font (same family name as the system one).
+    if ferrocord::ui::emoji_font::needs_bundled_emoji_font() {
+        app.font(ferrocord::ui::theme::NOTO_COLOR_EMOJI).run()
+    } else {
+        app.run()
+    }
 }

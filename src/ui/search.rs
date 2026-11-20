@@ -3,8 +3,9 @@
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Length, Padding};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
-use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, format_timestamp, ui};
 use crate::app::{App, Ui, now_ms};
 use crate::net::model::{self as model, Message as Msg};
@@ -124,17 +125,20 @@ fn result_card<'a>(app: &'a App, m: &'a Msg, now: u64) -> El<'a> {
     };
     let body = column![
         row![
-            text(m.author.display_name().to_owned())
-                .size(15)
-                .font(INTER_MEDIUM)
-                .color(p.header_text),
+            emoji_text(
+                m.author.display_name(),
+                15.0,
+                p.header_text,
+                INTER_MEDIUM,
+                false
+            ),
             text(format_timestamp(m.timestamp_ms(), now))
                 .size(12)
                 .color(p.text_muted),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        text(snippet).size(14).color(p.text_normal),
+        emoji_text(snippet, 14.0, p.text_normal, INTER, true),
     ]
     .spacing(2)
     .width(Length::Fill);

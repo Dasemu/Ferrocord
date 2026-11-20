@@ -6,6 +6,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Length, Padding, Point, Size};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, ui};
@@ -20,7 +21,7 @@ const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
 /// Number of popup slots [`layers`] always returns.
-pub const SLOTS: usize = 8;
+pub const SLOTS: usize = 9;
 
 /// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
 /// popup is an empty placeholder so the widget tree keeps its shape (see
@@ -102,8 +103,12 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
         None => super::empty(),
     };
+    let profile = match super::profile::popout(app) {
+        Some((card, at)) => popup_layer(app, card, at, Ui::CloseProfile),
+        None => super::empty(),
+    };
     vec![
-        status, menu, picker, gif, sticker, delete, popover, rail_menu,
+        status, menu, picker, gif, sticker, delete, popover, rail_menu, profile,
     ]
 }
 
@@ -517,7 +522,10 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         "\u{1F3C1}",
     ];
     for (i, face) in FACES.iter().enumerate() {
-        tabs = tabs.push(tab(text(*face).size(16).into(), Section::Unicode(i)));
+        tabs = tabs.push(tab(
+            emoji_text(*face, 16.0, p.text_normal, INTER, false),
+            Section::Unicode(i),
+        ));
     }
 
     // Grid.
@@ -544,7 +552,7 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
     for e in unicode {
         cells.push(emoji_button(
             p,
-            text(e.as_str()).size(24).into(),
+            emoji_text(e.as_str(), 24.0, p.text_normal, INTER, false),
             Emoji::unicode(e.as_str()),
         ));
     }

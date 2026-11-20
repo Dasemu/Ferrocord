@@ -214,7 +214,7 @@ fn edit_flow_up_arrow_save_and_edited_marker() {
     ui(&mut a, Ui::EditLast);
     let e = a.editing.clone().expect("editing");
     assert_eq!(e.message, mine.id);
-    assert_eq!(e.text, mine.content);
+    assert_eq!(e.text.text(), mine.content);
     let _ = ferrocord::ui::view(&a);
     ui(
         &mut a,
@@ -384,7 +384,7 @@ fn reactions_toggle_and_picker_flows() {
             animated: false,
         }),
     );
-    assert_eq!(a.composer, "🍕 <:ferris:1001> ");
+    assert_eq!(a.composer.text(), "🍕 <:ferris:1001> ");
 }
 
 #[test]
@@ -1188,7 +1188,7 @@ fn gif_picker_opens_searches_and_sends() {
     let url = a.gif_picker.as_ref().unwrap().results[0].url.clone();
     let _ = a.update(Message::Ui(Ui::PickGif(url.clone())));
     assert!(a.gif_picker.is_none());
-    assert_eq!(a.composer, "draft");
+    assert_eq!(a.composer.text(), "draft");
     let last_msg = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
     assert_eq!(last_msg.content, url);
 }
@@ -1426,4 +1426,113 @@ mod voice {
         assert!(a.voice.conn.is_none());
         assert!(a.voice.members.is_empty());
     }
+}
+// -- composer (text_editor) ---------------------------------------------------
+
+fn type_text(a: &mut App, s: &str) {
+    use iced::widget::text_editor::{Action, Edit};
+    for ch in s.chars() {
+        let edit = if ch == '\n' {
+            Edit::Enter
+        } else {
+            Edit::Insert(ch)
+        };
+        ui(a, Ui::ComposerAction(Action::Edit(edit)));
+    }
+}
+
+#[test]
+fn multi_line_text_is_sent_with_its_newlines() {
+    let mut a = app();
+    type_text(&mut a, "first\nsecond\n\nthird");
+    assert_eq!(a.composer.text(), "first\nsecond\n\nthird");
+    ui(&mut a, Ui::Send);
+    assert!(a.composer.is_empty());
+    let c = a.open_channel().expect("channel");
+    let last = a.chat.messages[&c]
+        .messages
+        .back()
+        .expect("pending")
+        .clone();
+    assert_eq!(last.content, "first\nsecond\n\nthird");
+}
+
+#[test]
+fn drafts_are_kept_per_channel() {
+    let mut a = app();
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    type_text(&mut a, "half written\nline two");
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert!(a.composer.is_empty());
+    type_text(&mut a, "other");
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    assert_eq!(a.composer.text(), "half written\nline two");
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert_eq!(a.composer.text(), "other");
+    // Sending clears the draft for good.
+    ui(&mut a, Ui::Send);
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert!(a.composer.is_empty());
+}
+
+#[test]
+fn editing_a_multi_line_message_keeps_its_lines() {
+    let mut a = app();
+    let c = a.open_channel().expect("channel");
+    // Up arrow edits the last own message; give it two lines first.
+    ui(&mut a, Ui::EditLast);
+    let id = a.editing.as_ref().expect("editing").message;
+    ui(&mut a, Ui::CancelEdit);
+    a.chat.set_content(c, id, "one\ntwo ü🍕");
+    ui(&mut a, Ui::EditLast);
+    let e = a.editing.clone().expect("editing");
+    assert_eq!(e.text.text(), "one\ntwo ü🍕");
+    type_text_edit(&mut a, "\nthree");
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_none());
+    let m = a.chat.message(c, id).expect("message");
+    assert_eq!(m.content, "one\ntwo ü🍕\nthree");
+}
+
+fn type_text_edit(a: &mut App, s: &str) {
+    use iced::widget::text_editor::{Action, Edit};
+    for ch in s.chars() {
+        let edit = if ch == '\n' {
+            Edit::Enter
+        } else {
+            Edit::Insert(ch)
+        };
+        ui(a, Ui::EditAction(Action::Edit(edit)));
+    }
+}
+
+// -- leaving Discover ---------------------------------------------------------
+
+#[test]
+fn picking_a_destination_leaves_discover() {
+    let g = mock::GUILD_RUST;
+    for dest in [
+        Ui::SelectHome,
+        Ui::SelectGuild(g),
+        Ui::SelectChannel(mock::CH_HELP),
+        Ui::Escape,
+        Ui::CloseDiscover,
+    ] {
+        let mut a = app();
+        ui(&mut a, Ui::OpenDiscover);
+        assert!(a.discover.is_some());
+        ui(&mut a, dest.clone());
+        assert!(a.discover.is_none(), "{dest:?} must leave Discover");
+    }
+}
+
+#[test]
+fn clicking_the_current_server_still_leaves_discover() {
+    let mut a = app();
+    assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
+    ui(&mut a, Ui::OpenDiscover);
+    ui(&mut a, Ui::SelectGuild(mock::GUILD_RUST));
+    assert!(a.discover.is_none());
+    assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
 }

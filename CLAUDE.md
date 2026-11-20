@@ -55,7 +55,7 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - File dialog: `rfd` (xdg-portal). Clipboard files/images: `arboard`.
 - Keyring tests must use `MemoryStore` (no Secret Service in CI).
 - `main` defaults `ICED_BACKEND=tiny-skia` (wgpu costs 100-200 MB RSS).
-- Voice: libopus is built from bundled source and linked statically (`.cargo/config.toml`,
-  needs `cmake`); `cpal` needs `libasound2-dev`. The voice connection is a subscription that
-  exists only while in a call; never open audio devices outside it. DAVE is mandatory
-  (close 4017 without it); `davey` calls on network data stay under `catch_unwind`.
+- Voice: static libopus (needs `cmake`), `cpal` (`libasound2-dev`); the voice subscription exists
+  only in a call. DAVE is mandatory (close 4017); keep `davey` calls under `catch_unwind`.
+- Unicode emoji need the `Noto Color Emoji` span (`ui::emoji_font::emoji_text`/`emoji_runs`); `text_editor` (composer) cannot take spans and falls back to the loaded font. The bundled TTF (OFL) loads only if no system copy exists.
+- Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Never set a container `shadow` (tiny-skia draws it unclipped: header glitches).

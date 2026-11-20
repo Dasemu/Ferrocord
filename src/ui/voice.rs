@@ -52,8 +52,7 @@ fn member_user(app: &App, v: &VoiceState) -> User {
             id: v.user_id,
             username: v.user_id.to_string(),
             global_name: None,
-            avatar: None,
-            bot: false,
+            ..Default::default()
         })
 }
 
