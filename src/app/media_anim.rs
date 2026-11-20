@@ -12,21 +12,54 @@
 //! considered, so the decoded frames stay within the cache budget.
 //! Attachments and stickers reuse the bytes the image loader already
 //! downloaded; emoji fetch their `.gif` once.
+//!
+//! `gifv` embeds (Tenor / Giphy links) are MP4s: the newest [`MAX_GIFVS`]
+//! are downloaded to a temporary file and turned into frames by the video
+//! helper's frames mode ([`crate::media::gifv`]), at most
+//! [`GIFV_DECODES`] at a time, then play like any GIF. Without the helper
+//! (it is Unix-only) they keep their still frame.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use iced::Task;
+use tokio::sync::Semaphore;
 
 use super::anim::{self, Anim, Class};
 use super::cosmetics::emoji_anim_url;
 use super::markdown::{Block, Inline};
 use super::message::Done;
 use super::{App, Message, preview_key};
+use crate::media::gifv::{self, FrameSpec};
+use crate::media::scratch::Scratch;
+use crate::media::video;
 use crate::net::model::{self, Attachment, Snowflake, StickerFormat};
+use crate::net::rest::RestClient;
 
 /// Messages (newest first) whose media may animate.
 pub const RECENT_MESSAGES: usize = 30;
+/// `gifv` clips (newest first) that are decoded: at most 6 MB of frames
+/// each, so together they stay well inside the cache budget.
+pub const MAX_GIFVS: usize = 6;
+/// Helper processes decoding `gifv` clips at the same time.
+pub const GIFV_DECODES: usize = 2;
+/// Larger `gifv` files are not downloaded.
+pub const MAX_GIFV_DOWNLOAD: u64 = 16 * 1024 * 1024;
+
+/// What the helper keeps of a `gifv` clip: frames fitted to the chat's
+/// media box, within the [`Class::Gifv`] budget.
+pub fn gifv_spec() -> FrameSpec {
+    let lim = Class::Gifv.limits();
+    FrameSpec {
+        max_w: lim.target_width,
+        max_h: 300,
+        max_frames: lim.max_frames as u32,
+        max_bytes: lim.max_bytes as u64,
+    }
+}
+
+static GIFV_SLOTS: Semaphore = Semaphore::const_new(GIFV_DECODES);
 
 /// The URL's path ends in an extension that can hold an animation.
 pub fn looks_animated(url: &str) -> bool {
@@ -62,6 +95,11 @@ pub fn message_media(m: &model::Message, cdn: &str, out: &mut Vec<(String, Class
     for key in crate::ui::embeds::media_keys(m) {
         if looks_animated(&key) {
             out.push((key, Class::Media));
+        }
+    }
+    for e in super::embeds::visible_embeds(m) {
+        if let Some(src) = super::embeds::gifv_source(e) {
+            out.push((src.to_owned(), Class::Gifv));
         }
     }
     for r in &m.reactions {
@@ -143,8 +181,22 @@ impl App {
             return out;
         };
         let cdn = self.cfg.cdn_url.trim_end_matches('/');
+        let mut gifvs = 0;
         for m in w.messages.iter().rev().take(RECENT_MESSAGES) {
+            let from = out.len();
             message_media(m, cdn, &mut out);
+            // Newest first: older clips beyond the limit keep their still.
+            let mut i = from;
+            while i < out.len() {
+                if out[i].1 == Class::Gifv {
+                    gifvs += 1;
+                    if gifvs > MAX_GIFVS {
+                        out.remove(i);
+                        continue;
+                    }
+                }
+                i += 1;
+            }
             if m.content.contains("<a:") {
                 let mut ids = Vec::new();
                 animated_emoji(&self.parsed_markdown(m.id, &m.content), &mut ids);
@@ -157,9 +209,33 @@ impl App {
         out
     }
 
+    /// Downloads and decodes a `gifv` clip (see [`load_gifv`]).
+    pub(super) fn gifv_task(&self, url: String) -> Task<Message> {
+        let rest = self.rest.clone();
+        let dir = self.video_dir();
+        Task::perform(
+            async move {
+                let anim = load_gifv(&rest, &url, dir).await;
+                (url, anim)
+            },
+            |(key, anim)| {
+                Message::Done(Done::Anim {
+                    key,
+                    class: Class::Gifv,
+                    anim,
+                })
+            },
+        )
+    }
+
     /// Mock mode: the mock GIF attachment (first frame as the still image,
-    /// all frames as its animation).
+    /// all frames as its animation) and the mock `gifv` clip.
     pub(super) fn mock_load_media_anims(&mut self) {
+        self.anim.cache.insert(
+            crate::mock::MOCK_GIFV.into(),
+            Arc::new(anim::from_rgba_frames(crate::mock::mock_gifv_frames())),
+            Class::Gifv,
+        );
         let frames = crate::mock::mock_anim_frames();
         if let Some((w, h, px, _)) = frames.first().cloned() {
             self.images.insert(
@@ -206,6 +282,39 @@ impl App {
             },
             move |(key, anim)| Message::Done(Done::Anim { key, class, anim }),
         )
+    }
+}
+
+/// A `gifv` clip as an animation: downloaded to a temporary file (deleted
+/// right after), decoded by the helper's frames mode. `None` when the
+/// helper is missing or anything fails: the still frame stays.
+async fn load_gifv(rest: &RestClient, url: &str, dir: PathBuf) -> Option<Arc<Anim>> {
+    let helper = video::helper_path()?;
+    let _slot = GIFV_SLOTS.acquire().await.ok()?;
+    let (scratch, file) = tokio::task::spawn_blocking(move || Scratch::create(&dir, "mp4"))
+        .await
+        .ok()?
+        .ok()?;
+    if let Err(e) = rest
+        .download_file(url, file, MAX_GIFV_DOWNLOAD, |_, _| {})
+        .await
+    {
+        tracing::debug!(error = %e, "gifv download failed");
+        return None;
+    }
+    let frames = tokio::task::spawn_blocking(move || {
+        let r = gifv::decode_with(&helper, scratch.path(), gifv_spec());
+        drop(scratch);
+        r
+    })
+    .await
+    .ok()?;
+    match frames {
+        Ok(f) => Some(Arc::new(anim::from_rgba_frames(f))),
+        Err(f) => {
+            tracing::debug!(detail = %f.detail(), "gifv decode failed");
+            None
+        }
     }
 }
 

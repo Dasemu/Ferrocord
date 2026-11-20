@@ -384,10 +384,9 @@ impl App {
         // Message GIFs and stickers are decoded from the image loader's
         // bytes (`decode_media_anim`); they are fetched here only when that
         // already happened and the animation was evicted since.
-        let messages = self
-            .message_anim_assets()
-            .into_iter()
-            .filter(|(k, c)| *c == Class::Emoji || self.images.get(k).is_some());
+        let messages = self.message_anim_assets().into_iter().filter(|(k, c)| {
+            matches!(c, Class::Emoji | Class::Gifv) || self.images.get(k).is_some()
+        });
         let wanted: Vec<(String, Class)> = self
             .hover_assets()
             .into_iter()
@@ -404,6 +403,10 @@ impl App {
                 continue;
             }
             if !self.anim.cache.want(&url, now) {
+                continue;
+            }
+            if class == Class::Gifv {
+                tasks.push(self.gifv_task(url));
                 continue;
             }
             let rest = self.rest.clone();

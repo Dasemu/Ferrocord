@@ -342,8 +342,8 @@ pub fn video_action(e: &Embed, allowed: &dyn Fn(&str) -> bool) -> VideoAction {
         .map_or(VideoAction::None, |u| VideoAction::Browser(u.to_owned()))
 }
 
-/// Hook for the animation engine: the looping MP4 behind a `gifv` embed.
-/// Today the card shows the still frame (`Embed::bare_media`).
+/// The looping MP4 behind a `gifv` embed (played like a GIF by
+/// `app::media_anim`; the still frame is `Embed::bare_media`).
 pub fn gifv_source(e: &Embed) -> Option<&str> {
     (e.kind.as_deref() == Some("gifv"))
         .then(|| e.video.as_ref().map(|v| v.download_url()))

@@ -188,13 +188,18 @@ fn group_view<'a>(app: &'a App, m: &'a model::Message, g: &Group<'a>) -> El<'a> 
         .is_some_and(|u| embeds::url_is_spoilered(&m.content, u))
         && !app.revealed_spoilers.contains(&m.id);
 
-    // Bare media: GIF links and direct image links, without a card. `gifv`
-    // shows its still frame; `embeds::gifv_source` is where the animation
-    // engine plugs in.
+    // Bare media: GIF links and direct image links, without a card. A
+    // `gifv` loops its MP4 once decoded (`app::media_anim`); until then it
+    // shows the still frame.
     if plan.grid.is_empty()
         && let Some(bm) = e.bare_media()
     {
-        let b = bare_box(bm);
+        let mut b = bare_box(bm);
+        if let Some(src) = embeds::gifv_source(e)
+            && app.media_anim(src).is_some()
+        {
+            b.key = Some(src.to_owned());
+        }
         return media(app, m, &b, ContentFit::Contain, 8.0, spoiler);
     }
     if plan.grid.len() >= 2 && is_bare_group(e) {

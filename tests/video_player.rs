@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ferrocord::media::gifv::{self, FrameSpec, Frames};
 use ferrocord::media::video::{self, Event, Failure, spawn_with};
 use ferrocord::media::video_proto::{Cmd, PlayState};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -136,6 +137,67 @@ async fn vp9_with_opus_in_webm_plays() {
 #[tokio::test]
 async fn vp8_with_opus_in_webm_plays() {
     play_through(&clip("vp8_opus.webm")).await;
+}
+
+/// Frames mode (gifv): the whole clip as timed frames, fitted to the box,
+/// within the budget, and the helper exits by itself.
+fn frames_of(name: &str, spec: FrameSpec) -> Frames {
+    gifv::decode_with(Path::new(HELPER), &clip(name), spec).expect("frames")
+}
+
+const GIFV: FrameSpec = FrameSpec {
+    max_w: 400,
+    max_h: 300,
+    max_frames: 48,
+    max_bytes: 6 * 1024 * 1024,
+};
+
+#[test]
+fn frames_mode_decodes_every_supported_codec() {
+    for name in ["high_aac.mp4", "vp9_opus.webm", "vp8_opus.webm"] {
+        let f = frames_of(name, GIFV);
+        assert!(f.len() >= 10, "{name}: only {} frames", f.len());
+        assert!(
+            f.iter()
+                .all(|(w, h, px, _)| (*w, *h) == (128, 72) && px.len() == 128 * 72 * 4)
+        );
+        let total: Duration = f.iter().map(|x| x.3).sum();
+        assert!(
+            (1500..=2300).contains(&total.as_millis()),
+            "{name}: loop of {total:?}"
+        );
+        let bright: usize = f
+            .iter()
+            .map(|x| x.2.chunks(4).filter(|p| p[0] > 100 || p[1] > 100).count())
+            .sum();
+        assert!(bright > f.len() * 500, "{name}: the pictures look empty");
+    }
+}
+
+#[test]
+fn frames_mode_fits_the_box_and_keeps_the_budget() {
+    let small = FrameSpec {
+        max_w: 64,
+        max_h: 64,
+        max_frames: 8,
+        max_bytes: 1024 * 1024,
+    };
+    let f = frames_of("high_aac.mp4", small);
+    assert_eq!(f.len(), 8);
+    assert!(f.iter().all(|(w, h, _, _)| (*w, *h) == (64, 36)));
+    // Spread over the clip, not its first 8 frames.
+    let total: Duration = f.iter().map(|x| x.3).sum();
+    assert!(total.as_millis() >= 1500, "loop of {total:?}");
+}
+
+#[test]
+fn frames_mode_reports_broken_files() {
+    let dir = tmp("gifv-garbage");
+    let bad = dir.join("bad.mp4");
+    std::fs::write(&bad, b"not a video at all").unwrap();
+    assert!(gifv::decode_with(Path::new(HELPER), &bad, GIFV).is_err());
+    assert!(gifv::decode_with(Path::new(HELPER), &dir.join("missing.mp4"), GIFV).is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

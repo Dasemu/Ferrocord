@@ -4,6 +4,7 @@
 //! codec.
 
 pub mod clip;
+pub mod gifv;
 pub mod scratch;
 pub mod video;
 pub mod video_proto;
