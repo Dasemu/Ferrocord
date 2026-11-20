@@ -26,6 +26,7 @@ pub mod state;
 pub mod stickers;
 pub mod upload;
 pub mod video;
+pub mod voice;
 pub mod window;
 
 use std::collections::{HashMap, HashSet};
@@ -165,6 +166,8 @@ pub struct App {
     pub profiles: profile::ProfileState,
     /// Handle to the running tray, once it registered.
     tray_control: Option<tray::Control>,
+    /// Voice channels, calls and voice settings.
+    pub voice: voice::Voice,
     /// The one video that is downloading or playing.
     pub video: Option<video::Playback>,
     video_session: u32,
@@ -206,6 +209,7 @@ impl App {
         });
 
         let prefs = Prefs::load(&store);
+        let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
         let start_hidden = cfg.minimized || prefs.start_minimized;
         let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
         let mut app = App {
@@ -269,6 +273,7 @@ impl App {
             anim: anim::AnimState::default(),
             profiles: profile::ProfileState::default(),
             tray_control: None,
+            voice,
             video: None,
             video_session: 0,
             cfg,
@@ -333,6 +338,8 @@ impl App {
     fn boot_mock(&mut self) {
         let ready = mock::ready();
         self.chat.load_ready(&ready);
+        let me = ready.me.as_ref().map(|u| u.id);
+        let _ = self.voice.apply(&Event::Ready(Box::new(ready.clone())), me);
         for c in ready.channels.iter().filter(|c| c.kind.is_textual()) {
             let mut h = mock::history(c.id);
             for m in &mut h {
@@ -558,6 +565,12 @@ impl App {
                     }
                 }
             }
+            Some(s) if s.is_voice() => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.mock_voice_screen(s);
+            }
             Some(ScreenshotScreen::ProfileDm) => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -748,6 +761,7 @@ impl App {
             Message::Net(ev) => self.on_net(ev),
             Message::Done(d) => self.on_done(d),
             Message::Tray(ev) => self.on_tray(ev),
+            Message::Voice(ev) => self.on_voice_event(ev),
         };
         self.sync_tray();
         let task = if self.video.is_some() {
@@ -898,6 +912,7 @@ impl App {
                 Task::perform(open_url(url), |_| Message::Done(Done::Ignored))
             }
             Ui::Logout => self.logout(),
+            Ui::Voice(v) => self.update_voice(v),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -1203,6 +1218,9 @@ impl App {
 
     fn logout(&mut self) -> Task<Message> {
         self.settings_open = false;
+        let me = self.chat.me_id();
+        let _ = self.voice.leave(me);
+        self.voice = voice::Voice::with_prefs(self.voice.prefs.clone());
         self.token = None;
         self.gateway_generation += 1;
         self.auth = self.auth.apply(AuthEvent::LoggedOut);
@@ -1328,6 +1346,7 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        tasks.push(self.voice_on_gateway(&ev));
         if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
             self.cache_folders();
         }
@@ -1417,6 +1436,7 @@ impl App {
                 }
                 Task::none()
             }
+            Done::Voice(d) => self.on_voice_done(d),
             Done::ScreenshotReady => iced::window::latest()
                 .and_then(iced::window::screenshot)
                 .map(|s| Message::Done(Done::Screenshot(s))),
@@ -1972,6 +1992,13 @@ impl App {
         }
         if !self.chat.typing.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Ui(Ui::Tick)));
+        }
+        if let Some(v) = self.voice_subscription() {
+            subs.push(v);
+        }
+        // Live microphone meter in the voice settings while connected.
+        if self.settings_open && self.voice.conn.is_some() && !self.cfg.mock {
+            subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Ui(Ui::Tick)));
         }
         Subscription::batch(subs)
     }

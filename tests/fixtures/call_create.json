@@ -1,0 +1,20 @@
+{
+  "channel_id": "1000000000000000600",
+  "message_id": "1000000000000000777",
+  "region": "rotterdam",
+  "ringing": ["1000000000000000001"],
+  "voice_states": [
+    {
+      "user_id": "1000000000000000002",
+      "channel_id": "1000000000000000600",
+      "guild_id": null,
+      "session_id": "caller-session",
+      "self_mute": false,
+      "self_deaf": false,
+      "mute": false,
+      "deaf": false,
+      "self_video": false,
+      "suppress": false
+    }
+  ]
+}

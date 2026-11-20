@@ -470,3 +470,21 @@ size on hover.
 **Mock mode.** `--mock` plays a scripted test pattern (`media::video::spawn_mock`)
 instead of downloading: no network, no disk, no helper. Screenshots:
 `--screenshot video` and `--screenshot video-fullscreen`.
+
+## 13. Voice and calls
+
+Design, DAVE and the video feasibility pass: `docs/voice.md`.
+
+| Step | Wire |
+|---|---|
+| Join / move / leave | Gateway op 4 `{guild_id\|null, channel_id\|null, self_mute, self_deaf, self_video: false}` (`GatewayHandle::set_voice`; re-sent after a new session) |
+| Session | `VOICE_STATE_UPDATE` (ours: `session_id`) + `VOICE_SERVER_UPDATE` `{token, guild_id \| channel_id, endpoint}` |
+| Voice gateway | `wss://{endpoint}/?v=8`: op 0 IDENTIFY (`max_dave_protocol_version: 1`), 8 HELLO, 2 READY, 1 SELECT PROTOCOL, 4 SESSION DESCRIPTION, 3/6 heartbeat `{t, seq_ack}`, 5 SPEAKING, 7/9 RESUME, 11/13 clients connect/disconnect, 21-31 DAVE (binary frames `seq u16, op u8, payload`) |
+| UDP | IP discovery (type 1/2, length 70, SSRC, 64-byte address, port); RTP PT 120 Opus 48 kHz stereo; `aead_aes256_gcm_rtpsize` preferred, `aead_xchacha20_poly1305_rtpsize` otherwise; 32-bit nonce counter appended; header (+CSRCs, extension preamble) is the AAD |
+| Close codes | 4014 / 4022 / 4021 / 4004 / 4011 / 4016 / 4017 end the call; 4006 / 4009 rejoin through op 4; others resume (5 tries) |
+| Calls | `CALL_CREATE` / `CALL_UPDATE` `{channel_id, message_id, ringing, voice_states}`, `CALL_DELETE`; `POST /channels/{id}/call/ring {recipients: null}` when starting a call; `POST /channels/{id}/call/stop-ringing {recipients: [me]}` to decline |
+| History | Message type 3 with `call {participants, ended_timestamp}` |
+| READY | `guilds[].voice_states` (and `GUILD_CREATE`) fill the users under voice channels |
+
+Voice settings (devices, sensitivity, per-user volume, self mute/deafen)
+are stored in SQLite `meta("pref.voice")` as JSON and kept on logout.

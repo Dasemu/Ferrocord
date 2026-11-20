@@ -19,6 +19,8 @@ use crate::auth::secrets::Secret;
 use crate::error::{Error, Result};
 
 mod ext;
+mod voice;
+pub use voice::ring_body;
 
 const MAX_RETRIES: u32 = 3;
 /// Hard cap for downloaded media.

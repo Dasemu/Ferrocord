@@ -32,6 +32,7 @@ pub fn view(app: &App) -> El<'_> {
             ))
             .style(theme::thin_scrollbar(p, false))
             .height(Length::Fill),
+        super::voice::connected_panel(app).unwrap_or_else(super::empty),
         user_panel(app),
     ])
     .width(t.metrics.sidebar_width)
@@ -91,8 +92,13 @@ fn edge_pill<'a>(app: &App, show: bool) -> El<'a> {
     .into()
 }
 
+fn is_voice(k: ChannelKind) -> bool {
+    matches!(k, ChannelKind::Voice | ChannelKind::Stage)
+}
+
 fn channel_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
     let p = app.theme.palette;
+    let joined = is_voice(c.kind) && app.voice.connected_channel() == Some(c.id);
     let unread =
         app.chat.is_unread(c.id) && !app.chat.is_channel_muted(c.id) && c.kind.is_textual();
     let mentions = app.chat.mention_count(c.id);
@@ -136,8 +142,12 @@ fn channel_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
         button(r)
             .padding(Padding::from([6, 8]))
             .width(Length::Fill)
-            .on_press(ui(Ui::SelectChannel(c.id)))
-            .style(theme::list_row(p, selected)),
+            .on_press(ui(if is_voice(c.kind) {
+                Ui::Voice(crate::app::voice::VoiceUi::Join(c.id))
+            } else {
+                Ui::SelectChannel(c.id)
+            }))
+            .style(theme::list_row(p, selected || joined)),
     ]
     .padding(Padding::ZERO.right(8))
     .align_y(Alignment::Center)
@@ -183,10 +193,16 @@ fn guild_channels(app: &App, g: GuildId, open: Option<ChannelId>) -> El<'_> {
                     continue;
                 }
                 col = col.push(channel_row(app, c, selected));
+                if let Some(m) = super::voice::channel_members(app, c.id) {
+                    col = col.push(m);
+                }
             }
         } else {
             for c in kids {
                 col = col.push(channel_row(app, c, open == Some(c.id)));
+                if let Some(m) = super::voice::channel_members(app, c.id) {
+                    col = col.push(m);
+                }
             }
         }
     }
@@ -337,7 +353,8 @@ pub fn panel_text_width(sidebar_width: f32) -> f32 {
 /// Bottom-left user panel like the official client: identity on the left
 /// (name and status truncated with an ellipsis inside a fixed-width area,
 /// so they can never run under the buttons), then fixed-size icon buttons.
-/// There is no voice, so mic and deafen are shown disabled with a tooltip.
+/// Mic and deafen toggle self mute / deafen (remembered when not in voice,
+/// like the official client); active states are drawn red.
 fn user_panel(app: &App) -> El<'_> {
     let t = &app.theme;
     let p = t.palette;
@@ -372,9 +389,22 @@ fn user_panel(app: &App) -> El<'_> {
             None => b,
         }
     };
-    let disabled = |i: Icon, tip: &'static str| -> El<'_> {
+    let toggle = |(i, tip, msg, active): (Icon, &'static str, Ui, bool)| -> El<'_> {
+        let b = button(
+            container(icon(
+                i,
+                18.0,
+                if active { p.danger } else { p.text_secondary },
+            ))
+            .center(PANEL_BTN),
+        )
+        .width(PANEL_BTN)
+        .height(PANEL_BTN)
+        .padding(0)
+        .style(theme::icon_button(p))
+        .on_press(ui(msg));
         iced::widget::tooltip(
-            small(i, None),
+            b,
             container(text(tip).size(13).color(p.header_text))
                 .padding(Padding::from([6, 10]))
                 .style(theme::rounded_bg(p.bg_elevated, 5.0)),
@@ -383,6 +413,7 @@ fn user_panel(app: &App) -> El<'_> {
         .gap(6)
         .into()
     };
+    let [mic, deaf] = super::voice::panel_buttons(app);
     let avail = panel_text_width(t.metrics.sidebar_width);
     // Clicking the avatar or name opens the status menu, like the
     // official user panel.
@@ -418,8 +449,8 @@ fn user_panel(app: &App) -> El<'_> {
     container(
         row![
             identity,
-            disabled(Icon::Mic, "Voice is not supported in Ferrocord"),
-            disabled(Icon::Headphones, "Voice is not supported in Ferrocord"),
+            toggle(mic),
+            toggle(deaf),
             small(Icon::Settings, Some(Ui::OpenSettings)),
         ]
         .spacing(PANEL_GAP)

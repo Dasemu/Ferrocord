@@ -27,6 +27,8 @@ pub const CH_EMBED_MEDIA: ChannelId = Snowflake(134);
 pub const CH_EMBED_RICH: ChannelId = Snowflake(135);
 pub const CH_EMBED_GRID: ChannelId = Snowflake(136);
 
+pub const VC_LOUNGE: ChannelId = Snowflake(140);
+pub const VC_PAIR: ChannelId = Snowflake(141);
 pub const DM_ALICE: ChannelId = Snowflake(600);
 pub const DM_BOB: ChannelId = Snowflake(601);
 pub const DM_GROUP: ChannelId = Snowflake(602);
@@ -47,6 +49,25 @@ const NAMES: [(&str, &str); 7] = [
     ("clippy_bot", "Clippy Bot"),
     ("eve", "Eve"),
 ];
+
+/// Users already sitting in the mock voice channels.
+pub fn voice_states() -> Vec<VoiceState> {
+    let vs = |user_id: u64, channel: ChannelId, self_mute: bool, self_deaf: bool| VoiceState {
+        guild_id: Some(GUILD_RUST),
+        channel_id: Some(channel),
+        user_id: Snowflake(user_id),
+        session_id: format!("mock-voice-{user_id}"),
+        self_mute,
+        self_deaf,
+        user: Some(user(user_id)),
+        ..Default::default()
+    };
+    vec![
+        vs(3, VC_LOUNGE, false, false),
+        vs(4, VC_LOUNGE, true, false),
+        vs(6, VC_PAIR, true, true),
+    ]
+}
 
 /// Mock user `n` (1 = the logged-in user).
 pub fn user(n: u64) -> User {
@@ -275,6 +296,7 @@ pub fn ready() -> ReadyData {
     set(DM_GROUP, true, 1);
 
     ReadyData {
+        voice_states: voice_states(),
         me: Some(user(1)),
         session_id: "mock-session".into(),
         resume_gateway_url: None,
@@ -389,7 +411,25 @@ pub fn text_message(channel: ChannelId, id: MessageId, author: User, content: &s
         kind: 0,
         pending: false,
         failed: false,
+        call: None,
     }
+}
+
+/// A call service message (type 3) `minutes` ago lasting `lasted` minutes.
+fn call_message(
+    channel: ChannelId,
+    minutes: u64,
+    author: u64,
+    participants: &[u64],
+    lasted: Option<u64>,
+) -> Message {
+    let mut m = text_message(channel, ago(minutes, 0), user(author), "");
+    m.kind = 3;
+    m.call = Some(CallMessage {
+        participants: participants.iter().map(|u| Snowflake(*u)).collect(),
+        ended_ms: lasted.map(|l| m.id.timestamp_ms() + l * 60_000),
+    });
+    m
 }
 
 fn gm(
@@ -450,6 +490,7 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                 &[],
                 "the Elm architecture makes the gateway events trivial to wire up",
             ),
+            call_message(DM_ALICE, 120, 2, &[1, 2], Some(17)),
             gm(
                 DM_ALICE,
                 30,

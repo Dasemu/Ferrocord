@@ -290,6 +290,24 @@ fn script(dir: &Path, body: &str) -> PathBuf {
     p
 }
 
+/// Starts a helper script written moments ago. A child forked by another test
+/// thread can still hold the script's write descriptor until it execs, so
+/// exec fails with ETXTBSY ("Text file busy"); retry as Go's os/exec does.
+fn spawn_script(
+    helper: &Path,
+    file: &Path,
+) -> Result<(video::Player, tokio::sync::mpsc::UnboundedReceiver<Event>), Failure> {
+    for _ in 0..50 {
+        match spawn_with(helper, file) {
+            Err(Failure::Unavailable(m)) if m.contains("os error 26") => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+    spawn_with(helper, file)
+}
+
 #[tokio::test]
 async fn player_parses_helper_output_and_delivers_commands() {
     let dir = tmp("script");
@@ -302,7 +320,7 @@ printf 'T\364\001\000\000\000\000\000\000\350\003\000\000\000\000\000\000\001'
 cat > "$1.cmds""#,
     );
     let target = dir.join("clip.mp4");
-    let (player, mut rx) = spawn_with(&helper, &target).expect("spawn");
+    let (player, mut rx) = spawn_script(&helper, &target).expect("spawn");
     assert_eq!(
         next(&mut rx).await,
         Some(Event::Ready {
@@ -349,13 +367,13 @@ async fn a_hostile_helper_cannot_make_the_app_allocate_or_hang() {
         r#"printf 'F\000\020\000\000\000\020\000\000abc'
 sleep 1"#,
     );
-    let (_player, mut rx) = spawn_with(&helper, &dir.join("x.mp4")).expect("spawn");
+    let (_player, mut rx) = spawn_script(&helper, &dir.join("x.mp4")).expect("spawn");
     match next(&mut rx).await {
         Some(Event::Failed(Failure::Unavailable(_))) => {}
         other => panic!("{other:?}"),
     }
     let helper = script(&dir, r#"printf 'Z\377\377\377\377'; sleep 1"#);
-    let (_player, mut rx) = spawn_with(&helper, &dir.join("x.mp4")).expect("spawn");
+    let (_player, mut rx) = spawn_script(&helper, &dir.join("x.mp4")).expect("spawn");
     assert!(matches!(next(&mut rx).await, Some(Event::Failed(_))));
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -367,7 +385,7 @@ async fn a_helper_the_loader_refuses_is_reported_with_the_loader_message() {
         &dir,
         "echo 'ferrocord-player: error while loading shared libraries: libfoo.so.1: cannot open shared object file' >&2; exit 127",
     );
-    let (_player, mut rx) = spawn_with(&helper, &dir.join("x.mp4")).expect("spawn");
+    let (_player, mut rx) = spawn_script(&helper, &dir.join("x.mp4")).expect("spawn");
     match next(&mut rx).await {
         Some(Event::Failed(f @ Failure::Unavailable(_))) => {
             let msg = f.user_message();

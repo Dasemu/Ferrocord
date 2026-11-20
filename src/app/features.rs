@@ -504,6 +504,7 @@ impl App {
                     guild: Box::new(guild),
                     channels: vec![],
                     partial: false,
+                    voice_states: vec![],
                 },
                 &ctx,
             );

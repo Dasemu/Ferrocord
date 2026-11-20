@@ -51,6 +51,13 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// Joined voice channel with users, speaking ring and the
+    /// "Voice Connected" panel.
+    Voice,
+    /// Active DM call.
+    Call,
+    /// Incoming call overlay.
+    IncomingCall,
     /// The inline video player, playing.
     Video,
     /// The full-screen video view.
@@ -64,6 +71,11 @@ pub enum ScreenshotScreen {
 }
 
 impl ScreenshotScreen {
+    /// Voice channel and call screens.
+    pub fn is_voice(self) -> bool {
+        matches!(self, Self::Voice | Self::Call | Self::IncomingCall)
+    }
+
     /// Screens added with the header popovers, server dialogs and folders.
     pub fn is_round3(self) -> bool {
         matches!(
@@ -107,6 +119,9 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "voice" => Some(Self::Voice),
+            "call" => Some(Self::Call),
+            "incoming-call" => Some(Self::IncomingCall),
             "video" => Some(Self::Video),
             "video-fullscreen" => Some(Self::VideoFullscreen),
             "profile" | "popout" => Some(Self::Profile),

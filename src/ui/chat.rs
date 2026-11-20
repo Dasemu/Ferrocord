@@ -30,6 +30,7 @@ pub fn view(app: &App) -> El<'_> {
     let body: El<'_> = match channel {
         Some(c) => column![
             header(app, c),
+            super::voice::dm_call_area(app, c).unwrap_or_else(super::empty),
             messages(app, c),
             detached_bar(app, c),
             composer(app, c)
@@ -213,6 +214,29 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     ]
     .spacing(16)
     .align_y(Alignment::Center);
+    // DMs and groups get the "Start Voice Call" phone first, like the
+    // official header.
+    let tools: El<'a> = if c.kind.is_private() {
+        let in_call = app.voice.connected_channel() == Some(c.id);
+        row![
+            tool(
+                Icon::Phone,
+                if in_call {
+                    "In Call"
+                } else {
+                    "Start Voice Call"
+                },
+                Ui::Voice(crate::app::voice::VoiceUi::StartCall(c.id)),
+                in_call,
+            ),
+            tools
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        tools.into()
+    };
     container(
         row![container(r).width(Length::Fill).clip(true), tools]
             .spacing(16)
@@ -312,7 +336,12 @@ fn messages<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
                 col = col.push(day_divider(app, m.timestamp_ms()));
             }
             let grouped = !new_day && prev.is_some_and(|pm| continues_group(pm, m));
-            col = col.push(message(app, c, m, grouped, now));
+            if m.kind == 3 {
+                // Call service message.
+                col = col.push(super::voice::call_message(app, m, now));
+            } else {
+                col = col.push(message(app, c, m, grouped, now));
+            }
             prev = Some(m);
         }
     }

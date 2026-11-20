@@ -24,6 +24,8 @@ pub enum Message {
     Done(Done),
     /// Events from the system tray service.
     Tray(crate::tray::Event),
+    /// Events from the running voice connection.
+    Voice(crate::net::voice::VoiceEvent),
 }
 
 /// User input.
@@ -205,6 +207,8 @@ pub enum Ui {
     FolderColor(Option<u32>),
     SaveFolder,
     CloseFolderSettings,
+    // -- voice channels and calls
+    Voice(super::voice::VoiceUi),
 }
 
 /// Completion of a `Task`.
@@ -351,6 +355,7 @@ pub enum Done {
         previous: Folders,
         result: Result<(), String>,
     },
+    Voice(super::voice::VoiceDone),
     Profile {
         key: super::profile::Key,
         result: Result<Box<crate::net::cosmetics::Profile>, String>,
