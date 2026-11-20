@@ -7,6 +7,30 @@ description = "Lightweight native Discord desktop client (unofficial)"
 license = "MIT"
 repository = "https://github.com/Dasemu/Ferrocord"
 publish = false
+default-run = "ferrocord"
+
+[features]
+default = ["video"]
+# In-chat video playback: the `ferrocord-player` helper process decodes MP4
+# (H.264 + AAC) and WebM (VP8/VP9 + Opus) with statically linked / pure-Rust
+# decoders; no system codec libraries. The main binary links none of them.
+video = [
+    "dep:openh264", "dep:mp4", "dep:symphonia", "dep:matroska-demuxer",
+    "dep:rusty_vp9", "dep:vp8-decoder", "dep:opus", "dep:audiopus_sys", "dep:cpal",
+]
+
+[[bin]]
+name = "ferrocord"
+path = "src/main.rs"
+
+[[bin]]
+name = "ferrocord-player"
+path = "src/bin/ferrocord-player/main.rs"
+required-features = ["video"]
+
+[[test]]
+name = "video_player"
+required-features = ["video"]
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio", "image", "advanced", "svg"] }
@@ -37,6 +61,28 @@ emojis = "0.9"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Video helper (`ferrocord-player` only). Unix only: other platforms build the
+# helper as a stub and the app offers "Open externally".
+[target.'cfg(unix)'.dependencies]
+# H.264 decoder: Cisco's BSD OpenH264, built from source and linked statically (Baseline/Main/High, B-frames).
+openh264 = { version = "0.9", optional = true }
+# Pure-Rust MP4 demuxer for the H.264 track (sample table, avcC, rotation).
+mp4 = { version = "0.14", optional = true }
+# Pure-Rust AAC decoder + MP4 audio demuxer.
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"], optional = true }
+# Pure-Rust WebM/Matroska demuxer (VP8/VP9 video and Opus audio tracks).
+matroska-demuxer = { version = "0.8", optional = true }
+# Pure-Rust VP9 decoder (Apache-2.0, no C, bit-exact against libvpx's conformance vectors).
+rusty_vp9 = { version = "0.3", optional = true }
+# Pure-Rust VP8 decoder (RFC 6386, conformance-tested on the WebM vectors).
+vp8-decoder = { version = "0.1", optional = true }
+# Opus decoder for WebM audio (BSD libopus).
+opus = { version = "0.3", optional = true }
+# Same crate opus uses; "static" links libopus.a so the helper needs no libopus package.
+audiopus_sys = { version = "0.2", features = ["static"], optional = true }
+# Sound output of the helper (ALSA on Linux: the only non-glibc library the helper links).
+cpal = { version = "0.16", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
