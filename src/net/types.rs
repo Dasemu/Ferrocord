@@ -133,6 +133,26 @@ pub fn presence_payload(status: Presence) -> GatewayPayload {
     )
 }
 
+/// Op 4: join, move between or leave (`channel: None`) voice channels and
+/// DM calls (`guild: None`).
+pub fn voice_state_payload(
+    guild: Option<GuildId>,
+    channel: Option<ChannelId>,
+    self_mute: bool,
+    self_deaf: bool,
+) -> GatewayPayload {
+    GatewayPayload::new(
+        OpCode::VoiceStateUpdate,
+        serde_json::json!({
+            "guild_id": guild.map(|g| g.to_string()),
+            "channel_id": channel.map(|c| c.to_string()),
+            "self_mute": self_mute,
+            "self_deaf": self_deaf,
+            "self_video": false,
+        }),
+    )
+}
+
 /// Op 14: subscribe to the member list of `guild` for the given inclusive
 /// index ranges of `channel`, like the official client does when the member
 /// sidebar is open.
@@ -314,6 +334,22 @@ pub struct WireGuild {
     pub stickers: Vec<WireSticker>,
     #[serde(default)]
     pub premium_tier: u8,
+    /// Users in this server's voice channels (READY / GUILD_CREATE).
+    #[serde(default)]
+    pub voice_states: Vec<WireVoiceState>,
+}
+
+impl WireGuild {
+    /// Takes the voice states out (before `into_domain`).
+    pub fn take_voice_states(&mut self) -> Vec<VoiceState> {
+        let id = self.id;
+        std::mem::take(&mut self.voice_states)
+            .into_iter()
+            .take(5000)
+            .map(|v| v.into_domain(Some(id)))
+            .filter(|v| v.channel_id.is_some())
+            .collect()
+    }
 }
 
 /// A sticker as sent in guild objects and `sticker_items` of messages.
@@ -610,6 +646,94 @@ pub struct WireMessage {
     pub nonce: Value,
     #[serde(rename = "type", default)]
     pub kind: u8,
+    #[serde(default)]
+    pub call: Option<WireCallMessage>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireCallMessage {
+    #[serde(default)]
+    pub participants: Vec<Snowflake>,
+    #[serde(default)]
+    pub ended_timestamp: Option<String>,
+}
+
+/// RFC 3339 timestamp to Unix milliseconds.
+pub fn parse_iso_ms(s: &str) -> Option<u64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .and_then(|t| u64::try_from(t.timestamp_millis()).ok())
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireVoiceState {
+    #[serde(default)]
+    pub guild_id: Option<Snowflake>,
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    pub user_id: Snowflake,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub self_mute: bool,
+    #[serde(default)]
+    pub self_deaf: bool,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub deaf: bool,
+    #[serde(default)]
+    pub self_video: bool,
+    #[serde(default)]
+    pub self_stream: Option<bool>,
+    #[serde(default)]
+    pub suppress: bool,
+    #[serde(default)]
+    pub member: Option<WireMember>,
+}
+
+impl WireVoiceState {
+    pub fn into_domain(self, guild: Option<Snowflake>) -> VoiceState {
+        VoiceState {
+            guild_id: self.guild_id.or(guild),
+            channel_id: self.channel_id,
+            user_id: self.user_id,
+            session_id: self.session_id.unwrap_or_default(),
+            self_mute: self.self_mute,
+            self_deaf: self.self_deaf,
+            mute: self.mute,
+            deaf: self.deaf,
+            self_video: self.self_video,
+            self_stream: self.self_stream.unwrap_or(false),
+            suppress: self.suppress,
+            user: self.member.and_then(|m| m.user).map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireVoiceServer {
+    #[serde(default)]
+    pub guild_id: Option<Snowflake>,
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireCall {
+    pub channel_id: Snowflake,
+    #[serde(default)]
+    pub message_id: Option<Snowflake>,
+    #[serde(default)]
+    pub ringing: Vec<Snowflake>,
+    #[serde(default)]
+    pub voice_states: Vec<WireVoiceState>,
+    #[serde(default)]
+    pub unavailable: bool,
 }
 
 impl WireMessage {
@@ -680,6 +804,10 @@ impl WireMessage {
             kind: self.kind,
             pending: false,
             failed: false,
+            call: self.call.map(|c| CallMessage {
+                participants: c.participants.into_iter().take(100).collect(),
+                ended_ms: c.ended_timestamp.as_deref().and_then(parse_iso_ms),
+            }),
         }
     }
 
@@ -900,10 +1028,12 @@ impl WireReady {
         let mut guilds = Vec::new();
         let mut my_roles = Vec::new();
 
-        for (idx, g) in self.guilds.into_iter().enumerate() {
+        let mut voice_states = Vec::new();
+        for (idx, mut g) in self.guilds.into_iter().enumerate() {
             if g.unavailable && g.name.is_none() && g.properties.is_none() {
                 continue;
             }
+            voice_states.extend(g.take_voice_states());
             let (guild, chans) = g.into_domain();
             if let Some(members) = self.merged_members.get(idx)
                 && let Some(m) = members.iter().find(|m| {
@@ -1008,6 +1138,7 @@ impl WireReady {
             premium_type,
             guild_folders,
             channel_notify,
+            voice_states,
         }
     }
 }
@@ -1328,16 +1459,18 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             Event::ChannelDelete(c.id)
         }
         "GUILD_CREATE" | "GUILD_UPDATE" => {
-            let g: WireGuild = serde_json::from_value(d)?;
+            let mut g: WireGuild = serde_json::from_value(d)?;
             if g.unavailable && g.name.is_none() && g.properties.is_none() {
                 return Ok(None);
             }
             let partial = t == "GUILD_UPDATE";
+            let voice_states = g.take_voice_states();
             let (guild, channels) = g.into_domain();
             Event::GuildUpsert {
                 guild: Box::new(guild),
                 channels,
                 partial,
+                voice_states,
             }
         }
         "GUILD_DELETE" => {
@@ -1409,8 +1542,45 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
                 emojis: e.emojis,
             }
         }
+        "VOICE_STATE_UPDATE" => {
+            let v: WireVoiceState = serde_json::from_value(d)?;
+            Event::VoiceState(Box::new(v.into_domain(None)))
+        }
+        "VOICE_SERVER_UPDATE" => {
+            let v: WireVoiceServer = serde_json::from_value(d)?;
+            Event::VoiceServer(Box::new(VoiceServer {
+                guild_id: v.guild_id,
+                channel_id: v.channel_id,
+                endpoint: v.endpoint.filter(|e| !e.is_empty() && e.len() < 256),
+                token: v.token,
+            }))
+        }
+        "CALL_CREATE" | "CALL_UPDATE" => {
+            let c: WireCall = serde_json::from_value(d)?;
+            Event::Call(Box::new(CallState {
+                channel_id: c.channel_id,
+                message_id: c.message_id,
+                ringing: c.ringing.into_iter().take(100).collect(),
+                voice_states: c
+                    .voice_states
+                    .into_iter()
+                    .take(100)
+                    .map(|v| v.into_domain(None))
+                    .collect(),
+                unavailable: c.unavailable,
+            }))
+        }
+        "CALL_DELETE" => {
+            let c: WireIdChannel = serde_json::from_value(d)?;
+            Event::CallDelete(c.channel_id)
+        }
         _ => return Ok(None),
     }))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WireIdChannel {
+    pub channel_id: Snowflake,
 }
 
 // ---------------------------------------------------------------------------

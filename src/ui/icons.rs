@@ -59,9 +59,16 @@ pub enum Icon {
     Upload,
     ArrowLeft,
     PinOff,
+    MicOff,
+    HeadphoneOff,
+    Phone,
+    PhoneOff,
+    Signal,
+    ShieldCheck,
+    VolumeX,
 }
 
-const ALL: [(Icon, &[u8]); 51] = [
+const ALL: [(Icon, &[u8]); 58] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -211,6 +218,31 @@ const ALL: [(Icon, &[u8]); 51] = [
     (
         Icon::PinOff,
         include_bytes!("../../assets/icons/pin-off.svg"),
+    ),
+    (
+        Icon::MicOff,
+        include_bytes!("../../assets/icons/mic-off.svg"),
+    ),
+    (
+        Icon::HeadphoneOff,
+        include_bytes!("../../assets/icons/headphone-off.svg"),
+    ),
+    (Icon::Phone, include_bytes!("../../assets/icons/phone.svg")),
+    (
+        Icon::PhoneOff,
+        include_bytes!("../../assets/icons/phone-off.svg"),
+    ),
+    (
+        Icon::Signal,
+        include_bytes!("../../assets/icons/signal.svg"),
+    ),
+    (
+        Icon::ShieldCheck,
+        include_bytes!("../../assets/icons/shield-check.svg"),
+    ),
+    (
+        Icon::VolumeX,
+        include_bytes!("../../assets/icons/volume-x.svg"),
     ),
 ];
 

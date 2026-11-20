@@ -233,7 +233,7 @@ mod tests {
             to_stereo(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3),
             vec![1.0, 2.0, 4.0, 5.0]
         );
-        assert_eq!(from_stereo(&[0.2, 0.4], 1), vec![0.3 as f32]);
+        assert_eq!(from_stereo(&[0.2, 0.4], 1), vec![0.3_f32]);
         assert_eq!(from_stereo(&[1.0, 2.0], 4), vec![1.0, 2.0, 0.0, 0.0]);
         assert!(to_stereo(&[1.0], 0).is_empty());
     }

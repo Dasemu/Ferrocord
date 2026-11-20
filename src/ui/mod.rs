@@ -13,6 +13,7 @@ pub mod servers;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
+pub mod voice;
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
 use iced::widget::{column, container, row, stack, text};
@@ -76,6 +77,8 @@ pub fn view(app: &App) -> El<'_> {
     layers.push(content);
     layers.push(servers::discover(app).unwrap_or_else(empty));
     layers.extend(popups::layers(app));
+    layers.push(voice::user_menu(app).unwrap_or_else(empty));
+    layers.push(voice::incoming_overlay(app).unwrap_or_else(empty));
     layers.push(servers::add_server(app).unwrap_or_else(empty));
     layers.push(servers::folder_dialog(app).unwrap_or_else(empty));
     layers.push(if app.settings_open {
@@ -94,9 +97,9 @@ pub fn view(app: &App) -> El<'_> {
         .into()
 }
 
-/// Base content + discover page + popup slots + add-server dialog + folder
-/// dialog + settings + link dialog.
-pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 4;
+/// Base content + discover page + popup slots + voice user menu + incoming
+/// call + add-server dialog + folder dialog + settings + link dialog.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 4;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {
