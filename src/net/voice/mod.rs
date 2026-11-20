@@ -67,6 +67,7 @@ impl VoiceControl {
     pub fn new() -> Self {
         let c = Self::default();
         c.set_threshold_db(-60.0);
+        c.set_input_level(mixer::FLOOR_DB);
         c
     }
 

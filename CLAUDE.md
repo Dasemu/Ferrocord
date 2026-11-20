@@ -3,11 +3,13 @@
 ## Overview
 Ferrocord is an unofficial, lightweight native Discord desktop client in Rust
 (edition 2024, tokio, iced 0.14). It speaks the user-account Gateway v10 and
-REST API directly (`tokio-tungstenite` + `reqwest`). Voice is out of scope.
+REST API directly (`tokio-tungstenite` + `reqwest`), plus voice channels and
+DM/group calls (voice gateway v8, UDP/RTP, DAVE E2EE via `davey`, Opus, `cpal`).
+Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|guild|dms|embeds> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|guild|dms|embeds|voice|call|incoming-call> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`.
@@ -15,7 +17,7 @@ REST API directly (`tokio-tungstenite` + `reqwest`). Voice is out of scope.
 
 ## Architecture
 See `docs/architecture.md` (shared Ferro* skeleton) and `docs/protocol.md`
-(gateway, REST, rate limits, QR login, UI reference). Layout: `src/app`
+(gateway, REST, rate limits, QR login, UI reference), `docs/voice.md` (voice). Layout: `src/app`
 (state + pure reducers), `src/ui` (views + theme), `src/net` (gateway, REST,
 remote auth), `src/store` (SQLite cache), `src/auth` (login + keyring).
 
@@ -53,3 +55,7 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - File dialog: `rfd` (xdg-portal). Clipboard files/images: `arboard`.
 - Keyring tests must use `MemoryStore` (no Secret Service in CI).
 - `main` defaults `ICED_BACKEND=tiny-skia` (wgpu costs 100-200 MB RSS).
+- Voice: libopus is built from bundled source and linked statically (`.cargo/config.toml`,
+  needs `cmake`); `cpal` needs `libasound2-dev`. The voice connection is a subscription that
+  exists only while in a call; never open audio devices outside it. DAVE is mandatory
+  (close 4017 without it); `davey` calls on network data stay under `catch_unwind`.

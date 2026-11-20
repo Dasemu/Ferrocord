@@ -79,11 +79,16 @@ run `cargo build --release`.
   exponential backoff, `zlib-stream` compression. REST: per-bucket and global
   rate limiting with 429 retry.
 
-Voice and video are out of scope.
+- Voice channels and DM / group calls: join and leave, users and speaking
+  indicators, mute and deafen, device selection, input sensitivity,
+  per-user volume, incoming call overlay with notification. Calls are
+  end-to-end encrypted with Discord's DAVE protocol. Video (camera, Go Live)
+  is not supported yet.
 
 ## Build and run
 
-Requirements: Rust stable (1.88+), and on Linux `pkg-config`, `libssl-dev`,
+Requirements: Rust stable (1.88+), `cmake` (libopus is built from source and
+linked statically), and on Linux `pkg-config`, `libssl-dev`, `libasound2-dev`,
 `libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`.
 
 ```sh

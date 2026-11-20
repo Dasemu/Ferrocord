@@ -1230,3 +1230,200 @@ fn switching_channel_closes_the_gif_and_sticker_pickers() {
     let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_GENERAL)));
     assert!(a.sticker_picker.is_none());
 }
+
+// -- voice channels and calls ----------------------------------------------------
+
+mod voice {
+    use super::app;
+    use ferrocord::app::voice::{Phase, VoiceUi};
+    use ferrocord::app::{Message, Ui, View};
+    use ferrocord::mock;
+    use ferrocord::net::Event;
+    use ferrocord::net::model::*;
+
+    fn v(u: VoiceUi) -> Message {
+        Message::Ui(Ui::Voice(u))
+    }
+
+    #[test]
+    fn mock_ready_fills_voice_channels() {
+        let a = app();
+        let lounge: Vec<u64> = a
+            .voice
+            .channel_members(mock::VC_LOUNGE)
+            .iter()
+            .map(|s| s.user_id.0)
+            .collect();
+        assert_eq!(lounge, vec![3, 4]);
+        assert!(a.voice.conn.is_none());
+    }
+
+    #[test]
+    fn join_mute_deafen_leave() {
+        let mut a = app();
+        let _ = a.update(v(VoiceUi::Join(mock::VC_LOUNGE)));
+        let c = a.voice.conn.clone().unwrap();
+        assert_eq!(c.channel, mock::VC_LOUNGE);
+        assert_eq!(c.guild, Some(mock::GUILD_RUST));
+        assert_eq!(c.phase, Phase::Connected);
+        assert!(
+            a.voice
+                .channel_members(mock::VC_LOUNGE)
+                .iter()
+                .any(|s| s.user_id == mock::ME)
+        );
+        // The text channel stays open (joining voice does not navigate).
+        assert_eq!(a.open_channel(), Some(mock::CH_GENERAL));
+
+        let _ = a.update(v(VoiceUi::ToggleMute));
+        assert!(a.voice.self_mute && a.voice.control.self_mute());
+        assert!(a.voice.members[&mock::ME].self_mute);
+        let _ = a.update(v(VoiceUi::ToggleDeafen));
+        assert!(a.voice.self_deaf && a.voice.control.self_deaf());
+        assert!(a.voice.members[&mock::ME].self_deaf);
+        let _ = a.update(v(VoiceUi::ToggleDeafen));
+        assert!(!a.voice.self_deaf && a.voice.self_mute);
+        let _ = a.update(v(VoiceUi::ToggleMute));
+        assert!(!a.voice.control.self_mute());
+
+        // Switching channels moves us.
+        let _ = a.update(v(VoiceUi::Join(mock::VC_PAIR)));
+        assert_eq!(a.voice.connected_channel(), Some(mock::VC_PAIR));
+
+        let _ = a.update(v(VoiceUi::Leave));
+        assert!(a.voice.conn.is_none());
+        assert!(!a.voice.members.contains_key(&mock::ME));
+    }
+
+    #[test]
+    fn text_channels_cannot_be_joined_as_voice() {
+        let mut a = app();
+        let _ = a.update(v(VoiceUi::Join(mock::CH_GENERAL)));
+        assert!(a.voice.conn.is_none());
+        let _ = a.update(v(VoiceUi::StartCall(mock::CH_GENERAL)));
+        assert!(a.voice.conn.is_none());
+    }
+
+    #[test]
+    fn others_joining_and_speaking_update_the_list() {
+        let mut a = app();
+        let vs = VoiceState {
+            guild_id: Some(mock::GUILD_RUST),
+            channel_id: Some(mock::VC_PAIR),
+            user_id: Snowflake(2),
+            ..Default::default()
+        };
+        let _ = a.update(Message::Net(Event::VoiceState(Box::new(vs.clone()))));
+        assert!(
+            a.voice
+                .channel_members(mock::VC_PAIR)
+                .iter()
+                .any(|s| s.user_id.0 == 2)
+        );
+        let _ = a.update(v(VoiceUi::Join(mock::VC_PAIR)));
+        let _ = a.update(Message::Voice(
+            ferrocord::net::voice::VoiceEvent::Speaking {
+                user: 2,
+                speaking: true,
+            },
+        ));
+        assert!(a.voice.is_speaking(Snowflake(2)));
+        let left = VoiceState {
+            channel_id: None,
+            ..vs
+        };
+        let _ = a.update(Message::Net(Event::VoiceState(Box::new(left))));
+        assert!(
+            !a.voice
+                .channel_members(mock::VC_PAIR)
+                .iter()
+                .any(|s| s.user_id.0 == 2)
+        );
+        assert!(!a.voice.is_speaking(Snowflake(2)));
+    }
+
+    fn ring(a: &mut ferrocord::app::App, ringing: Vec<UserId>) {
+        let call = CallState {
+            channel_id: mock::DM_ALICE,
+            message_id: None,
+            ringing,
+            voice_states: vec![VoiceState {
+                channel_id: Some(mock::DM_ALICE),
+                user_id: Snowflake(2),
+                ..Default::default()
+            }],
+            unavailable: false,
+        };
+        let _ = a.update(Message::Net(Event::Call(Box::new(call))));
+    }
+
+    #[test]
+    fn incoming_call_accept() {
+        let mut a = app();
+        ring(&mut a, vec![mock::ME]);
+        assert_eq!(a.voice.incoming, Some(mock::DM_ALICE));
+        // The tray asks for attention while it rings.
+        assert_eq!(a.tray_model().mentions, a.chat.attention_count() + 1);
+        let _ = a.update(v(VoiceUi::AcceptCall(mock::DM_ALICE)));
+        assert_eq!(a.voice.incoming, None);
+        assert_eq!(a.voice.connected_channel(), Some(mock::DM_ALICE));
+        assert_eq!(a.view, View::Home(Some(mock::DM_ALICE)));
+        assert_eq!(a.tray_model().mentions, a.chat.attention_count());
+        let _ = a.update(Message::Net(Event::CallDelete(mock::DM_ALICE)));
+        assert!(!a.voice.calls.contains_key(&mock::DM_ALICE));
+    }
+
+    #[test]
+    fn incoming_call_decline() {
+        let mut a = app();
+        ring(&mut a, vec![mock::ME]);
+        let _ = a.update(v(VoiceUi::DeclineCall(mock::DM_ALICE)));
+        assert_eq!(a.voice.incoming, None);
+        assert!(a.voice.conn.is_none());
+        // CALL_UPDATE still ringing: stays dismissed.
+        ring(&mut a, vec![mock::ME]);
+        assert_eq!(a.voice.incoming, None);
+    }
+
+    #[test]
+    fn start_call_from_dm_header() {
+        let mut a = app();
+        let _ = a.update(Message::Ui(Ui::SelectChannel(mock::DM_BOB)));
+        let _ = a.update(v(VoiceUi::StartCall(mock::DM_BOB)));
+        let c = a.voice.conn.clone().unwrap();
+        assert_eq!((c.guild, c.channel), (None, mock::DM_BOB));
+        assert!(a.voice.active_call(mock::DM_BOB));
+    }
+
+    #[test]
+    fn user_volume_menu_and_settings() {
+        let mut a = app();
+        let _ = a.update(v(VoiceUi::UserMenu(Snowflake(3))));
+        assert_eq!(a.voice.user_menu.map(|m| m.user), Some(Snowflake(3)));
+        let _ = a.update(v(VoiceUi::UserVolume(Snowflake(3), 50.0)));
+        assert_eq!(a.voice.control.gain(3), 0.5);
+        let _ = a.update(v(VoiceUi::ToggleUserMute(Snowflake(3))));
+        assert_eq!(a.voice.control.gain(3), 0.0);
+        let _ = a.update(Message::Ui(Ui::Escape));
+        let _ = a.update(v(VoiceUi::CloseUserMenu));
+        assert!(a.voice.user_menu.is_none());
+        let _ = a.update(v(VoiceUi::Threshold(-30.0)));
+        assert_eq!(a.voice.control.threshold_db(), -30.0);
+        let _ = a.update(Message::Ui(Ui::OpenSettings));
+        assert!(!a.voice.devices.0.is_empty());
+        let _ = a.update(v(VoiceUi::InputDevice(Some("USB Headset".into()))));
+        assert_eq!(
+            a.voice.control.devices().input.as_deref(),
+            Some("USB Headset")
+        );
+    }
+
+    #[test]
+    fn logout_leaves_voice() {
+        let mut a = app();
+        let _ = a.update(v(VoiceUi::Join(mock::VC_LOUNGE)));
+        let _ = a.update(Message::Ui(Ui::Logout));
+        assert!(a.voice.conn.is_none());
+        assert!(a.voice.members.is_empty());
+    }
+}

@@ -552,7 +552,12 @@ pub fn settings_section(app: &App) -> El<'_> {
         .unwrap_or_else(|| default.clone());
     let pick = |s: String| if s == "Default" { None } else { Some(s) };
     let threshold = app.voice.prefs.threshold_db;
-    let level = app.voice.control.input_level();
+    // The microphone is only open during a call.
+    let level = if app.voice.conn.is_some() {
+        app.voice.control.input_level()
+    } else {
+        crate::net::voice::mixer::FLOOR_DB
+    };
     // Meter: 0..1 over -100..0 dB; green when above the threshold.
     let frac = ((level + 100.0) / 100.0).clamp(0.0, 1.0);
     let meter_color = if level >= threshold {
