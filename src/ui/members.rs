@@ -3,9 +3,9 @@
 use iced::widget::{Space, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Length, Padding};
 
-use super::emoji_font::emoji_text;
-use super::theme::{self, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
-use super::{El, avatar_with_presence};
+use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::{El, avatar_with_presence, cosmetics};
+use crate::app::anim::Hover;
 use crate::app::members::MemberListState;
 use crate::app::{App, Message, Ui};
 use crate::net::model::*;
@@ -87,7 +87,14 @@ fn member_row<'a>(app: &'a App, m: &'a MemberEntry, guild: Option<&Guild>) -> El
     } else {
         base
     };
-    person_row(app, &m.user, m.display_name(), color, m.presence)
+    person_row(
+        app,
+        &m.user,
+        m.display_name(),
+        color,
+        m.presence,
+        guild.map(|g| g.id),
+    )
 }
 
 /// Avatar with presence, name and (for bots) a BOT tag: one list row.
@@ -97,25 +104,38 @@ fn person_row<'a>(
     name: &str,
     color: Color,
     presence: Presence,
+    guild: Option<GuildId>,
 ) -> El<'a> {
     let p = app.theme.palette;
-    let mut name = row![emoji_text(name, 16.0, color, INTER_MEDIUM, false)]
+    let mut name_row = row![cosmetics::name(app, user, name, 16.0, INTER_MEDIUM, color)]
         .spacing(6)
         .align_y(Alignment::Center);
-    if user.bot {
-        name = name.push(bot_tag(app));
+    if let Some(tag) = cosmetics::tag_chip(app, user) {
+        name_row = name_row.push(tag);
     }
-    container(
+    if user.bot {
+        name_row = name_row.push(bot_tag(app));
+    }
+    let content: El<'a> = container(
         row![
             avatar_with_presence(app, user, 32.0, presence, p.bg_sidebar),
-            name,
+            name_row,
         ]
         .spacing(12)
         .align_y(Alignment::Center),
     )
     .padding(Padding::from([6, 8]))
     .width(Length::Fill)
-    .into()
+    .into();
+    let content = cosmetics::with_nameplate(app, user, content);
+    let h = Hover {
+        user: user.id,
+        message: None,
+    };
+    iced::widget::mouse_area(cosmetics::clickable(content, user, guild))
+        .on_enter(Message::Ui(Ui::HoverEnter(h)))
+        .on_exit(Message::Ui(Ui::HoverLeave(h)))
+        .into()
 }
 
 fn bot_tag<'a>(app: &App) -> El<'a> {
@@ -160,7 +180,7 @@ pub fn dm_view<'a>(app: &'a App, c: &Channel) -> El<'a> {
                 } else {
                     p.text_secondary
                 };
-                col = col.push(person_row(app, u, u.display_name(), color, presence));
+                col = col.push(person_row(app, u, u.display_name(), color, presence, None));
             }
             scrollable(col)
                 .direction(scrollable::Direction::Vertical(
@@ -180,26 +200,5 @@ pub fn dm_view<'a>(app: &'a App, c: &Channel) -> El<'a> {
 
 /// Profile card of the other person in a 1:1 DM.
 fn profile<'a>(app: &'a App, u: &User) -> El<'a> {
-    let p = app.theme.palette;
-    let presence = app.chat.presence_of(u.id);
-    let mut name = row![emoji_text(
-        u.display_name(),
-        20.0,
-        p.header_text,
-        INTER_BOLD,
-        false
-    )]
-    .spacing(6)
-    .align_y(Alignment::Center);
-    if u.bot {
-        name = name.push(bot_tag(app));
-    }
-    column![
-        avatar_with_presence(app, u, 80.0, presence, p.bg_sidebar),
-        name,
-        text(u.username.clone()).size(14).color(p.text_secondary),
-    ]
-    .spacing(8)
-    .padding(Padding::from([16, 16]).top(24))
-    .into()
+    super::profile::panel(app, u)
 }

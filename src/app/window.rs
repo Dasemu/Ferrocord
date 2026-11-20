@@ -179,6 +179,9 @@ pub struct Prefs {
     pub start_minimized: bool,
     /// Tray "Mute notifications": no desktop notifications (badges stay).
     pub muted: bool,
+    /// "Reduce motion": avatars, emoji, decorations and profile effects
+    /// stay still.
+    pub reduce_motion: bool,
 }
 
 impl Default for Prefs {
@@ -187,6 +190,7 @@ impl Default for Prefs {
             close_to_tray: true,
             start_minimized: false,
             muted: false,
+            reduce_motion: false,
         }
     }
 }
@@ -194,6 +198,7 @@ impl Default for Prefs {
 pub const KEY_CLOSE_TO_TRAY: &str = "pref.close_to_tray";
 pub const KEY_START_MINIMIZED: &str = "pref.start_minimized";
 pub const KEY_MUTED: &str = "pref.muted";
+pub const KEY_REDUCE_MOTION: &str = "pref.reduce_motion";
 
 impl Prefs {
     pub fn load(store: &Store) -> Self {
@@ -206,6 +211,7 @@ impl Prefs {
             close_to_tray: flag(KEY_CLOSE_TO_TRAY, d.close_to_tray),
             start_minimized: flag(KEY_START_MINIMIZED, d.start_minimized),
             muted: flag(KEY_MUTED, d.muted),
+            reduce_motion: flag(KEY_REDUCE_MOTION, d.reduce_motion),
         }
     }
 }

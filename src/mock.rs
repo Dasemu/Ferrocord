@@ -22,6 +22,10 @@ pub const CH_GENERAL: ChannelId = Snowflake(130);
 pub const CH_RANDOM: ChannelId = Snowflake(131);
 pub const CH_HELP: ChannelId = Snowflake(132);
 pub const CH_SHOWCASE: ChannelId = Snowflake(133);
+/// Embed demo channels: video + link preview, and rich + photo grid.
+pub const CH_EMBED_MEDIA: ChannelId = Snowflake(134);
+pub const CH_EMBED_RICH: ChannelId = Snowflake(135);
+pub const CH_EMBED_GRID: ChannelId = Snowflake(136);
 
 pub const DM_ALICE: ChannelId = Snowflake(600);
 pub const DM_BOB: ChannelId = Snowflake(601);
@@ -47,13 +51,16 @@ const NAMES: [(&str, &str); 7] = [
 /// Mock user `n` (1 = the logged-in user).
 pub fn user(n: u64) -> User {
     let (u, g) = NAMES[(n as usize).min(NAMES.len() - 1)];
-    User {
+    let mut user = User {
         id: Snowflake(n),
         username: u.into(),
         global_name: Some(g.into()),
         avatar: None,
         bot: n == 5,
-    }
+        ..Default::default()
+    };
+    cosmetics::decorate(&mut user);
+    user
 }
 
 pub fn now_ms() -> u64 {
@@ -172,6 +179,9 @@ pub fn ready() -> ReadyData {
         ch(CH_RANDOM, Text, g, "random", 1, Some(CAT_TEXT)),
         ch(CH_HELP, Text, g, "help", 2, Some(CAT_TEXT)),
         ch(CH_SHOWCASE, Text, g, "showcase", 3, Some(CAT_TEXT)),
+        ch(CH_EMBED_MEDIA, Text, g, "embeds-media", 4, Some(CAT_TEXT)),
+        ch(CH_EMBED_RICH, Text, g, "embeds-rich", 5, Some(CAT_TEXT)),
+        ch(CH_EMBED_GRID, Text, g, "embeds-grid", 6, Some(CAT_TEXT)),
         ch(Snowflake(140), Voice, g, "Lounge", 0, Some(CAT_VOICE)),
         ch(
             Snowflake(141),
@@ -293,6 +303,9 @@ pub fn ready() -> ReadyData {
         muted_channels: vec![],
         suppress_everyone: vec![],
         suppress_roles: vec![],
+        activities: (2..=4)
+            .map(|n| (Snowflake(n), cosmetics::activities(n)))
+            .collect(),
         presences: vec![
             (Snowflake(2), Presence::Online),
             (Snowflake(3), Presence::Idle),
@@ -313,6 +326,7 @@ pub fn member_list() -> MemberListUpdate {
             nick: None,
             roles: roles.to_vec(),
             presence,
+            activities: cosmetics::activities(n),
         }))
     };
     let group = |id: &str, count: u32| MemberItem::Group {
@@ -362,6 +376,7 @@ pub fn text_message(channel: ChannelId, id: MessageId, author: User, content: &s
         edited: false,
         attachments: vec![],
         embeds: vec![],
+        flags: 0,
         stickers: vec![],
         mentions: vec![],
         mention_roles: vec![],
@@ -399,6 +414,9 @@ fn gm(
 pub fn history(channel: ChannelId) -> Vec<Message> {
     match channel {
         CH_SHOWCASE => showcase(),
+        CH_EMBED_MEDIA => embed_media_demo(),
+        CH_EMBED_RICH => embed_rich_demo(),
+        CH_EMBED_GRID => embed_grid_demo(),
         DM_ALICE => vec![
             gm(
                 DM_ALICE,
@@ -687,9 +705,7 @@ fn showcase() -> Vec<Message> {
                 inline: true,
             },
         ],
-        image: None,
-        thumbnail: None,
-        video: None,
+        ..Default::default()
     }];
     let mut b = gm(
         CH_SHOWCASE,
@@ -750,9 +766,7 @@ fn showcase() -> Vec<Message> {
                 inline: true,
             },
         ],
-        image: None,
-        thumbnail: None,
-        video: None,
+        ..Default::default()
     }];
     let e = gm(
         CH_SHOWCASE,
@@ -771,6 +785,7 @@ fn showcase() -> Vec<Message> {
         provider_name: Some("Tenor".into()),
         thumbnail: Some(EmbedMedia {
             url: "mock://gif/1".into(),
+            proxy_url: None,
             width: Some(220),
             height: Some(165),
         }),
@@ -802,6 +817,157 @@ fn showcase() -> Vec<Message> {
         height: Some(720),
     }];
     vec![d, b, c, a, e, f, g, h, v]
+}
+
+/// Images behind the embed demo channels: (key, width, height, hue shift).
+pub const MOCK_EMBED_IMAGES: [(&str, u32, u32, u8); 8] = [
+    ("mock://embed/yt", 480, 270, 1),
+    ("mock://embed/icon", 48, 48, 2),
+    ("mock://embed/thumb", 128, 128, 0),
+    ("mock://embed/tw1", 400, 267, 0),
+    ("mock://embed/tw2", 400, 267, 1),
+    ("mock://embed/tw3", 400, 267, 2),
+    ("mock://embed/tw4", 400, 267, 3),
+    ("mock://embed/link", 96, 96, 2),
+];
+
+/// Pixels for one of [`MOCK_EMBED_IMAGES`]: the mock landscape with its
+/// colour channels rotated by `shift`.
+pub fn mock_embed_image(w: u32, h: u32, shift: u8) -> (u32, u32, Vec<u8>) {
+    let (w, h, mut px) = mock_image(w, h);
+    for c in px.as_chunks_mut::<4>().0 {
+        let (r, g, b) = (c[0], c[1], c[2]);
+        let rot = match shift % 4 {
+            1 => (g, b, r),
+            2 => (b, r, g),
+            3 => (b, g, r),
+            _ => (r, g, b),
+        };
+        c[0] = rot.0;
+        c[1] = rot.1;
+        c[2] = rot.2;
+    }
+    (w, h, px)
+}
+
+fn proxied(key: &str, w: u32, h: u32) -> EmbedMedia {
+    EmbedMedia {
+        url: format!("https://original.example/{key}"),
+        proxy_url: Some(key.into()),
+        width: Some(w),
+        height: Some(h),
+    }
+}
+
+/// A YouTube video card and a link preview with a small thumbnail.
+fn embed_media_demo() -> Vec<Message> {
+    let yt_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    let mut a = gm(CH_EMBED_MEDIA, 30, 0, 2, &[], yt_url);
+    a.embeds = vec![Embed {
+        kind: Some("video".into()),
+        url: Some(yt_url.into()),
+        title: Some("Writing a Discord client in Rust (iced + tokio)".into()),
+        provider_name: Some("YouTube".into()),
+        provider_url: Some("https://www.youtube.com".into()),
+        author_name: Some("Ferris Talks".into()),
+        author_url: Some("https://www.youtube.com/@ferristalks".into()),
+        color: Some(0xff0000),
+        thumbnail: Some(proxied("mock://embed/yt", 480, 270)),
+        video: Some(EmbedVideo {
+            url: "https://www.youtube.com/embed/dQw4w9WgXcQ".into(),
+            proxy_url: None,
+            width: Some(1280),
+            height: Some(720),
+        }),
+        ..Default::default()
+    }];
+    let link = "https://blog.example.com/posts/zero-cost-abstractions";
+    let mut b = gm(CH_EMBED_MEDIA, 10, 0, 3, &[], link);
+    b.embeds = vec![Embed {
+        kind: Some("link".into()),
+        url: Some(link.into()),
+        title: Some("Zero-cost abstractions, explained".into()),
+        description: Some(
+            "What the compiler really does with your iterators, closures and generics, with assembly.".into(),
+        ),
+        provider_name: Some("Example Blog".into()),
+        thumbnail: Some(proxied("mock://embed/link", 96, 96)),
+        ..Default::default()
+    }];
+    vec![a, b]
+}
+
+/// A bot embed with every decoration, and a Twitter-style photo set.
+fn embed_rich_demo() -> Vec<Message> {
+    let mut a = gm(CH_EMBED_RICH, 30, 0, 5, &[ROLE_BOT], "");
+    a.embeds = vec![Embed {
+        kind: Some("rich".into()),
+        title: Some("Deploy finished: ferrocord v0.10.0".into()),
+        description: Some(
+            "All **6** jobs passed. Release notes are [here](https://example.com/notes).".into(),
+        ),
+        url: Some("https://example.com/deploys/42".into()),
+        color: Some(0x5865f2),
+        author_name: Some("Release Bot".into()),
+        author_url: Some("https://example.com/bot".into()),
+        author_icon: Some("mock://embed/icon".into()),
+        thumbnail: Some(proxied("mock://embed/thumb", 128, 128)),
+        fields: vec![
+            EmbedField {
+                name: "Duration".into(),
+                value: "3m 12s".into(),
+                inline: true,
+            },
+            EmbedField {
+                name: "Tests".into(),
+                value: "412 passed".into(),
+                inline: true,
+            },
+            EmbedField {
+                name: "Branch".into(),
+                value: "`main`".into(),
+                inline: true,
+            },
+            EmbedField {
+                name: "Notes".into(),
+                value: "Nothing flaky this time.".into(),
+                inline: false,
+            },
+        ],
+        footer: Some("CI • ubuntu-latest".into()),
+        footer_icon: Some("mock://embed/icon".into()),
+        timestamp_ms: Some(now_ms()),
+        ..Default::default()
+    }];
+    vec![a]
+}
+
+/// A Twitter-style photo set: four embeds sharing one URL.
+fn embed_grid_demo() -> Vec<Message> {
+    let tw = "https://x.example.com/ferris/status/1";
+    let mut b = gm(CH_EMBED_GRID, 10, 0, 2, &[], tw);
+    let mut lead = Embed {
+        kind: Some("rich".into()),
+        url: Some(tw.into()),
+        title: Some("Ferris (@ferris)".into()),
+        description: Some("Four photos from the meetup!".into()),
+        color: Some(0x1d9bf0),
+        provider_name: Some("Example Social".into()),
+        image: Some(proxied("mock://embed/tw1", 400, 267)),
+        ..Default::default()
+    };
+    lead.footer = Some("Example Social".into());
+    let mut embeds = vec![lead];
+    for k in 2..=4 {
+        embeds.push(Embed {
+            kind: Some("rich".into()),
+            url: Some(tw.into()),
+            image: Some(proxied(&format!("mock://embed/tw{k}"), 400, 267)),
+            ..Default::default()
+        });
+    }
+    b.embeds = embeds;
+    vec![b]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for
@@ -1054,7 +1220,445 @@ mod tests {
         }
         assert!(!history(CH_GENERAL).is_empty());
         assert!(history(CH_SHOWCASE).iter().any(|m| !m.embeds.is_empty()));
+        assert!(history(CH_EMBED_MEDIA).iter().any(|m| !m.embeds.is_empty()));
+        assert!(history(CH_EMBED_GRID).iter().any(|m| m.embeds.len() == 4));
         let (w, h, px) = mock_image(10, 5);
         assert_eq!(px.len(), (w * h * 4) as usize);
+    }
+}
+
+pub use cosmetics::{profile, profile_effects};
+
+/// Mock cosmetics, profiles and the images behind them (procedural: no
+/// Discord asset is bundled).
+pub mod cosmetics {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::app::anim::{self, Anim, Class};
+    use crate::net::cosmetics::{
+        self, Activity, ActivityKind, AvatarDecoration, Badge, Collectibles, EffectLayer,
+        NameStyle, Nameplate, PrimaryGuild, Profile, ProfileEffect,
+    };
+
+    pub const CDN: &str = "https://cdn.discordapp.com";
+    pub const AVATAR_ANIM: &str = "a_mockavatar";
+    pub const DECO_ANIM: &str = "a_mockdeco";
+    pub const DECO_STATIC: &str = "mockdeco";
+    pub const PLATE: &str = "nameplates/mock/violet/";
+    pub const TAG_BADGE: &str = "mocktagbadge";
+    pub const BANNER: &str = "a_mockbanner";
+    pub const EFFECT_ID: Snowflake = Snowflake(777);
+    pub const EFFECT_SRC: &str =
+        "https://cdn.discordapp.com/assets/profile_effects/configs/mock/sparkle.png";
+    pub const SPOTIFY_ART: &str = "https://i.scdn.co/image/mockalbum";
+
+    /// Gives mock users 1..=4 their cosmetics.
+    pub fn decorate(u: &mut User) {
+        match u.id.0 {
+            1 => {
+                u.avatar_decoration = Some(Box::new(AvatarDecoration {
+                    asset: DECO_STATIC.into(),
+                    sku_id: None,
+                }));
+            }
+            2 => {
+                u.avatar = Some(AVATAR_ANIM.into());
+                u.avatar_decoration = Some(Box::new(AvatarDecoration {
+                    asset: DECO_ANIM.into(),
+                    sku_id: None,
+                }));
+                u.collectibles = Some(Box::new(Collectibles {
+                    nameplate: Some(Nameplate {
+                        asset: PLATE.into(),
+                        palette: "violet".into(),
+                        label: "Mock".into(),
+                        sku_id: None,
+                    }),
+                }));
+                u.primary_guild = Some(Box::new(PrimaryGuild {
+                    identity_guild_id: Some(GUILD_RUST),
+                    identity_enabled: Some(true),
+                    tag: Some("RUST".into()),
+                    badge: Some(TAG_BADGE.into()),
+                }));
+                u.name_style = Some(Box::new(NameStyle {
+                    font_id: 11,
+                    effect_id: 2,
+                    colors: vec![0xff7eb3, 0x7ec8ff],
+                }));
+                u.banner = Some(BANNER.into());
+            }
+            3 => {
+                u.avatar_decoration = Some(Box::new(AvatarDecoration {
+                    asset: DECO_STATIC.into(),
+                    sku_id: None,
+                }));
+                u.primary_guild = Some(Box::new(PrimaryGuild {
+                    identity_guild_id: Some(GUILD_RUST),
+                    identity_enabled: Some(true),
+                    tag: Some("ICED".into()),
+                    badge: None,
+                }));
+                u.name_style = Some(Box::new(NameStyle {
+                    font_id: 14,
+                    effect_id: 3,
+                    colors: vec![0x7cffb2],
+                }));
+            }
+            4 => {
+                u.collectibles = Some(Box::new(Collectibles {
+                    nameplate: Some(Nameplate {
+                        asset: PLATE.into(),
+                        palette: "teal".into(),
+                        label: "Mock".into(),
+                        sku_id: None,
+                    }),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn activities(n: u64) -> Vec<Activity> {
+        let base = |kind, name: &str| Activity {
+            kind,
+            name: name.into(),
+            details: None,
+            state: None,
+            emoji: None,
+            application_id: None,
+            start_ms: None,
+            end_ms: None,
+            large_image: None,
+            small_image: None,
+        };
+        match n {
+            2 => vec![Activity {
+                details: Some("Building a base".into()),
+                state: Some("In game".into()),
+                application_id: Some(Snowflake(7)),
+                start_ms: Some(now_ms().saturating_sub(47 * 60_000 + 12_000)),
+                large_image: Some("1234".into()),
+                ..base(ActivityKind::Playing, "Factorio")
+            }],
+            3 => vec![Activity {
+                details: Some("Borrowed Time".into()),
+                state: Some("The Lifetimes".into()),
+                start_ms: Some(now_ms().saturating_sub(95_000)),
+                end_ms: Some(now_ms() + 120_000),
+                large_image: Some("spotify:mockalbum".into()),
+                ..base(ActivityKind::Listening, "Spotify")
+            }],
+            4 => vec![Activity {
+                state: Some("heads down, shipping".into()),
+                emoji: Some(("\u{1F680}".into(), None, false)),
+                ..base(ActivityKind::Custom, "Custom Status")
+            }],
+            _ => vec![],
+        }
+    }
+
+    /// The popout profile of mock user `n`.
+    pub fn profile(user: UserId, guild: Option<GuildId>) -> Option<Profile> {
+        let u = super::user(user.0);
+        if user.0 == 0 || user.0 > 6 {
+            return None;
+        }
+        let rich = user.0 == 2;
+        Some(Profile {
+            bio: if rich {
+                "Rustacean, **iced** tinkerer and coffee fan :ferris: Ask me about lifetimes. https://example.com".into()
+            } else {
+                "Just here for the chat.".into()
+            },
+            pronouns: if rich {
+                "she/her".into()
+            } else {
+                String::new()
+            },
+            banner: u.banner.clone(),
+            banner_guild: None,
+            accent_color: Some(0x5865f2),
+            theme_colors: rich.then_some((0x3b1d5e, 0x1d4a6e)),
+            effect: rich.then_some(EFFECT_ID),
+            badges: if rich {
+                vec![
+                    Badge {
+                        id: "premium".into(),
+                        description: "Subscriber".into(),
+                        icon: "mockicon1".into(),
+                    },
+                    Badge {
+                        id: "early".into(),
+                        description: "Early supporter".into(),
+                        icon: "mockicon2".into(),
+                    },
+                ]
+            } else {
+                vec![]
+            },
+            premium_since: rich.then(|| "2019-05-01T00:00:00+00:00".into()),
+            nick: None,
+            roles: if guild.is_some() {
+                vec![ROLE_MOD, ROLE_CORE]
+            } else {
+                vec![]
+            },
+            joined_at: guild.map(|_| "2021-03-14T09:00:00+00:00".into()),
+            mutual_guilds: vec![(GUILD_RUST, Some("Alice".into())), (GUILD_ICED, None)],
+            mutual_friends: vec![super::user(3), super::user(4)],
+            mutual_friends_count: 2,
+            user: u,
+        })
+    }
+
+    pub fn profile_effects() -> Vec<ProfileEffect> {
+        vec![ProfileEffect {
+            id: EFFECT_ID,
+            title: "Sparkle".into(),
+            layers: vec![EffectLayer {
+                src: EFFECT_SRC.into(),
+                randomized: vec![],
+                looped: true,
+                width: 170,
+                height: 330,
+                duration_ms: 1200,
+                start_ms: 0,
+                loop_delay_ms: 0,
+                x: 0,
+                y: 0,
+                z: 1,
+            }],
+            static_frame: None,
+        }]
+    }
+
+    fn rgba(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                px.extend_from_slice(&f(x, y));
+            }
+        }
+        px
+    }
+
+    /// Ring frame around an avatar, `phase` rotates the highlight.
+    fn ring(n: u32, phase: f32) -> Vec<u8> {
+        let c = (n as f32 - 1.0) / 2.0;
+        rgba(n, n, |x, y| {
+            let (dx, dy) = (x as f32 - c, y as f32 - c);
+            let d = (dx * dx + dy * dy).sqrt();
+            let outer = c;
+            let inner = c * 0.80;
+            if d > outer || d < inner {
+                return [0, 0, 0, 0];
+            }
+            let a = dy.atan2(dx) + phase;
+            let t = (a.sin() * 0.5 + 0.5).powi(2);
+            [
+                (120.0 + 135.0 * t) as u8,
+                (80.0 + 100.0 * t) as u8,
+                255,
+                255,
+            ]
+        })
+    }
+
+    fn dot_face(n: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let (side, px) = super::mock_emoji(rgb);
+        if side == n {
+            return px;
+        }
+        // Nearest-neighbour resize to n.
+        rgba(n, n, |x, y| {
+            let (sx, sy) = (x * side / n, y * side / n);
+            let i = ((sy * side + sx) * 4) as usize;
+            [px[i], px[i + 1], px[i + 2], px[i + 3]]
+        })
+    }
+
+    /// Static images keyed by the URLs the views request.
+    pub fn images(cdn: &str) -> Vec<(String, u32, u32, Vec<u8>)> {
+        let cdn = cdn.trim_end_matches('/');
+        let mut out = Vec::new();
+        let mut push = |url: String, w: u32, h: u32, px: Vec<u8>| out.push((url, w, h, px));
+        for n in 1..=4u64 {
+            let u = super::user(n);
+            if let Some(d) = &u.avatar_decoration {
+                for size in [anim_sizes::DEC_LIST, anim_sizes::DEC_POP] {
+                    push(
+                        d.url(cdn, size, false),
+                        size.min(96),
+                        size.min(96),
+                        ring(size.min(96), 0.0),
+                    );
+                }
+            }
+            if n == 2 {
+                for size in [64, 80, anim_sizes::AV_POP] {
+                    if let Some(url) = cosmetics::avatar_url(cdn, &u, size) {
+                        push(url, 48, 48, dot_face(48, [255, 126, 179]));
+                    }
+                }
+                push(
+                    cosmetics::banner_url(cdn, u.id, None, BANNER, false, anim_sizes::BANNER),
+                    340,
+                    120,
+                    rgba(340, 120, |x, y| {
+                        let t = x as f32 / 340.0;
+                        [
+                            (80.0 + 120.0 * t) as u8,
+                            (60.0 + 40.0 * (y as f32 / 120.0)) as u8,
+                            (200.0 - 90.0 * t) as u8,
+                            255,
+                        ]
+                    }),
+                );
+                for icon in ["mockicon1", "mockicon2"] {
+                    push(
+                        cosmetics::badge_icon_url(cdn, icon),
+                        48,
+                        48,
+                        dot_face(48, [250, 200, 70]),
+                    );
+                }
+                if let Some(g) = &u.primary_guild
+                    && let Some(url) = g.badge_url(cdn, 32)
+                {
+                    push(url, 48, 48, dot_face(48, [90, 200, 120]));
+                }
+                push(
+                    format!("{cdn}/app-assets/7/1234.png"),
+                    48,
+                    48,
+                    dot_face(48, [240, 120, 60]),
+                );
+            }
+            if let Some(n) = u.collectibles.as_ref().and_then(|c| c.nameplate.as_ref()) {
+                let rgb = n.palette_color();
+                push(
+                    n.static_url(cdn),
+                    240,
+                    44,
+                    rgba(240, 44, |x, _| {
+                        let f = x as f32 / 240.0;
+                        let k = |c: u32| ((c as f32) * (0.35 + 0.65 * f)) as u8;
+                        [
+                            k((rgb >> 16) & 0xff),
+                            k((rgb >> 8) & 0xff),
+                            k(rgb & 0xff),
+                            255,
+                        ]
+                    }),
+                );
+            }
+        }
+        push(SPOTIFY_ART.into(), 48, 48, dot_face(48, [30, 215, 96]));
+        out
+    }
+
+    /// Sizes mirrored from `app::cosmetics` so this module stays free of
+    /// app internals.
+    mod anim_sizes {
+        pub const DEC_LIST: u32 = crate::app::cosmetics::DEC_LIST;
+        pub const DEC_POP: u32 = crate::app::cosmetics::DEC_POP;
+        pub const AV_POP: u32 = crate::app::cosmetics::AV_POP;
+        pub const BANNER: u32 = crate::app::cosmetics::BANNER_SIZE;
+    }
+
+    /// Animations kept for mock mode: avatar and decoration of mock user 2.
+    pub fn anims(cdn: &str) -> Vec<(String, Class, Anim)> {
+        let cdn = cdn.trim_end_matches('/');
+        let u = super::user(2);
+        let mut out = Vec::new();
+        let colors = [
+            [255u8, 126, 179],
+            [126, 200, 255],
+            [255, 220, 120],
+            [160, 255, 190],
+        ];
+        let face = |n: u32| {
+            anim::from_rgba_frames(
+                colors
+                    .iter()
+                    .map(|c| (n, n, dot_face(n, *c), Duration::from_millis(150)))
+                    .collect(),
+            )
+        };
+        for size in [anim_sizes::AV_POP, 80] {
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, size) {
+                out.push((url, Class::Avatar, face(48)));
+            }
+        }
+        if let Some(d) = &u.avatar_decoration {
+            for size in [anim_sizes::DEC_LIST, anim_sizes::DEC_POP] {
+                let n = size.min(96);
+                out.push((
+                    d.url(cdn, size, true),
+                    Class::Decoration,
+                    anim::from_rgba_frames(
+                        (0..12)
+                            .map(|i| (n, n, ring(n, i as f32 * 0.52), Duration::from_millis(80)))
+                            .collect(),
+                    ),
+                ));
+            }
+        }
+        out
+    }
+
+    /// Popout-only animations of mock user 2 (banner and effect): dropped
+    /// when the popout closes, so they are re-created when it opens.
+    pub fn popout_anims(cdn: &str) -> Vec<(String, Class, Anim)> {
+        let cdn = cdn.trim_end_matches('/');
+        let u = super::user(2);
+        let banner = cosmetics::banner_url(cdn, u.id, None, BANNER, true, anim_sizes::BANNER);
+        let b = anim::from_rgba_frames(
+            (0..8)
+                .map(|i| {
+                    (
+                        340,
+                        120,
+                        rgba(340, 120, |x, y| {
+                            let t = ((x as f32 / 340.0) + i as f32 / 8.0) % 1.0;
+                            [
+                                (80.0 + 120.0 * t) as u8,
+                                (60.0 + 40.0 * (y as f32 / 120.0)) as u8,
+                                (200.0 - 90.0 * t) as u8,
+                                255,
+                            ]
+                        }),
+                        Duration::from_millis(120),
+                    )
+                })
+                .collect(),
+        );
+        let effect = anim::from_rgba_frames(
+            (0..10)
+                .map(|i| {
+                    (
+                        170,
+                        330,
+                        rgba(170, 330, |x, y| {
+                            // Falling sparkles.
+                            let col = (x * 7 + 13) % 29 == 0;
+                            let row = (y + i * 33) % 330;
+                            if col && row % 41 < 5 {
+                                [255, 240, 160, 230]
+                            } else {
+                                [0, 0, 0, 0]
+                            }
+                        }),
+                        Duration::from_millis(120),
+                    )
+                })
+                .collect(),
+        );
+        vec![
+            (banner, Class::Banner, b),
+            (EFFECT_SRC.into(), Class::Effect, effect),
+        ]
     }
 }

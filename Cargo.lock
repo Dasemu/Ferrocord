@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.9.0"
+version = "0.9.2"
 dependencies = [
  "arboard",
  "audiopus_sys",
@@ -1500,6 +1500,7 @@ dependencies = [
  "notify-rust",
  "openh264",
  "opus",
+ "png 0.18.1",
  "qrcode",
  "rand 0.8.8",
  "reqwest",

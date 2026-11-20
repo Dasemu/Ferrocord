@@ -257,7 +257,144 @@ folder in place; release on a folder -> joins it; release on the same item ->
 click; a release anywhere else (`DragEnd`) cancels. Folders open/closed state
 is local only.
 
-## 10. Video playback (`media/`, `app/video.rs`, `ui/video.rs`, `bin/ferrocord-player`)
+## 10. Profile cosmetics and animations
+
+Field names and URLs were checked against the public user-account docs
+(discord-userdoccers `resources/user`, `resources/collectibles`,
+`resources/presence`, `reference#cdn-formatting`) and Discord's official API
+docs. What could not be confirmed against a live account is listed at the end.
+
+### Payload fields (`net/cosmetics.rs`)
+
+All of these are parsed leniently (`lenient`): a wrong shape drops the field,
+never the message or member list.
+
+| Where | Field | Use |
+|---|---|---|
+| user / partial user / member | `avatar_decoration_data { asset, sku_id }` | frame over the avatar |
+| user | `collectibles.nameplate { asset, palette, label, sku_id }` | row background |
+| user | `primary_guild { identity_guild_id, identity_enabled, tag, badge }` | server tag chip |
+| user | `display_name_styles { font_id, effect_id, colors[] }` | name colour / gradient |
+| user | `banner`, `accent_color` | popout banner |
+| presence | `activities[]` (type, name, details, state, emoji, timestamps, assets, application_id) | popout activity and custom status |
+
+`GUILD_MEMBER_LIST_UPDATE` member items may carry the member's own
+`avatar_decoration_data`; it replaces the user's. The member-list
+subscription (op 14) now sends `"activities": true`, like the official
+client, so presences include activities.
+
+### Profile popout
+
+`GET /users/{id}/profile?type=popout&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true[&guild_id=..]`.
+The body's `user_profile` and `guild_member_profile` are layered (the guild
+value wins when set; an empty guild bio / pronouns falls through). Used:
+`bio`, `pronouns`, `banner`, `accent_color`, `theme_colors[2]`,
+`profile_effect.id`, `badges[]`, `premium_since`, `guild_member`
+(`roles`, `joined_at`), `mutual_guilds[]`, `mutual_friends[]`,
+`mutual_friends_count`. Profiles are cached (48, LRU) and refreshed when
+older than 5 minutes; a failed refresh keeps the old card.
+
+### Profile effects
+
+`GET /user-profile-effects` (once, lazily, when a shown profile has an
+effect) returns the layer configs: `src`, `loop`, `width`, `height`,
+`duration`, `start`, `loopDelay`, `position {x,y}`, `zIndex`,
+`randomizedSources[]`. Layers are drawn over the popout card with the
+timeline in `net::cosmetics::layer_time` (one-shot layers end, looping ones
+repeat after `loopDelay`), scaled so the union of the layer rectangles spans
+the card width. Frames are decoded at a reduced width (256 px) and scaled on
+draw; they are dropped when the popout closes.
+
+### CDN URLs
+
+| Asset | URL |
+|---|---|
+| avatar (still) | `/avatars/{uid}/{hash}.png?size=80` (160 in the popout) |
+| avatar (animated, `a_`) | same with `.gif` |
+| decoration | `/avatar-decoration-presets/{asset}.png?size=96&passthrough=false` (still) / `passthrough=true` (APNG, `a_` assets) |
+| banner | `/banners/{uid}/{hash}.png|gif?size=600`; member banner `/guilds/{gid}/users/{uid}/banners/{hash}` |
+| nameplate | `/assets/collectibles/{asset}static.png` (the animated variant is `asset.webm`: not decoded) |
+| server tag badge | `/guild-tag-badges/{gid}/{badge}.png?size=32` |
+| profile badge | `/badge-icons/{icon}.png` (fetched from the CDN, not bundled; a neutral dot shows until loaded) |
+| activity art | application asset `/app-assets/{app}/{id}.png`, `mp:` -> `media.discordapp.net`, `spotify:` -> `i.scdn.co/image` |
+| animated emoji | `/emojis/{id}.gif?size=96` |
+
+`i.scdn.co` was added to the media host allow-list for Spotify album art;
+downloads never carry the token.
+
+### Animation engine (`app/anim.rs`)
+
+* GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
+  `image` crate; single-frame images are left to the static path.
+* Caps per asset (source frames read, frames kept, bytes kept, width) are
+  per `Class`; extra frames are merged (delay added to the kept frame) so the
+  duration is unchanged. Sources above 2048 px are refused.
+* `AnimCache` is an LRU with a 32 MB budget. Banner and effect frames are
+  dropped when the popout closes.
+* Lists and messages show the still image; hovering a row / message starts
+  the clock for that avatar, decoration and (in messages) animated emoji.
+  The popout animates everything. A `time::every(66 ms)` subscription exists
+  only while `AnimState::active` is true (something animated is hovered or
+  the popout shows one); "Reduce motion" in Settings turns all of it off.
+* Handles are created once when data arrives (`Handle::from_rgba` in the
+  decode task), never in `view`.
+
+### Display name styles
+
+Effects `solid`, `gradient`, `glow` (falls back to gradient), `prism` and
+`gummy` are drawn as a solid colour or a per-character gradient; `neon`,
+`toon` and `pop` (glow, outline, drop shadow) are drawn as the first colour.
+Animation (prism scroll, gummy squash) is not drawn. Fonts other than the
+default gg Sans are not bundled: a bold weight of Inter stands in for them.
+
+### Not verified against a live account
+
+* The response key of `GET /user-profile-effects` (`profile_effect_configs`
+  is what clients use; a bare array and `configs` are accepted too) and the
+  coordinate system of effect layers (the scale-to-card rule is inferred).
+* `passthrough=true` for decoration assets not prefixed `a_` (those are
+  treated as still).
+* Server-specific display name styles and nameplates in member objects.
+
+## 11. Embeds (`app/embeds.rs`, `ui/embeds.rs`)
+
+* **Model.** `Embed` keeps `author.icon_url`/`proxy_icon_url` (the proxy one
+  wins), `footer.icon_url`, `timestamp`, `provider.url`, `video`, `flags`;
+  `EmbedMedia` keeps both `url` and `proxy_url`. Only the proxy URL is
+  downloaded (`EmbedMedia::download_url`), through the same host allowlist as
+  every CDN fetch (`cdn.discordapp.com`, `media.discordapp.net`,
+  `images-ext-*.discordapp.net`, no token). Messages carry `flags`; bit 2 is
+  `SUPPRESS_EMBEDS`. Cached JSON from older versions loads (`#[serde(default)]`).
+* **Layout** is decided by pure functions: `plan` (small 80 px thumbnail on the
+  right, large image / large `article`/`link` thumbnail (>= 300 px wide) /
+  video poster below, 400x300 box, no upscaling, boxes fixed before the
+  download so history does not jump), `field_rows` (3 inline fields per row,
+  2 beside a thumbnail, non-inline on their own row), `group_embeds` +
+  `grid_columns` (embeds sharing a `url` and carrying only an image join the
+  lead; 2/3/4 photos as a grid).
+* **Video cards** show the poster with a play button. `video_action` routes a
+  click: a direct mp4/webm on the media proxy -> `Ui::PlayVideo(url)` (the
+  hook for the inline player; today it asks via the confirm-link dialog and
+  opens the browser), anything else (YouTube, Twitch iframes) -> the page
+  link through `Ui::ConfirmLink`. `gifv` stays a bare still frame;
+  `gifv_source` returns the looping MP4 for the animation engine.
+* **Safety.** Only http(s) reaches `pending_link`/the browser; texts are cut
+  to Discord's own limits (`clip`), at most 10 embeds and 25 fields are drawn.
+* **Live updates.** `MESSAGE_UPDATE` is a `MessagePatch` of `Option`s: an
+  embeds-only update (link unfurl) never touches the content, and `embeds: []`
+  removes them. The same patch is applied to the SQLite cache.
+* **Suppress.** The "X" (author or `MANAGE_MESSAGES`) hides the embeds at once and
+  sends `PATCH /channels/{c}/messages/{m}` with `{"flags": flags | 4}`; a
+  refusal puts them back. Messages with the flag draw no embeds.
+* **Spoilers.** An embed whose URL appears inside `||...||` in the message
+  text shows its media behind a click (`Ui::RevealSpoiler`).
+
+Renderer note: tiny-skia ignores image `crop`, container `clip` and corner
+radii, so an image can never be "covered" into a box. Posters take the aspect
+ratio of their own thumbnail, and grid cells letterbox (`Contain`) on the
+card background.
+
+## 12. Video playback (`media/`, `app/video.rs`, `ui/video.rs`, `bin/ferrocord-player`)
 
 **What plays.** Attachments whose `content_type` is `video/*` or whose name
 ends in `.mp4 .m4v .mov .webm .mkv`, and embeds (`type: video`, a bare video
@@ -266,6 +403,8 @@ link) whose `video.proxy_url` / `video.url` is a file with such an extension
 and page players (YouTube, ...) stay link cards: their `video.url` is a web
 page, never fetched. The inline box is at most 400x300 px (never enlarged),
 like the official client.
+
+**Embed cards.** `ui::embeds::video_card` routes through `app::embeds::video_action`: a proxied direct file builds a `Clip` (poster = the card's media box, size from `embed.video`) and plays in the inline player inside the card; iframe-only providers (YouTube, Twitch) keep the confirm-link flow to the browser.
 
 **Poster.** Discord's media proxy renders the first frame of a video as an
 image: `{proxy_url}?format=webp&width=W&height=H` (the same URL the official

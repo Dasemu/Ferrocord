@@ -546,6 +546,39 @@ impl App {
         Task::none()
     }
 
+    /// The "X" on a message's embeds. Applied at once; put back if refused.
+    pub(super) fn suppress_embeds(&mut self, m: MessageId) -> Task<Message> {
+        let Some(c) = self.open_chan() else {
+            return Task::none();
+        };
+        let allowed = self.chat.message(c, m).is_some_and(|msg| {
+            super::embeds::can_suppress(msg, self.is_mine(msg), self.chat.can_manage_messages(c))
+        });
+        if !allowed {
+            return Task::none();
+        }
+        let Some((embeds, old_flags, flags)) = self.chat.suppress_embeds(c, m) else {
+            return Task::none();
+        };
+        if self.cfg.mock {
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        Task::perform(
+            async move { rest.set_message_flags(c, m, flags).await },
+            move |r| match r {
+                Ok(_) => Message::Done(Done::Ignored),
+                Err(e) => Message::Done(Done::SuppressFailed {
+                    channel: c,
+                    message: m,
+                    embeds,
+                    flags: old_flags,
+                    error: e.user_message(),
+                }),
+            },
+        )
+    }
+
     fn delete_message(&mut self, c: ChannelId, m: MessageId) -> Task<Message> {
         self.chat.remove_message(c, m);
         if self.cfg.mock {
@@ -580,6 +613,10 @@ impl App {
             || self.sticker_picker.take().is_some()
             || self.menu.take().is_some()
         {
+            return Task::none();
+        }
+        if self.profiles.popout.take().is_some() {
+            self.anim.close_popout();
             return Task::none();
         }
         if self.rail.menu.take().is_some() || self.panels.open.take().is_some() {

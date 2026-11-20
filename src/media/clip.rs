@@ -89,7 +89,7 @@ impl Clip {
             .thumbnail
             .as_ref()
             .or(e.image.as_ref())
-            .map(|t| t.url.clone())
+            .map(|t| t.download_url().to_owned())
             .or_else(|| {
                 v.proxy_url
                     .as_deref()
@@ -189,6 +189,7 @@ mod tests {
             kind: Some(kind.into()),
             thumbnail: Some(EmbedMedia {
                 url: "https://media.discordapp.net/thumb.png".into(),
+                proxy_url: None,
                 width: None,
                 height: None,
             }),

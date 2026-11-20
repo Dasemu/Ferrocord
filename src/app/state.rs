@@ -183,6 +183,8 @@ pub struct ChatState {
     pub suppress_roles: HashSet<GuildId>,
     /// Last known status per user (friends, members of subscribed guilds).
     pub presence: HashMap<UserId, Presence>,
+    /// Last known activities per user (popout "Playing ...", custom status).
+    pub activities: HashMap<UserId, Vec<Activity>>,
     /// The user's own status.
     pub my_status: Presence,
     /// Nitro type of the current user (upload limit).
@@ -255,6 +257,7 @@ impl ChatState {
         // Presences from READY replace what we knew (stale after a
         // reconnect); our own status comes from the settings.
         self.presence = r.presences.iter().copied().collect();
+        self.activities = r.activities.iter().cloned().collect();
         if let Some(s) = r.my_status {
             self.my_status = s;
         }
@@ -450,7 +453,14 @@ impl ChatState {
                 }
             }
             Event::Reaction(r) => self.apply_reaction(r),
-            Event::PresenceUpdate { user_id, status } => self.set_presence(*user_id, *status),
+            Event::PresenceUpdate {
+                user_id,
+                status,
+                activities,
+            } => {
+                self.set_presence(*user_id, *status);
+                self.set_activities(*user_id, activities.clone());
+            }
             Event::MemberList(u) => {
                 if let Some(l) = self.member_list.as_mut() {
                     l.apply(u);
@@ -486,10 +496,16 @@ impl ChatState {
 
     fn learn_member(&mut self, item: &MemberItem) {
         if let MemberItem::Member(m) = item {
-            self.users
-                .entry(m.user.id)
-                .or_insert_with(|| m.user.clone());
+            // Newer payloads carry the current cosmetics: keep them fresh.
+            match self.users.get_mut(&m.user.id) {
+                Some(u) if *u != m.user => *u = m.user.clone(),
+                Some(_) => {}
+                None => {
+                    self.users.insert(m.user.id, m.user.clone());
+                }
+            }
             self.set_presence(m.user.id, m.presence);
+            self.set_activities(m.user.id, m.activities.clone());
         }
     }
 
@@ -506,6 +522,21 @@ impl ChatState {
             self.presence.clear();
         }
         self.presence.insert(user, status);
+    }
+
+    pub fn set_activities(&mut self, user: UserId, list: Vec<Activity>) {
+        if list.is_empty() {
+            self.activities.remove(&user);
+            return;
+        }
+        if self.activities.len() >= MAX_PRESENCES && !self.activities.contains_key(&user) {
+            self.activities.clear();
+        }
+        self.activities.insert(user, list);
+    }
+
+    pub fn activities_of(&self, user: UserId) -> &[Activity] {
+        self.activities.get(&user).map_or(&[], Vec::as_slice)
     }
 
     /// Status of `user` for the dot next to their avatar.
@@ -540,6 +571,27 @@ impl ChatState {
         if let Some(m) = self.messages.get_mut(&c).and_then(|w| w.get_mut(id)) {
             m.content = content.to_owned();
             m.edited = true;
+        }
+    }
+
+    /// Optimistically hides the embeds of a message (`SUPPRESS_EMBEDS`).
+    /// Returns what to restore on failure and the new flags to send.
+    pub fn suppress_embeds(
+        &mut self,
+        c: ChannelId,
+        id: MessageId,
+    ) -> Option<(Vec<Embed>, u64, u64)> {
+        let m = self.messages.get_mut(&c).and_then(|w| w.get_mut(id))?;
+        let (old_embeds, old_flags) = (std::mem::take(&mut m.embeds), m.flags);
+        m.flags |= FLAG_SUPPRESS_EMBEDS;
+        Some((old_embeds, old_flags, m.flags))
+    }
+
+    /// Undoes [`Self::suppress_embeds`] after a refusal.
+    pub fn restore_embeds(&mut self, c: ChannelId, id: MessageId, embeds: Vec<Embed>, flags: u64) {
+        if let Some(m) = self.messages.get_mut(&c).and_then(|w| w.get_mut(id)) {
+            m.embeds = embeds;
+            m.flags = flags;
         }
     }
 
@@ -1164,6 +1216,7 @@ impl ChatState {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            flags: 0,
             stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],

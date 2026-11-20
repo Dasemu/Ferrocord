@@ -148,7 +148,7 @@ pub fn member_subscribe_payload(
             "guild_id": guild.to_string(),
             "typing": true,
             "threads": true,
-            "activities": false,
+            "activities": true,
             "members": [],
             "channels": { channel.to_string(): ranges },
         }),
@@ -187,6 +187,26 @@ pub struct WireUser {
     /// Only present on the current user (READY).
     #[serde(default)]
     pub premium_type: u8,
+    #[serde(
+        default,
+        rename = "avatar_decoration_data",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub avatar_decoration: Option<Box<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub collectibles: Option<Box<Collectibles>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub primary_guild: Option<Box<PrimaryGuild>>,
+    #[serde(
+        default,
+        rename = "display_name_styles",
+        deserialize_with = "super::cosmetics::lenient"
+    )]
+    pub name_style: Option<Box<NameStyle>>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub accent_color: Option<u32>,
 }
 
 impl From<WireUser> for User {
@@ -197,6 +217,12 @@ impl From<WireUser> for User {
             global_name: w.global_name,
             avatar: w.avatar,
             bot: w.bot,
+            avatar_decoration: w.avatar_decoration,
+            collectibles: w.collectibles,
+            primary_guild: w.primary_guild,
+            name_style: w.name_style,
+            banner: w.banner,
+            accent_color: w.accent_color,
         }
     }
 }
@@ -427,7 +453,19 @@ pub struct WireEmbedMedia {
 impl From<WireEmbedMedia> for EmbedMedia {
     fn from(w: WireEmbedMedia) -> Self {
         EmbedMedia {
-            url: w.proxy_url.unwrap_or(w.url),
+            url: w.url,
+            proxy_url: w.proxy_url,
+            width: w.width,
+            height: w.height,
+        }
+    }
+}
+
+impl From<WireEmbedMedia> for EmbedVideo {
+    fn from(w: WireEmbedMedia) -> Self {
+        EmbedVideo {
+            url: w.url,
+            proxy_url: w.proxy_url,
             width: w.width,
             height: w.height,
         }
@@ -442,6 +480,19 @@ pub struct WireNamed {
     pub text: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub proxy_icon_url: Option<String>,
+}
+
+impl WireNamed {
+    /// The icon to download: the proxy URL when present.
+    fn icon(&self) -> Option<String> {
+        self.proxy_icon_url
+            .clone()
+            .or_else(|| self.icon_url.clone())
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -480,6 +531,10 @@ pub struct WireEmbed {
     pub thumbnail: Option<WireEmbedMedia>,
     #[serde(default)]
     pub video: Option<WireEmbedMedia>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub flags: Option<u64>,
 }
 
 impl From<WireEmbed> for Embed {
@@ -491,9 +546,15 @@ impl From<WireEmbed> for Embed {
             url: w.url,
             color: w.color,
             author_name: w.author.as_ref().and_then(|a| a.name.clone()),
+            author_icon: w.author.as_ref().and_then(WireNamed::icon),
             author_url: w.author.and_then(|a| a.url),
+            provider_url: w.provider.as_ref().and_then(|p| p.url.clone()),
             provider_name: w.provider.and_then(|p| p.name),
+            footer_icon: w.footer.as_ref().and_then(WireNamed::icon),
             footer: w.footer.and_then(|f| f.text),
+            timestamp_ms: w.timestamp.as_deref().and_then(parse_rfc3339_ms),
+            video: w.video.map(Into::into),
+            flags: w.flags.unwrap_or(0),
             fields: w
                 .fields
                 .into_iter()
@@ -505,12 +566,6 @@ impl From<WireEmbed> for Embed {
                 .collect(),
             image: w.image.map(Into::into),
             thumbnail: w.thumbnail.map(Into::into),
-            video: w.video.map(|v| EmbedVideo {
-                url: v.url,
-                proxy_url: v.proxy_url,
-                width: v.width,
-                height: v.height,
-            }),
         }
     }
 }
@@ -600,6 +655,8 @@ pub struct WireMessage {
     #[serde(default)]
     pub embeds: Option<Vec<WireEmbed>>,
     #[serde(default)]
+    pub flags: Option<u64>,
+    #[serde(default)]
     pub sticker_items: Option<Vec<WireSticker>>,
     #[serde(default)]
     pub mentions: Vec<WireUser>,
@@ -656,6 +713,7 @@ impl WireMessage {
                 global_name: None,
                 avatar: None,
                 bot: false,
+                ..Default::default()
             }),
             content: self.content.unwrap_or_default(),
             edited: self.edited_timestamp.is_some(),
@@ -671,6 +729,7 @@ impl WireMessage {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            flags: self.flags.unwrap_or(0),
             stickers: self
                 .sticker_items
                 .unwrap_or_default()
@@ -701,8 +760,20 @@ impl WireMessage {
             attachments: self
                 .attachments
                 .map(|v| v.into_iter().map(Into::into).collect()),
+            flags: self.flags,
         }
     }
+}
+
+/// ISO-8601 / RFC 3339 instant to Unix milliseconds (`None` when malformed
+/// or before 1970).
+pub fn parse_rfc3339_ms(s: &str) -> Option<u64> {
+    if s.len() > 64 {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .and_then(|t| u64::try_from(t.timestamp_millis()).ok())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -836,6 +907,8 @@ pub struct WirePresence {
     pub user_id: Option<Snowflake>,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub activities: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -897,6 +970,14 @@ impl WireReady {
             .presences
             .iter()
             .filter_map(|p| Some((p.user_id()?, Presence::from_wire(&p.status))))
+            .collect();
+        let activities: Vec<(UserId, Vec<Activity>)> = self
+            .presences
+            .iter()
+            .filter_map(|p| {
+                let a = super::cosmetics::parse_activities(&p.activities);
+                (!a.is_empty()).then(|| Some((p.user_id()?, a))).flatten()
+            })
             .collect();
         let my_status = self
             .user_settings
@@ -1012,6 +1093,7 @@ impl WireReady {
             suppress_everyone,
             suppress_roles,
             presences,
+            activities,
             my_status,
             premium_type,
             guild_folders,
@@ -1089,6 +1171,8 @@ pub struct WirePresenceUpdate {
     pub user: Option<WireIdOnlyOpt>,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub activities: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1123,6 +1207,9 @@ pub struct WireListMember {
     pub roles: Vec<Snowflake>,
     #[serde(default)]
     pub presence: Option<WirePresenceUpdate>,
+    /// The member's server-specific decoration (overrides the user's).
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub avatar_decoration_data: Option<Box<AvatarDecoration>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1143,7 +1230,15 @@ impl WireListItem {
             });
         }
         let m = self.member?;
-        let user: User = m.user?.into();
+        let mut user: User = m.user?.into();
+        if m.avatar_decoration_data.is_some() {
+            user.avatar_decoration = m.avatar_decoration_data;
+        }
+        let activities = m
+            .presence
+            .as_ref()
+            .map(|p| super::cosmetics::parse_activities(&p.activities))
+            .unwrap_or_default();
         Some(MemberItem::Member(Box::new(MemberEntry {
             user,
             nick: m.nick,
@@ -1152,6 +1247,7 @@ impl WireListItem {
                 .presence
                 .map(|p| Presence::from_wire(&p.status))
                 .unwrap_or(Presence::Offline),
+            activities,
         })))
     }
 }
@@ -1397,6 +1493,7 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             Event::PresenceUpdate {
                 user_id,
                 status: Presence::from_wire(&p.status),
+                activities: super::cosmetics::parse_activities(&p.activities),
             }
         }
         "GUILD_MEMBER_LIST_UPDATE" => {

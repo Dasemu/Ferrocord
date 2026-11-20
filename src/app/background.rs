@@ -107,7 +107,7 @@ impl App {
         }
     }
 
-    fn save_pref(&self, key: &'static str, on: bool) -> Task<Message> {
+    pub(super) fn save_pref(&self, key: &'static str, on: bool) -> Task<Message> {
         let store = self.store.clone();
         Task::perform(
             async move {
