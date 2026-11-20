@@ -48,6 +48,9 @@ pub enum Class {
     Media,
     /// GIF / APNG stickers in messages.
     Sticker,
+    /// `gifv` embeds (Tenor / Giphy MP4s), decoded by the video helper's
+    /// frames mode (`media::gifv`).
+    Gifv,
 }
 
 impl Class {
@@ -68,6 +71,9 @@ impl Class {
             // Shown at most 400 px wide (the chat's media box).
             Self::Media => Limits::new(240, 64, 16 * MB, 400),
             Self::Sticker => Limits::new(160, 48, 4 * MB, 160),
+            // Fitted to the 400 x 300 media box by the helper; a smaller
+            // budget than GIFs because a clip has more frames to spread.
+            Self::Gifv => Limits::new(0, 48, 6 * MB, 400),
         }
     }
 }

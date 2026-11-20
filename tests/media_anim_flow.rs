@@ -73,3 +73,37 @@ fn gif_attachments_are_animation_candidates() {
     // PNG screenshots are not.
     assert!(!out.iter().any(|(k, _)| k == "mock://image/1"));
 }
+
+#[test]
+fn the_mock_gifv_loops_like_a_gif() {
+    let mut a = showcase();
+    let anim = a.media_anim(mock::MOCK_GIFV).expect("mock gifv decoded");
+    assert!(anim.frames.len() > 1);
+    assert!(a.media_playing());
+    let _ = ferrocord::ui::view(&a);
+
+    // The same rules as GIFs: autoplay off keeps the still frame.
+    ui(&mut a, Ui::ToggleAutoplayGifs);
+    assert!(a.media_anim(mock::MOCK_GIFV).is_none());
+    let _ = ferrocord::ui::view(&a);
+    ui(&mut a, Ui::ToggleAutoplayGifs);
+    ui(&mut a, Ui::ToggleReduceMotion);
+    assert!(a.media_anim(mock::MOCK_GIFV).is_none());
+}
+
+#[test]
+fn gifv_embeds_are_animation_candidates_by_their_mp4() {
+    let a = showcase();
+    let msgs = &a.chat.messages[&mock::CH_SHOWCASE].messages;
+    let mut out = Vec::new();
+    for m in msgs {
+        message_media(m, &a.cfg.cdn_url, &mut out);
+    }
+    assert!(
+        out.iter()
+            .any(|(k, c)| k == mock::MOCK_GIFV && *c == Class::Gifv),
+        "{out:?}"
+    );
+    // The still frame is not decoded as a GIF.
+    assert!(!out.iter().any(|(k, _)| k == "mock://gif/1"));
+}

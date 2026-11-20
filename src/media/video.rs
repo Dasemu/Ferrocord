@@ -235,6 +235,12 @@ pub fn spawn_with(
                             width,
                             height,
                             rgba,
+                        }
+                        | Msg::Picture {
+                            width,
+                            height,
+                            rgba,
+                            ..
                         } => Event::Frame {
                             width,
                             height,

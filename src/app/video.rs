@@ -356,7 +356,7 @@ fn helper_stream(rx: UnboundedReceiver<Event>) -> impl futures::Stream<Item = Ev
 
 impl App {
     /// The directory downloaded videos are kept in.
-    fn video_dir(&self) -> std::path::PathBuf {
+    pub(super) fn video_dir(&self) -> std::path::PathBuf {
         self.cfg
             .data_dir
             .clone()
