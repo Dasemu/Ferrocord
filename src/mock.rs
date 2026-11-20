@@ -808,7 +808,7 @@ pub const MOCK_EMBED_IMAGES: [(&str, u32, u32, u8); 8] = [
 /// colour channels rotated by `shift`.
 pub fn mock_embed_image(w: u32, h: u32, shift: u8) -> (u32, u32, Vec<u8>) {
     let (w, h, mut px) = mock_image(w, h);
-    for c in px.chunks_exact_mut(4) {
+    for c in px.as_chunks_mut::<4>().0 {
         let (r, g, b) = (c[0], c[1], c[2]);
         let rot = match shift % 4 {
             1 => (g, b, r),
