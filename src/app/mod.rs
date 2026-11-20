@@ -3,6 +3,7 @@
 
 pub mod actions;
 mod background;
+pub mod composer;
 pub mod emoji;
 pub mod features;
 pub mod folders;
@@ -92,7 +93,8 @@ pub struct App {
     pub connection: ConnectionState,
     pub chat: ChatState,
     pub view: View,
-    pub composer: String,
+    pub composer: composer::Composer,
+    drafts: composer::Drafts,
     last_typing_sent: HashMap<ChannelId, u64>,
     pub collapsed: HashSet<ChannelId>,
     pub revealed_spoilers: HashSet<MessageId>,
@@ -207,7 +209,8 @@ impl App {
             connection: ConnectionState::Disconnected,
             chat: ChatState::default(),
             view: View::Home(None),
-            composer: String::new(),
+            composer: composer::Composer::new(),
+            drafts: composer::Drafts::default(),
             last_typing_sent: HashMap::new(),
             collapsed: HashSet::new(),
             revealed_spoilers: HashSet::new(),
@@ -686,6 +689,8 @@ impl App {
                 Task::none()
             }
             Ui::SelectHome => {
+                // Like the official client, picking a destination leaves Discover.
+                self.discover = None;
                 let last_dm = self.chat.dm_list().first().map(|c| c.id);
                 let target = match self.view {
                     View::Home(c) => c,
@@ -695,6 +700,7 @@ impl App {
                 self.switch_view(View::Home(target))
             }
             Ui::SelectGuild(g) => {
+                self.discover = None;
                 if let View::Guild { guild, .. } = self.view
                     && guild == g
                 {
@@ -711,6 +717,7 @@ impl App {
                 self.switch_view(View::Guild { guild: g, channel })
             }
             Ui::SelectChannel(c) => {
+                self.discover = None;
                 let view = match self.chat.channels.get(&c) {
                     Some(ch) if ch.kind.is_private() => View::Home(Some(c)),
                     Some(ch) => match ch.guild_id {
@@ -739,23 +746,15 @@ impl App {
                 Task::none()
             }
             Ui::ComposerChanged(s) => {
-                self.composer = s;
-                let Some(c) = self.open_channel() else {
-                    return Task::none();
-                };
-                let now = now_ms();
-                let last = self.last_typing_sent.get(&c).copied().unwrap_or(0);
-                if self.cfg.mock
-                    || self.composer.is_empty()
-                    || now.saturating_sub(last) < TYPING_INTERVAL_MS
-                {
-                    return Task::none();
+                self.composer.set_text(&s);
+                self.after_composer_edit()
+            }
+            Ui::ComposerAction(a) => {
+                if self.composer.perform(a) {
+                    self.after_composer_edit()
+                } else {
+                    Task::none()
                 }
-                self.last_typing_sent.insert(c, now);
-                let rest = self.rest.clone();
-                Task::perform(async move { rest.trigger_typing(c).await }, |_| {
-                    Message::Done(Done::Ignored)
-                })
             }
             Ui::Send => self.send(),
             Ui::Scrolled(vp) => {
@@ -820,12 +819,42 @@ impl App {
         }
     }
 
+    /// Typing indicator after the composer text changed.
+    fn after_composer_edit(&mut self) -> Task<Message> {
+        let Some(c) = self.open_channel() else {
+            return Task::none();
+        };
+        let now = now_ms();
+        let last = self.last_typing_sent.get(&c).copied().unwrap_or(0);
+        if self.cfg.mock
+            || self.composer.is_empty()
+            || now.saturating_sub(last) < TYPING_INTERVAL_MS
+        {
+            return Task::none();
+        }
+        self.last_typing_sent.insert(c, now);
+        let rest = self.rest.clone();
+        Task::perform(async move { rest.trigger_typing(c).await }, |_| {
+            Message::Done(Done::Ignored)
+        })
+    }
+
     fn switch_view(&mut self, view: View) -> Task<Message> {
-        if let Some(prev) = self.open_channel() {
+        let prev = self.open_channel();
+        if let Some(prev) = prev {
             self.chat.trim_inactive(prev);
+            // Keep the unsent text of the channel we leave.
+            self.drafts.save(prev, self.composer.text());
         }
         self.view = view;
         self.composer.clear();
+        let next = match view {
+            View::Home(c) => c,
+            View::Guild { channel, .. } => channel,
+        };
+        if let Some(t) = next.and_then(|c| self.drafts.take(c)) {
+            self.composer.set_text(&t);
+        }
         self.reset_channel_ui();
         let members = self.sync_members();
         let (g, c) = match view {
@@ -975,7 +1004,7 @@ impl App {
     }
 
     fn send(&mut self) -> Task<Message> {
-        let content = self.composer.trim().to_owned();
+        let content = self.composer.text().trim().to_owned();
         let Some(c) = self.open_channel() else {
             return Task::none();
         };

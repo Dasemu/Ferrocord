@@ -3,6 +3,7 @@
 use iced::widget::{Space, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Length, Padding};
 
+use super::emoji_font::emoji_text;
 use super::theme::{self, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence};
 use crate::app::members::MemberListState;
@@ -98,15 +99,9 @@ fn person_row<'a>(
     presence: Presence,
 ) -> El<'a> {
     let p = app.theme.palette;
-    let mut name = row![
-        text(name.to_owned())
-            .size(16)
-            .font(INTER_MEDIUM)
-            .color(color)
-            .wrapping(text::Wrapping::None)
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
+    let mut name = row![emoji_text(name, 16.0, color, INTER_MEDIUM, false)]
+        .spacing(6)
+        .align_y(Alignment::Center);
     if user.bot {
         name = name.push(bot_tag(app));
     }
@@ -187,12 +182,13 @@ pub fn dm_view<'a>(app: &'a App, c: &Channel) -> El<'a> {
 fn profile<'a>(app: &'a App, u: &User) -> El<'a> {
     let p = app.theme.palette;
     let presence = app.chat.presence_of(u.id);
-    let mut name = row![
-        text(u.display_name().to_owned())
-            .size(20)
-            .font(INTER_BOLD)
-            .color(p.header_text)
-    ]
+    let mut name = row![emoji_text(
+        u.display_name(),
+        20.0,
+        p.header_text,
+        INTER_BOLD,
+        false
+    )]
     .spacing(6)
     .align_y(Alignment::Center);
     if u.bot {
