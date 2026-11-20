@@ -4,8 +4,9 @@
 //! Values reproduce the layout and colour scheme of the official dark theme
 //! (measured from public screenshots); see `docs/protocol.md` §UI reference.
 
-use iced::widget::{button, container, scrollable, text_input, toggler};
-use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, font};
+use iced::gradient::Linear;
+use iced::widget::{button, container, scrollable, text_editor, text_input, toggler};
+use iced::{Background, Border, Color, Font, Gradient, Radians, Shadow, Theme, font};
 
 use crate::config::ThemeChoice;
 
@@ -254,6 +255,10 @@ pub const INTER_ITALIC: Font = Font {
 };
 pub const MONO: Font = Font::MONOSPACE;
 
+/// Noto Color Emoji (SIL OFL 1.1), loaded only when the system has no copy
+/// of the family (`emoji_font::needs_bundled_emoji_font`).
+pub const NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../assets/fonts/NotoColorEmoji.ttf");
+
 /// Embedded font files (SIL OFL 1.1).
 pub const FONT_FILES: [&[u8]; 4] = [
     include_bytes!("../../assets/fonts/Inter-Regular.otf"),
@@ -282,33 +287,42 @@ pub fn rounded_bg(color: Color, radius: f32) -> impl Fn(&Theme) -> container::St
     }
 }
 
+// No style here sets `container::Style::shadow`. The tiny-skia renderer
+// (the default) draws a quad's shadow without clipping it to the region being
+// repainted, so whenever only part of the window is redrawn (scrolling, hover)
+// the semi-transparent shadow is painted again over the parts that are not,
+// and they darken frame after frame until they turn black. Shadows are faked
+// with gradients, which are clipped like any other fill.
+
+/// Background of a bar whose bottom edge darkens like the subtle drop shadow
+/// of the official client's headers.
+fn bar_with_bottom_edge(bg: Color) -> Background {
+    let edge = Color {
+        r: bg.r * 0.65,
+        g: bg.g * 0.65,
+        b: bg.b * 0.65,
+        a: bg.a,
+    };
+    Background::Gradient(Gradient::Linear(
+        // Pointing down: offset 0 is the top edge, 1 the bottom edge.
+        Linear::new(Radians(std::f32::consts::PI))
+            .add_stop(0.0, bg)
+            .add_stop(0.97, bg)
+            .add_stop(1.0, edge),
+    ))
+}
+
 /// Header bar with the subtle bottom shadow of the official client.
 pub fn header(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(p.bg_panel)),
-        shadow: Shadow {
-            color: Color {
-                a: 0.35,
-                ..Color::BLACK
-            },
-            offset: Vector::new(0.0, 1.0),
-            blur_radius: 2.0,
-        },
+        background: Some(bar_with_bottom_edge(p.bg_panel)),
         ..Default::default()
     }
 }
 
 pub fn sidebar_header(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(p.bg_sidebar)),
-        shadow: Shadow {
-            color: Color {
-                a: 0.35,
-                ..Color::BLACK
-            },
-            offset: Vector::new(0.0, 1.0),
-            blur_radius: 2.0,
-        },
+        background: Some(bar_with_bottom_edge(p.bg_sidebar)),
         ..Default::default()
     }
 }
@@ -501,14 +515,6 @@ pub fn popup(p: Palette) -> impl Fn(&Theme) -> container::Style {
             width: 1.0,
             color: p.border,
         },
-        shadow: Shadow {
-            color: Color {
-                a: 0.45,
-                ..Color::BLACK
-            },
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 12.0,
-        },
         ..Default::default()
     }
 }
@@ -588,6 +594,21 @@ pub fn input(p: Palette, bg: Color) -> impl Fn(&Theme, text_input::Status) -> te
     }
 }
 
+/// Multi-line editor with the same look as [`input`].
+pub fn editor(p: Palette, bg: Color) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
+    move |_, _| text_editor::Style {
+        background: Background::Color(bg),
+        border: Border {
+            radius: Metrics::DEFAULT.radius.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        placeholder: p.text_muted,
+        value: p.text_normal,
+        selection: Color { a: 0.4, ..p.accent },
+    }
+}
+
 pub fn thin_scrollbar(
     p: Palette,
     track: bool,
@@ -632,6 +653,21 @@ pub fn default_avatar_color(id: u64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_styles_have_no_shadow() {
+        // tiny-skia paints quad shadows unclipped: see the note above
+        // `bar_with_bottom_edge`.
+        let p = Palette::DARK;
+        let t = Theme::Dark;
+        for style in [header(p)(&t), sidebar_header(p)(&t), popup(p)(&t)] {
+            assert_eq!(style.shadow, Shadow::default());
+        }
+        assert!(matches!(
+            header(p)(&t).background,
+            Some(Background::Gradient(_))
+        ));
+    }
 
     #[test]
     fn presence_colours_are_distinct() {

@@ -628,3 +628,49 @@ fn user_guild_settings_update_carries_channel_overrides() {
     assert!(channels[0].1.is_muted(0));
     assert!(channels[0].1.mute_end_ms.is_some());
 }
+
+#[test]
+fn stickers_parse_on_messages_guilds_and_updates() {
+    use serde_json::json;
+    let Ok(Some(Event::MessageCreate(m))) = parse_dispatch(
+        "MESSAGE_CREATE",
+        json!({"id": "10", "channel_id": "20", "content": "",
+               "author": {"id": "2", "username": "alice"},
+               "sticker_items": [{"id": "30", "name": "Wave", "format_type": 3},
+                                 {"id": "31", "name": "Cat", "format_type": 4}]}),
+    ) else {
+        panic!("message with stickers did not parse");
+    };
+    assert_eq!(m.stickers.len(), 2);
+    assert_eq!(m.stickers[0].format, StickerFormat::Lottie);
+    assert_eq!(m.stickers[1].format, StickerFormat::Gif);
+
+    let Ok(Some(Event::GuildStickers { guild_id, stickers })) = parse_dispatch(
+        "GUILD_STICKERS_UPDATE",
+        json!({"guild_id": "5", "stickers": [
+            {"id": "40", "name": "Party", "format_type": 1, "available": false},
+            {"id": "41", "name": "Ship it", "format_type": 2}]}),
+    ) else {
+        panic!("sticker update did not parse");
+    };
+    assert_eq!(guild_id, Snowflake(5));
+    assert!(!stickers[0].available && stickers[1].available);
+    assert_eq!(stickers[1].format, StickerFormat::Apng);
+
+    let mut s = ChatState::default();
+    s.guilds.push(Guild {
+        id: Snowflake(5),
+        name: "g".into(),
+        icon: None,
+        roles: vec![],
+        owner_id: None,
+        emojis: vec![],
+        stickers: vec![],
+        premium_tier: 0,
+    });
+    s.apply_event(
+        &Event::GuildStickers { guild_id, stickers },
+        &Ctx::default(),
+    );
+    assert_eq!(s.guild(Snowflake(5)).unwrap().stickers.len(), 2);
+}

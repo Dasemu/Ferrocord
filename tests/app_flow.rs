@@ -214,7 +214,7 @@ fn edit_flow_up_arrow_save_and_edited_marker() {
     ui(&mut a, Ui::EditLast);
     let e = a.editing.clone().expect("editing");
     assert_eq!(e.message, mine.id);
-    assert_eq!(e.text, mine.content);
+    assert_eq!(e.text.text(), mine.content);
     let _ = ferrocord::ui::view(&a);
     ui(
         &mut a,
@@ -384,7 +384,7 @@ fn reactions_toggle_and_picker_flows() {
             animated: false,
         }),
     );
-    assert_eq!(a.composer, "🍕 <:ferris:1001> ");
+    assert_eq!(a.composer.text(), "🍕 <:ferris:1001> ");
 }
 
 #[test]
@@ -1165,4 +1165,178 @@ mod round3 {
             ui(&mut a, Ui::Escape);
         }
     }
+}
+
+#[test]
+fn gif_picker_opens_searches_and_sends() {
+    use ferrocord::app::Done;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let p = a.gif_picker.as_ref().expect("picker open");
+    assert_eq!(p.results.len(), 8, "trending loaded");
+    // Typing only searches once the debounce timer of the last keystroke fires.
+    let _ = a.update(Message::Ui(Ui::GifQuery("ca".into())));
+    let _ = a.update(Message::Ui(Ui::GifQuery("cat".into())));
+    let last = a.gif_picker.as_ref().unwrap().generation;
+    let _ = a.update(Message::Done(Done::GifSearchDue(last - 1)));
+    assert_eq!(a.gif_picker.as_ref().unwrap().results.len(), 8);
+    let _ = a.update(Message::Done(Done::GifSearchDue(last)));
+    assert_eq!(a.gif_picker.as_ref().unwrap().results.len(), 4);
+    // Picking sends the Tenor URL as a message and closes the picker,
+    // leaving the composer alone.
+    let _ = a.update(Message::Ui(Ui::ComposerChanged("draft".into())));
+    let url = a.gif_picker.as_ref().unwrap().results[0].url.clone();
+    let _ = a.update(Message::Ui(Ui::PickGif(url.clone())));
+    assert!(a.gif_picker.is_none());
+    assert_eq!(a.composer.text(), "draft");
+    let last_msg = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
+    assert_eq!(last_msg.content, url);
+}
+
+#[test]
+fn sticker_picker_sends_a_sticker() {
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenStickerPicker));
+    assert!(a.sticker_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::StickerQuery("party".into())));
+    assert_eq!(a.sticker_picker.as_ref().unwrap().query, "party");
+    let party = mock::mock_stickers()[1].clone();
+    let _ = a.update(Message::Ui(Ui::PickSticker(party.id)));
+    assert!(a.sticker_picker.is_none());
+    // In mock mode the echo arrives as a task; apply it like the runtime would.
+    let mut echo = mock::text_message(
+        mock::CH_GENERAL,
+        ferrocord::net::model::Snowflake::from_timestamp_ms(ferrocord::app::now_ms() + 60_000, 0),
+        mock::user(1),
+        "",
+    );
+    echo.stickers = vec![party.clone()];
+    let _ = a.update(Message::Net(ferrocord::net::Event::MessageCreate(
+        Box::new(echo),
+    )));
+    let last = a.chat.messages[&mock::CH_GENERAL].messages.back().unwrap();
+    assert_eq!(last.stickers, vec![party]);
+}
+
+#[test]
+fn switching_channel_closes_the_gif_and_sticker_pickers() {
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    assert!(a.gif_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_HELP)));
+    assert!(a.gif_picker.is_none());
+    let _ = a.update(Message::Ui(Ui::OpenStickerPicker));
+    assert!(a.sticker_picker.is_some());
+    let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_GENERAL)));
+    assert!(a.sticker_picker.is_none());
+}
+
+// -- composer (text_editor) ---------------------------------------------------
+
+fn type_text(a: &mut App, s: &str) {
+    use iced::widget::text_editor::{Action, Edit};
+    for ch in s.chars() {
+        let edit = if ch == '\n' {
+            Edit::Enter
+        } else {
+            Edit::Insert(ch)
+        };
+        ui(a, Ui::ComposerAction(Action::Edit(edit)));
+    }
+}
+
+#[test]
+fn multi_line_text_is_sent_with_its_newlines() {
+    let mut a = app();
+    type_text(&mut a, "first\nsecond\n\nthird");
+    assert_eq!(a.composer.text(), "first\nsecond\n\nthird");
+    ui(&mut a, Ui::Send);
+    assert!(a.composer.is_empty());
+    let c = a.open_channel().expect("channel");
+    let last = a.chat.messages[&c]
+        .messages
+        .back()
+        .expect("pending")
+        .clone();
+    assert_eq!(last.content, "first\nsecond\n\nthird");
+}
+
+#[test]
+fn drafts_are_kept_per_channel() {
+    let mut a = app();
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    type_text(&mut a, "half written\nline two");
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert!(a.composer.is_empty());
+    type_text(&mut a, "other");
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    assert_eq!(a.composer.text(), "half written\nline two");
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert_eq!(a.composer.text(), "other");
+    // Sending clears the draft for good.
+    ui(&mut a, Ui::Send);
+    ui(&mut a, Ui::SelectChannel(mock::CH_GENERAL));
+    ui(&mut a, Ui::SelectChannel(mock::CH_HELP));
+    assert!(a.composer.is_empty());
+}
+
+#[test]
+fn editing_a_multi_line_message_keeps_its_lines() {
+    let mut a = app();
+    let c = a.open_channel().expect("channel");
+    // Up arrow edits the last own message; give it two lines first.
+    ui(&mut a, Ui::EditLast);
+    let id = a.editing.as_ref().expect("editing").message;
+    ui(&mut a, Ui::CancelEdit);
+    a.chat.set_content(c, id, "one\ntwo ü🍕");
+    ui(&mut a, Ui::EditLast);
+    let e = a.editing.clone().expect("editing");
+    assert_eq!(e.text.text(), "one\ntwo ü🍕");
+    type_text_edit(&mut a, "\nthree");
+    ui(&mut a, Ui::SubmitEdit);
+    assert!(a.editing.is_none());
+    let m = a.chat.message(c, id).expect("message");
+    assert_eq!(m.content, "one\ntwo ü🍕\nthree");
+}
+
+fn type_text_edit(a: &mut App, s: &str) {
+    use iced::widget::text_editor::{Action, Edit};
+    for ch in s.chars() {
+        let edit = if ch == '\n' {
+            Edit::Enter
+        } else {
+            Edit::Insert(ch)
+        };
+        ui(a, Ui::EditAction(Action::Edit(edit)));
+    }
+}
+
+// -- leaving Discover ---------------------------------------------------------
+
+#[test]
+fn picking_a_destination_leaves_discover() {
+    let g = mock::GUILD_RUST;
+    for dest in [
+        Ui::SelectHome,
+        Ui::SelectGuild(g),
+        Ui::SelectChannel(mock::CH_HELP),
+        Ui::Escape,
+        Ui::CloseDiscover,
+    ] {
+        let mut a = app();
+        ui(&mut a, Ui::OpenDiscover);
+        assert!(a.discover.is_some());
+        ui(&mut a, dest.clone());
+        assert!(a.discover.is_none(), "{dest:?} must leave Discover");
+    }
+}
+
+#[test]
+fn clicking_the_current_server_still_leaves_discover() {
+    let mut a = app();
+    assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
+    ui(&mut a, Ui::OpenDiscover);
+    ui(&mut a, Ui::SelectGuild(mock::GUILD_RUST));
+    assert!(a.discover.is_none());
+    assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
 }

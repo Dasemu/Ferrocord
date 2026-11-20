@@ -209,6 +209,9 @@ pub struct Guild {
     /// Custom emoji of the server (for the picker).
     #[serde(default)]
     pub emojis: Vec<CustomEmoji>,
+    /// Stickers of the server (for the sticker picker).
+    #[serde(default)]
+    pub stickers: Vec<Sticker>,
     /// Boost tier (0-3); raises the upload limit.
     #[serde(default)]
     pub premium_tier: u8,
@@ -240,6 +243,51 @@ pub struct CustomEmoji {
 
 fn default_true() -> bool {
     true
+}
+
+/// Image format of a sticker (`format_type` on the wire).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StickerFormat {
+    #[default]
+    Png,
+    Apng,
+    /// Vector animation: not rendered, shown as a named placeholder.
+    Lottie,
+    Gif,
+}
+
+impl StickerFormat {
+    pub fn from_wire(n: u8) -> Self {
+        match n {
+            2 => Self::Apng,
+            3 => Self::Lottie,
+            4 => Self::Gif,
+            _ => Self::Png,
+        }
+    }
+}
+
+/// A sticker: one of a server's, or one attached to a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sticker {
+    pub id: Snowflake,
+    pub name: String,
+    pub format: StickerFormat,
+    #[serde(default = "default_true")]
+    pub available: bool,
+}
+
+impl Sticker {
+    /// CDN image of the sticker, `None` for Lottie stickers (not rendered).
+    /// APNG stickers are served as PNG and show their first frame.
+    pub fn image_url(&self, cdn: &str) -> Option<String> {
+        let ext = match self.format {
+            StickerFormat::Lottie => return None,
+            StickerFormat::Gif => "gif",
+            StickerFormat::Png | StickerFormat::Apng => "png",
+        };
+        Some(format!("{cdn}/stickers/{}.{ext}?size=160", self.id))
+    }
 }
 
 /// An emoji used in a reaction: Unicode (`id == None`, `name` is the
@@ -479,6 +527,29 @@ pub struct Embed {
     pub thumbnail: Option<EmbedMedia>,
 }
 
+impl Embed {
+    /// Media to show on its own, without the embed card: GIF links (`gifv`,
+    /// e.g. Tenor/Giphy) and direct image links (`image`), as the official
+    /// client does. Uses the image, falling back to the thumbnail.
+    pub fn bare_media(&self) -> Option<&EmbedMedia> {
+        match self.kind.as_deref() {
+            Some("gifv" | "image") => self.image.as_ref().or(self.thumbnail.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+/// A GIF offered by the GIF picker (Discord proxies Tenor).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gif {
+    /// Tenor page URL: what gets sent, Discord turns it into a `gifv` embed.
+    pub url: String,
+    /// Image shown in the picker (static preview, else the GIF itself).
+    pub preview: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -489,6 +560,8 @@ pub struct Message {
     pub edited: bool,
     pub attachments: Vec<Attachment>,
     pub embeds: Vec<Embed>,
+    #[serde(default)]
+    pub stickers: Vec<Sticker>,
     pub mentions: Vec<UserId>,
     pub mention_roles: Vec<RoleId>,
     pub mention_everyone: bool,
@@ -526,6 +599,17 @@ impl fmt::Debug for Message {
 impl Message {
     pub fn timestamp_ms(&self) -> u64 {
         self.id.timestamp_ms()
+    }
+
+    /// True when the text is nothing but the link of its GIF embed: the
+    /// official client then shows only the GIF, not the URL.
+    pub fn content_is_gif_link(&self) -> bool {
+        let c = self.content.trim();
+        !c.is_empty()
+            && self
+                .embeds
+                .iter()
+                .any(|e| e.kind.as_deref() == Some("gifv") && e.url.as_deref() == Some(c))
     }
 
     /// Applies a MESSAGE_UPDATE patch (only the fields that were sent).
@@ -724,6 +808,56 @@ pub struct SearchPage {
 mod tests {
     use super::*;
 
+    fn gif_embed(url: &str) -> Embed {
+        Embed {
+            kind: Some("gifv".into()),
+            url: Some(url.into()),
+            provider_name: Some("Tenor".into()),
+            thumbnail: Some(EmbedMedia {
+                url: "https://media.example/thumb.png".into(),
+                width: Some(220),
+                height: Some(165),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gif_and_image_embeds_render_bare() {
+        let gif = gif_embed("https://tenor.com/view/cat-123");
+        assert_eq!(
+            gif.bare_media().map(|m| m.url.as_str()),
+            Some("https://media.example/thumb.png")
+        );
+        let rich = Embed {
+            kind: Some("rich".into()),
+            ..gif.clone()
+        };
+        assert!(rich.bare_media().is_none());
+        let no_media = Embed {
+            thumbnail: None,
+            ..gif
+        };
+        assert!(no_media.bare_media().is_none());
+    }
+
+    #[test]
+    fn gif_link_content_is_hidden_only_when_alone() {
+        let url = "https://tenor.com/view/cat-123";
+        let mut m = crate::mock::text_message(
+            Snowflake(1),
+            Snowflake(2),
+            crate::mock::user(2),
+            &format!(" {url} "),
+        );
+        m.embeds = vec![gif_embed(url)];
+        assert!(m.content_is_gif_link());
+        m.content = format!("look {url}");
+        assert!(!m.content_is_gif_link());
+        m.content = String::new();
+        assert!(!m.content_is_gif_link());
+    }
+
     #[test]
     fn emoji_identity_and_segments() {
         let a = Emoji::unicode("👍");
@@ -795,6 +929,7 @@ mod tests {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],
             mention_everyone: false,
@@ -821,6 +956,7 @@ mod tests {
             roles: vec![],
             owner_id: None,
             emojis: vec![],
+            stickers: vec![],
             premium_tier: 0,
         };
         assert_eq!(g.acronym(), "RPL");

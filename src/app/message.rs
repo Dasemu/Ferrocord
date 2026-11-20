@@ -36,7 +36,10 @@ pub enum Ui {
     SelectGuild(GuildId),
     SelectChannel(ChannelId),
     ToggleCategory(ChannelId),
+    /// Test/automation hook: replace the composer text.
     ComposerChanged(String),
+    /// An editor action in the composer.
+    ComposerAction(iced::widget::text_editor::Action),
     Send,
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
@@ -60,6 +63,8 @@ pub enum Ui {
     // -- edit and delete
     StartEdit(MessageId),
     EditChanged(String),
+    /// An editor action in the inline edit box.
+    EditAction(iced::widget::text_editor::Action),
     SubmitEdit,
     CancelEdit,
     /// Up arrow in an empty composer.
@@ -81,6 +86,18 @@ pub enum Ui {
     EmojiSection(Section),
     PickEmoji(Emoji),
     CloseEmojiPicker,
+    /// Composer GIF button.
+    OpenGifPicker,
+    GifQuery(String),
+    /// Sends the GIF with this Tenor URL to the open channel.
+    PickGif(String),
+    CloseGifPicker,
+    /// Composer sticker button.
+    OpenStickerPicker,
+    StickerQuery(String),
+    /// Sends this sticker to the open channel.
+    PickSticker(Snowflake),
+    CloseStickerPicker,
     // -- attachments
     PickFiles,
     FileDropped(PathBuf),
@@ -121,7 +138,6 @@ pub enum Ui {
     Unpin(ChannelId, MessageId),
     InboxMore,
     InboxGuildOnly(bool),
-    OpenHelp,
     // -- add a server
     OpenAddServer,
     CloseAddServer,
@@ -241,6 +257,12 @@ pub enum Done {
     Search {
         generation: u64,
         result: Result<SearchPage, String>,
+    },
+    /// The GIF search debounce timer of this generation fired.
+    GifSearchDue(u64),
+    Gifs {
+        generation: u64,
+        result: Result<Vec<crate::net::model::Gif>, String>,
     },
     /// Delay after a jump so the new rows are laid out before scrolling.
     ScrollToMessage(MessageId),

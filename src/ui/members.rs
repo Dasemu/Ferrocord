@@ -3,7 +3,8 @@
 use iced::widget::{Space, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Length, Padding};
 
-use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::emoji_font::emoji_text;
+use super::theme::{self, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence};
 use crate::app::members::MemberListState;
 use crate::app::{App, Message, Ui};
@@ -86,30 +87,27 @@ fn member_row<'a>(app: &'a App, m: &'a MemberEntry, guild: Option<&Guild>) -> El
     } else {
         base
     };
-    let mut name = row![
-        text(m.display_name().to_owned())
-            .size(16)
-            .font(INTER_MEDIUM)
-            .color(color)
-            .wrapping(text::Wrapping::None)
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
-    if m.user.bot {
-        name = name.push(
-            container(
-                text("BOT")
-                    .size(10)
-                    .font(INTER_SEMIBOLD)
-                    .color(p.accent_text),
-            )
-            .padding(Padding::from([1, 4]))
-            .style(theme::rounded_bg(p.accent, 3.0)),
-        );
+    person_row(app, &m.user, m.display_name(), color, m.presence)
+}
+
+/// Avatar with presence, name and (for bots) a BOT tag: one list row.
+fn person_row<'a>(
+    app: &'a App,
+    user: &User,
+    name: &str,
+    color: Color,
+    presence: Presence,
+) -> El<'a> {
+    let p = app.theme.palette;
+    let mut name = row![emoji_text(name, 16.0, color, INTER_MEDIUM, false)]
+        .spacing(6)
+        .align_y(Alignment::Center);
+    if user.bot {
+        name = name.push(bot_tag(app));
     }
     container(
         row![
-            avatar_with_presence(app, &m.user, 32.0, m.presence, p.bg_sidebar),
+            avatar_with_presence(app, user, 32.0, presence, p.bg_sidebar),
             name,
         ]
         .spacing(12)
@@ -117,5 +115,91 @@ fn member_row<'a>(app: &'a App, m: &'a MemberEntry, guild: Option<&Guild>) -> El
     )
     .padding(Padding::from([6, 8]))
     .width(Length::Fill)
+    .into()
+}
+
+fn bot_tag<'a>(app: &App) -> El<'a> {
+    let p = app.theme.palette;
+    container(
+        text("BOT")
+            .size(10)
+            .font(INTER_SEMIBOLD)
+            .color(p.accent_text),
+    )
+    .padding(Padding::from([1, 4]))
+    .style(theme::rounded_bg(p.accent, 3.0))
+    .into()
+}
+
+/// Right-hand panel of an open DM: the other person's profile in a 1:1 DM,
+/// the participant list in a group DM.
+pub fn dm_view<'a>(app: &'a App, c: &Channel) -> El<'a> {
+    let p = app.theme.palette;
+    let people = app.chat.dm_participants(c);
+    let body: El<'a> = match (c.kind, people.as_slice()) {
+        (ChannelKind::Dm, [other]) => profile(app, other),
+        _ => {
+            let mut col = column![
+                container(
+                    text(format!("MEMBERS \u{2014} {}", people.len()))
+                        .size(12)
+                        .font(INTER_SEMIBOLD)
+                        .color(p.text_muted)
+                        .wrapping(text::Wrapping::None),
+                )
+                .padding(Padding::from([0, 8]).top(4).bottom(4))
+            ]
+            .padding(Padding::from([8, 8]).top(16));
+            for u in people {
+                let presence = app.chat.presence_of(u.id);
+                let color = if presence == Presence::Offline {
+                    Color {
+                        a: 0.4,
+                        ..p.text_secondary
+                    }
+                } else {
+                    p.text_secondary
+                };
+                col = col.push(person_row(app, u, u.display_name(), color, presence));
+            }
+            scrollable(col)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill)
+                .into()
+        }
+    };
+    container(body)
+        .width(WIDTH)
+        .height(Length::Fill)
+        .style(theme::bg(p.bg_sidebar))
+        .into()
+}
+
+/// Profile card of the other person in a 1:1 DM.
+fn profile<'a>(app: &'a App, u: &User) -> El<'a> {
+    let p = app.theme.palette;
+    let presence = app.chat.presence_of(u.id);
+    let mut name = row![emoji_text(
+        u.display_name(),
+        20.0,
+        p.header_text,
+        INTER_BOLD,
+        false
+    )]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if u.bot {
+        name = name.push(bot_tag(app));
+    }
+    column![
+        avatar_with_presence(app, u, 80.0, presence, p.bg_sidebar),
+        name,
+        text(u.username.clone()).size(14).color(p.text_secondary),
+    ]
+    .spacing(8)
+    .padding(Padding::from([16, 16]).top(24))
     .into()
 }

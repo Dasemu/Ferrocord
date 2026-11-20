@@ -81,7 +81,7 @@ shared `Decompress` context. The buffer is capped at 64 MiB.
 (partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
 `MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
 `GUILD_CREATE/UPDATE/DELETE`, `MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI`,
-`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`. Unknown events are ignored; a malformed known
+`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`, `GUILD_STICKERS_UPDATE`. Unknown events are ignored; a malformed known
 event is logged (without its payload) and the connection stays up.
 
 ### User-account READY quirks
@@ -124,7 +124,9 @@ Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 | Status | `PATCH /users/@me/settings {status}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
-| Media | CDN `avatars/`, `icons/`, `emojis/`, attachment `proxy_url?width=&height=` |
+| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US`; picking sends the Tenor `url` as text (shown back as a `gifv` embed) |
+| Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
+| Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (HTTPS, never with the token) |
 
 ### Rate limits
 
@@ -196,7 +198,7 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 |---|---|
 | Server rail | 72 px wide, `#1e1f22`, icons 48 px, 8 px gap, circle → 16 px radius on hover/selection |
 | Rail pill | 4 px wide white; 8 px tall unread, 40 px selected |
-| Channel sidebar | 240 px, `#2b2d31`; header 48 px with drop shadow |
+| Channel sidebar | 240 px, `#2b2d31`; header 48 px with a darker bottom edge (gradient, see below) |
 | Category | 12 px semibold uppercase `#949ba4`, chevron |
 | Channel row | 32 px tall, radius 4, name 16 px medium; muted `#80848e`, unread white semibold, selected `rgba(78,80,88,.6)` |
 | Mention badge | `#f23f43`, 16 px tall, 12 px bold white |
@@ -209,8 +211,13 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 | User panel | 52 px, `#232428` |
 | Accent | `#5865f2`, links `#00a8fc` |
 
+No style uses `container::Style::shadow`: tiny-skia draws a quad's shadow
+unclipped by the damage region, so on partial redraws (scrolling, hover; the
+norm on Windows) it piles up over unrepainted areas until they turn black.
+Header "shadows" are a gradient on the bar itself; popups rely on their border.
+
 Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
-(ISC). No Discord logos, fonts or artwork are used.
+(ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
 

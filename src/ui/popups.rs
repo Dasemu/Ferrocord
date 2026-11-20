@@ -1,11 +1,12 @@
-//! Popups drawn over the main view: message context menu, emoji picker,
-//! delete confirmation and the status menu.
+//! Popups drawn over the main view: message context menu, emoji, GIF and
+//! sticker pickers, delete confirmation and the status menu.
 
 use iced::widget::{
     Space, button, column, container, image, mouse_area, opaque, row, scrollable, text, text_input,
 };
 use iced::{Alignment, Color, Length, Padding, Point, Size};
 
+use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar, ui};
@@ -20,7 +21,7 @@ const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
 /// Number of popup slots [`layers`] always returns.
-pub const SLOTS: usize = 6;
+pub const SLOTS: usize = 8;
 
 /// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
 /// popup is an empty placeholder so the widget tree keeps its shape (see
@@ -52,6 +53,32 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         }
         None => super::empty(),
     };
+    let gif = match &app.gif_picker {
+        Some(gp) => {
+            let size = Size::new(GIF_PICKER_W, GIF_PICKER_H);
+            // Above and to the left of the composer button, like the emoji one.
+            let at = input::clamp_popup(
+                Point::new(gp.at.x - size.width + 16.0, gp.at.y - size.height - 12.0),
+                size,
+                window,
+            );
+            popup_layer(app, gif_picker(app, gp), at, Ui::CloseGifPicker)
+        }
+        None => super::empty(),
+    };
+    let sticker = match &app.sticker_picker {
+        Some(sp) => {
+            let size = Size::new(STICKER_PICKER_W, STICKER_PICKER_H);
+            // Above and to the left of the composer button, like the emoji one.
+            let at = input::clamp_popup(
+                Point::new(sp.at.x - size.width + 16.0, sp.at.y - size.height - 12.0),
+                size,
+                window,
+            );
+            popup_layer(app, sticker_picker(app, sp), at, Ui::CloseStickerPicker)
+        }
+        None => super::empty(),
+    };
     let delete = match app.pending_delete {
         Some((c, m)) => delete_dialog(app, c, m),
         None => super::empty(),
@@ -76,7 +103,179 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
         None => super::empty(),
     };
-    vec![status, menu, picker, delete, popover, rail_menu]
+    vec![
+        status, menu, picker, gif, sticker, delete, popover, rail_menu,
+    ]
+}
+
+const GIF_PICKER_W: f32 = 424.0;
+const GIF_PICKER_H: f32 = 440.0;
+
+fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
+    let p = app.theme.palette;
+    let search = text_input("Search Tenor", &gp.query)
+        .id(iced::widget::Id::new("gif-search"))
+        .on_input(|s| Message::Ui(Ui::GifQuery(s)))
+        .size(14)
+        .font(INTER)
+        .padding(Padding::from([8, 10]))
+        .style(theme::input(p, p.bg_app));
+    let title = if gp.query.trim().is_empty() {
+        "Trending GIFs"
+    } else {
+        "Search results"
+    };
+
+    // Two columns, each GIF going to the shorter one (masonry).
+    const GAP: f32 = 6.0;
+    let tile_w = (GIF_PICKER_W - 16.0 - GAP) / 2.0;
+    let mut cols: [Vec<El<'a>>; 2] = [Vec::new(), Vec::new()];
+    let mut heights = [0.0f32; 2];
+    for g in &gp.results {
+        let h = (tile_w * g.height as f32 / g.width as f32).clamp(60.0, 320.0);
+        let face: El<'a> = match app.image(&g.preview) {
+            Some(handle) => image(handle.clone())
+                .width(tile_w)
+                .height(h)
+                .content_fit(iced::ContentFit::Cover)
+                .into(),
+            None => container(icon(Icon::Image, 24.0, p.text_muted))
+                .center_x(tile_w)
+                .center_y(h)
+                .style(theme::rounded_bg(p.bg_app, 4.0))
+                .into(),
+        };
+        let tile = button(face)
+            .padding(0)
+            .on_press(ui(Ui::PickGif(g.url.clone())))
+            .style(theme::icon_button(p));
+        let i = usize::from(heights[1] < heights[0]);
+        heights[i] += h + GAP;
+        cols[i].push(tile.into());
+    }
+    let [left, right] = cols;
+    let body: El<'a> = if gp.loading && gp.results.is_empty() {
+        notice(p, "Loading…")
+    } else if let Some(e) = &gp.error {
+        notice(p, e)
+    } else if gp.results.is_empty() {
+        notice(p, "No GIFs found")
+    } else {
+        scrollable(
+            container(
+                row![
+                    iced::widget::Column::with_children(left)
+                        .spacing(GAP)
+                        .width(tile_w),
+                    iced::widget::Column::with_children(right)
+                        .spacing(GAP)
+                        .width(tile_w),
+                ]
+                .spacing(GAP),
+            )
+            .padding(Padding::from([0, 8])),
+        )
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new().width(4).scroller_width(4),
+        ))
+        .style(theme::thin_scrollbar(p, false))
+        .height(Length::Fill)
+        .into()
+    };
+    container(
+        column![
+            container(search).padding(8),
+            container(
+                text(title.to_uppercase())
+                    .size(12)
+                    .font(INTER_SEMIBOLD)
+                    .color(p.text_muted)
+            )
+            .padding(Padding::from([0, 12]).bottom(4)),
+            body,
+        ]
+        .spacing(4),
+    )
+    .width(GIF_PICKER_W)
+    .height(GIF_PICKER_H)
+    .style(theme::popup(p))
+    .into()
+}
+
+fn notice<'a>(p: theme::Palette, msg: &str) -> El<'a> {
+    container(text(msg.to_owned()).size(14).color(p.text_muted))
+        .padding(24)
+        .center_x(Length::Fill)
+        .into()
+}
+
+const STICKER_PICKER_W: f32 = 424.0;
+const STICKER_PICKER_H: f32 = 440.0;
+const STICKER_COLUMNS: usize = 4;
+
+fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker) -> El<'a> {
+    let p = app.theme.palette;
+    let search = text_input("Find the perfect sticker", &sp.query)
+        .id(iced::widget::Id::new("sticker-search"))
+        .on_input(|s| Message::Ui(Ui::StickerQuery(s)))
+        .size(14)
+        .font(INTER)
+        .padding(Padding::from([8, 10]))
+        .style(theme::input(p, p.bg_app));
+    let current = app
+        .open_channel()
+        .and_then(|c| app.chat.channels.get(&c))
+        .and_then(|c| c.guild_id);
+    let sections = crate::app::stickers::sections(&app.chat.guilds, current, &sp.query);
+    // Each cell: the sticker plus 4px of button padding on both sides.
+    let cell = (STICKER_PICKER_W - 16.0 - 8.0) / STICKER_COLUMNS as f32 - 8.0;
+    let mut list = column![].spacing(8).padding(Padding::from([0, 8]));
+    for (g, stickers) in &sections {
+        list = list.push(
+            text(g.name.to_uppercase())
+                .size(12)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_muted),
+        );
+        let mut grid = column![].spacing(4);
+        for chunk in stickers.chunks(STICKER_COLUMNS) {
+            let mut line = row![].spacing(4);
+            for s in chunk {
+                line = line.push(
+                    button(super::chat::sticker(app, s, cell))
+                        .padding(4)
+                        .on_press(ui(Ui::PickSticker(s.id)))
+                        .style(theme::icon_button(p)),
+                );
+            }
+            grid = grid.push(line);
+        }
+        list = list.push(grid);
+    }
+    let body: El<'a> = if sections.is_empty() {
+        let msg = if sp.query.trim().is_empty() {
+            "None of your servers have stickers yet."
+        } else {
+            "No stickers found"
+        };
+        container(text(msg).size(14).color(p.text_muted))
+            .padding(24)
+            .center_x(Length::Fill)
+            .into()
+    } else {
+        scrollable(list)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(theme::thin_scrollbar(p, false))
+            .height(Length::Fill)
+            .into()
+    };
+    container(column![container(search).padding(8), body].spacing(4))
+        .width(STICKER_PICKER_W)
+        .height(STICKER_PICKER_H)
+        .style(theme::popup(p))
+        .into()
 }
 
 fn picker_position(open: &OpenPicker, window: Size) -> Point {
@@ -319,7 +518,10 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         "\u{1F3C1}",
     ];
     for (i, face) in FACES.iter().enumerate() {
-        tabs = tabs.push(tab(text(*face).size(16).into(), Section::Unicode(i)));
+        tabs = tabs.push(tab(
+            emoji_text(*face, 16.0, p.text_normal, INTER, false),
+            Section::Unicode(i),
+        ));
     }
 
     // Grid.
@@ -346,7 +548,7 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
     for e in unicode {
         cells.push(emoji_button(
             p,
-            text(e.as_str()).size(24).into(),
+            emoji_text(e.as_str(), 24.0, p.text_normal, INTER, false),
             Emoji::unicode(e.as_str()),
         ));
     }

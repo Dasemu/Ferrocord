@@ -33,11 +33,11 @@ pub struct ReplyDraft {
 }
 
 /// An inline edit in progress.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Editing {
     pub channel: ChannelId,
     pub message: MessageId,
-    pub text: String,
+    pub text: super::composer::Composer,
     pub original: String,
 }
 
@@ -93,6 +93,9 @@ impl App {
         self.editing = None;
         self.menu = None;
         self.emoji_picker = None;
+        // A picker left open would send to the newly opened channel.
+        self.gif_picker = None;
+        self.sticker_picker = None;
         self.pending_delete = None;
         self.highlight = None;
     }
@@ -118,7 +121,13 @@ impl App {
             Ui::StartEdit(m) => self.start_edit(m),
             Ui::EditChanged(s) => {
                 if let Some(e) = self.editing.as_mut() {
-                    e.text = s;
+                    e.text.set_text(&s);
+                }
+                Task::none()
+            }
+            Ui::EditAction(a) => {
+                if let Some(e) = self.editing.as_mut() {
+                    e.text.perform(a);
                 }
                 Task::none()
             }
@@ -229,6 +238,66 @@ impl App {
             Ui::PickEmoji(e) => self.pick_emoji(e),
             Ui::CloseEmojiPicker => {
                 self.emoji_picker = None;
+                Task::none()
+            }
+            Ui::OpenGifPicker => {
+                if self.open_chan().is_none() {
+                    return Task::none();
+                }
+                self.menu = None;
+                self.emoji_picker = None;
+                let (picker, generation) = super::gifs::GifPicker::open(input::cursor());
+                self.gif_picker = Some(picker);
+                Task::batch([
+                    focus(iced::widget::Id::new("gif-search")),
+                    self.fetch_gifs(generation, String::new()),
+                ])
+            }
+            Ui::GifQuery(q) => match self.gif_picker.as_mut() {
+                Some(p) => delayed(
+                    Done::GifSearchDue(p.set_query(q)),
+                    super::gifs::SEARCH_DEBOUNCE_MS,
+                ),
+                None => Task::none(),
+            },
+            Ui::PickGif(url) => {
+                self.gif_picker = None;
+                match self.open_chan() {
+                    Some(c) => self.send_text(c, url),
+                    None => Task::none(),
+                }
+            }
+            Ui::CloseGifPicker => {
+                self.gif_picker = None;
+                Task::none()
+            }
+            Ui::OpenStickerPicker => {
+                if self.open_chan().is_none() {
+                    return Task::none();
+                }
+                self.menu = None;
+                self.emoji_picker = None;
+                self.sticker_picker = Some(super::stickers::StickerPicker {
+                    at: input::cursor(),
+                    query: String::new(),
+                });
+                Task::batch([
+                    focus(iced::widget::Id::new("sticker-search")),
+                    self.request_images(),
+                ])
+            }
+            Ui::StickerQuery(q) => {
+                if let Some(p) = self.sticker_picker.as_mut() {
+                    p.query = q;
+                }
+                Task::none()
+            }
+            Ui::PickSticker(id) => {
+                self.sticker_picker = None;
+                self.send_sticker(id)
+            }
+            Ui::CloseStickerPicker => {
+                self.sticker_picker = None;
                 Task::none()
             }
             Ui::PickFiles => {
@@ -406,7 +475,7 @@ impl App {
         self.editing = Some(Editing {
             channel: c,
             message: m,
-            text: msg.content.clone(),
+            text: super::composer::Composer::with_text(&msg.content),
             original: msg.content.clone(),
         });
         self.menu = None;
@@ -418,7 +487,7 @@ impl App {
         let Some(e) = self.editing.clone() else {
             return Task::none();
         };
-        let text = e.text.trim().to_owned();
+        let text = e.text.text().trim().to_owned();
         if text == e.original.trim() {
             self.editing = None;
             return focus(composer_id());
@@ -499,7 +568,11 @@ impl App {
     }
 
     fn escape(&mut self) -> Task<Message> {
-        if self.emoji_picker.take().is_some() || self.menu.take().is_some() {
+        if self.emoji_picker.take().is_some()
+            || self.gif_picker.take().is_some()
+            || self.sticker_picker.take().is_some()
+            || self.menu.take().is_some()
+        {
             return Task::none();
         }
         if self.rail.menu.take().is_some() || self.panels.open.take().is_some() {
@@ -564,14 +637,75 @@ impl App {
         )
     }
 
+    // -- GIF picker ------------------------------------------------------------------
+
+    pub(super) fn gif_search_due(&mut self, generation: u64) -> Task<Message> {
+        match self.gif_picker.as_mut().and_then(|p| p.due(generation)) {
+            Some(q) => self.fetch_gifs(generation, q),
+            None => Task::none(),
+        }
+    }
+
+    /// Trending GIFs for a blank `query`, else search results.
+    fn fetch_gifs(&mut self, generation: u64, query: String) -> Task<Message> {
+        if self.cfg.mock {
+            if let Some(p) = self.gif_picker.as_mut() {
+                p.finish(generation, Ok(crate::mock::gifs(&query)));
+            }
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        Task::perform(async move { rest.gifs(&query).await }, move |r| {
+            Message::Done(Done::Gifs {
+                generation,
+                result: r.map_err(|e| e.user_message()),
+            })
+        })
+    }
+
+    // -- stickers -------------------------------------------------------------------
+
+    /// Sends a sticker-only message to the open channel (as a reply if one
+    /// is being composed). Errors show as a toast.
+    fn send_sticker(&mut self, id: Snowflake) -> Task<Message> {
+        let Some(c) = self.open_chan() else {
+            return Task::none();
+        };
+        let nonce = Snowflake::from_timestamp_ms(now_ms(), fastrand::u64(0..4096)).to_string();
+        let reply = self.reply_target(c);
+        self.reply = None;
+        if self.cfg.mock {
+            let (Some(me), Some(sticker)) = (
+                self.chat.me.clone(),
+                super::stickers::find(&self.chat.guilds, id).cloned(),
+            ) else {
+                return Task::none();
+            };
+            let mut m =
+                crate::mock::text_message(c, Snowflake::from_timestamp_ms(now_ms(), 0), me, "");
+            m.stickers = vec![sticker];
+            return Task::done(Message::Net(crate::net::Event::MessageCreate(Box::new(m))));
+        }
+        let rest = self.rest.clone();
+        Task::perform(
+            async move { rest.send_sticker(c, id, &nonce, reply).await },
+            |r| match r {
+                Ok(m) => Message::Net(crate::net::Event::MessageCreate(Box::new(m))),
+                Err(e) => Message::Done(Done::ActionFailed(format!(
+                    "Could not send the sticker: {}",
+                    e.user_message()
+                ))),
+            },
+        )
+    }
+
     fn pick_emoji(&mut self, e: Emoji) -> Task<Message> {
         let Some(open) = self.emoji_picker.take() else {
             return Task::none();
         };
         match open.picker.target {
             PickerTarget::Composer => {
-                self.composer.push_str(&e.composer_text());
-                self.composer.push(' ');
+                self.composer.push_str(&format!("{} ", e.composer_text()));
                 focus(composer_id())
             }
             PickerTarget::Reaction { channel, message } => {
@@ -712,8 +846,9 @@ impl App {
         for p in paths {
             let plain = p.display().to_string();
             for variant in [format!("file://{plain}"), plain] {
-                if self.composer.contains(&variant) {
-                    self.composer = self.composer.replace(&variant, "").trim().to_owned();
+                let text = self.composer.text();
+                if text.contains(&variant) {
+                    self.composer.set_text(text.replace(&variant, "").trim());
                 }
             }
         }

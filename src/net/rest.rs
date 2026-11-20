@@ -212,6 +212,51 @@ impl RestClient {
         )?)
     }
 
+    /// GIFs for the picker: trending when `query` is blank, else a search.
+    /// `GET /gifs/trending-gifs` / `GET /gifs/search` (Tenor via Discord).
+    pub async fn gifs(&self, query: &str) -> Result<Vec<Gif>> {
+        #[derive(serde::Deserialize)]
+        struct WireGif {
+            #[serde(default)]
+            url: String,
+            #[serde(default)]
+            gif_src: String,
+            #[serde(default)]
+            preview: String,
+            #[serde(default)]
+            width: u32,
+            #[serde(default)]
+            height: u32,
+        }
+        let q = query.trim();
+        let path = if q.is_empty() {
+            "/gifs/trending-gifs?media_format=mp4&provider=tenor&locale=en-US".to_owned()
+        } else {
+            format!(
+                "/gifs/search?q={}&media_format=mp4&provider=tenor&locale=en-US",
+                percent_encode(q)
+            )
+        };
+        let wire: Vec<WireGif> = self.get(&path).await?;
+        Ok(wire
+            .into_iter()
+            .filter(|g| !g.url.is_empty())
+            .filter_map(|g| {
+                let preview = if g.preview.is_empty() {
+                    g.gif_src
+                } else {
+                    g.preview
+                };
+                (!preview.is_empty()).then_some(Gif {
+                    url: g.url,
+                    preview,
+                    width: g.width.max(1),
+                    height: g.height.max(1),
+                })
+            })
+            .collect())
+    }
+
     /// `GET /users/@me` — validates the token.
     pub async fn me(&self) -> Result<User> {
         let u: WireUser = self.get("/users/@me").await.map_err(|e| match e {
@@ -253,6 +298,27 @@ impl RestClient {
                 Method::POST,
                 &format!("/channels/{channel}/messages"),
                 Some(body),
+            )
+            .await?;
+        let wire: WireMessage = serde_json::from_value(v)?;
+        Ok(wire.into_domain())
+    }
+
+    /// `POST /channels/{id}/messages` with only a sticker (`sticker_ids`).
+    pub async fn send_sticker(
+        &self,
+        channel: ChannelId,
+        sticker: Snowflake,
+        nonce: &str,
+        reply: Option<ReplyTarget>,
+    ) -> Result<Message> {
+        let mut body = create_message_body(channel, "", nonce, reply);
+        body.sticker_ids = vec![sticker];
+        let v = self
+            .request(
+                Method::POST,
+                &format!("/channels/{channel}/messages"),
+                Some(serde_json::to_value(body)?),
             )
             .await?;
         let wire: WireMessage = serde_json::from_value(v)?;
@@ -473,9 +539,13 @@ impl RestClient {
             // Override (e.g. a local mock): same scheme as configured.
             return url.starts_with(self.cdn.as_ref());
         }
+        // Tenor serves the GIF picker's previews (only exact host; these
+        // downloads never carry the token, see `request`).
         u.scheme() == "https"
-            && (matches!(host, "cdn.discordapp.com" | "media.discordapp.net")
-                || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
+            && (matches!(
+                host,
+                "cdn.discordapp.com" | "media.discordapp.net" | "media.tenor.com"
+            ) || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
     }
 
     /// Downloads a CDN asset (avatar, icon, attachment preview), refusing
@@ -554,6 +624,7 @@ pub fn create_message_body<'a>(
             parse: vec!["users", "roles", "everyone"],
             replied_user: false,
         }),
+        sticker_ids: Vec::new(),
     }
 }
 

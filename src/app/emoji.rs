@@ -127,6 +127,7 @@ mod tests {
             roles: vec![],
             owner_id: None,
             emojis,
+            stickers: vec![],
             premium_tier: 0,
         }
     }
