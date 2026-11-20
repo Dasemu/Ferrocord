@@ -595,6 +595,56 @@ impl RestClient {
         Ok(out)
     }
 
+    /// Streams a CDN file into `file` (a video, too big to hold in memory),
+    /// refusing non-Discord hosts, redirects to other hosts and anything
+    /// larger than `max` bytes. No token is sent. `progress(received,
+    /// total)` is called after every few hundred KB. Returns the size.
+    pub async fn download_file(
+        &self,
+        url: &str,
+        file: std::fs::File,
+        max: u64,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<u64> {
+        use std::io::Write;
+        if !self.is_allowed_media_url(url) {
+            return Err(Error::Protocol("media host not allowed".into()));
+        }
+        let mut resp = self.http.get(url).send().await?;
+        if !self.is_allowed_media_url(resp.url().as_str()) {
+            return Err(Error::Protocol("media host not allowed".into()));
+        }
+        if !resp.status().is_success() {
+            return Err(Error::Http {
+                status: resp.status().as_u16(),
+                message: "video download failed".into(),
+            });
+        }
+        let total = resp.content_length();
+        if total.is_some_and(|l| l > max) {
+            return Err(Error::Protocol("media too large".into()));
+        }
+        let mut out = std::io::BufWriter::with_capacity(256 * 1024, file);
+        let mut received = 0u64;
+        let mut reported = 0u64;
+        while let Some(chunk) = resp.chunk().await? {
+            received += chunk.len() as u64;
+            if received > max {
+                return Err(Error::Protocol("media too large".into()));
+            }
+            out.write_all(&chunk)
+                .map_err(|_| Error::Protocol("cannot write the video".into()))?;
+            if received - reported >= 256 * 1024 {
+                reported = received;
+                progress(received, total);
+            }
+        }
+        out.flush()
+            .map_err(|_| Error::Protocol("cannot write the video".into()))?;
+        progress(received, total);
+        Ok(received)
+    }
+
     pub fn avatar_url(&self, user: &User, size: u32) -> Option<String> {
         user.avatar
             .as_ref()

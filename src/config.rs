@@ -51,6 +51,10 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// The inline video player, playing.
+    Video,
+    /// The full-screen video view.
+    VideoFullscreen,
     /// Profile popout with banner, theme colours, decoration and effect.
     Profile,
     /// The 1:1 DM profile panel.
@@ -103,6 +107,8 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "video" => Some(Self::Video),
+            "video-fullscreen" => Some(Self::VideoFullscreen),
             "profile" | "popout" => Some(Self::Profile),
             "profile-dm" => Some(Self::ProfileDm),
             "multiline" | "emoji" => Some(Self::Multiline),

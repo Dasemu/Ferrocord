@@ -10,6 +10,7 @@ use iced::{Alignment, Background, Border, Color, Font, Length, Padding};
 use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::video;
 use super::{
     El, avatar, cosmetics, fit_size, format_day, format_time, format_timestamp, human_size,
     markdown, same_day, ui,
@@ -20,6 +21,7 @@ use crate::app::emoji::PickerTarget;
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
+use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 
 pub fn view(app: &App) -> El<'_> {
@@ -833,6 +835,9 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     let p = app.theme.palette;
     if a.is_image() {
         return image_box(app, &preview_key(a), a.width, a.height);
+    }
+    if let Some(clip) = Clip::from_attachment(a) {
+        return video::inline(app, &clip);
     }
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())
