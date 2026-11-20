@@ -49,6 +49,8 @@ pub enum ScreenshotScreen {
     Video,
     /// The full-screen video view.
     VideoFullscreen,
+    /// Multi-line composer and multi-line / emoji messages in a DM.
+    Multiline,
 }
 
 impl ScreenshotScreen {
@@ -94,6 +96,7 @@ impl ScreenshotScreen {
             "search-filters" => Some(Self::SearchFilters),
             "video" => Some(Self::Video),
             "video-fullscreen" => Some(Self::VideoFullscreen),
+            "multiline" | "emoji" => Some(Self::Multiline),
             _ => None,
         }
     }

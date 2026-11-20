@@ -53,3 +53,5 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - File dialog: `rfd` (xdg-portal). Clipboard files/images: `arboard`.
 - Keyring tests must use `MemoryStore` (no Secret Service in CI).
 - `main` defaults `ICED_BACKEND=tiny-skia` (wgpu costs 100-200 MB RSS).
+- Unicode emoji need the `Noto Color Emoji` span (`ui::emoji_font::emoji_text`/`emoji_runs`); `text_editor` (composer) cannot take spans and falls back to the loaded font. The bundled TTF (OFL) loads only if no system copy exists.
+- Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Never set a container `shadow` (tiny-skia draws it unclipped: header glitches).

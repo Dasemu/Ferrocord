@@ -36,7 +36,10 @@ pub enum Ui {
     SelectGuild(GuildId),
     SelectChannel(ChannelId),
     ToggleCategory(ChannelId),
+    /// Test/automation hook: replace the composer text.
     ComposerChanged(String),
+    /// An editor action in the composer.
+    ComposerAction(iced::widget::text_editor::Action),
     Send,
     Scrolled(Viewport),
     RevealSpoiler(MessageId),
@@ -72,6 +75,8 @@ pub enum Ui {
     // -- edit and delete
     StartEdit(MessageId),
     EditChanged(String),
+    /// An editor action in the inline edit box.
+    EditAction(iced::widget::text_editor::Action),
     SubmitEdit,
     CancelEdit,
     /// Up arrow in an empty composer.
@@ -145,7 +150,6 @@ pub enum Ui {
     Unpin(ChannelId, MessageId),
     InboxMore,
     InboxGuildOnly(bool),
-    OpenHelp,
     // -- add a server
     OpenAddServer,
     CloseAddServer,
