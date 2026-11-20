@@ -2,6 +2,7 @@
 
 pub mod chat;
 pub mod cosmetics;
+pub mod embeds;
 pub mod emoji_font;
 pub mod icons;
 pub mod login;

@@ -3,7 +3,7 @@
 Ferrocord joins voice channels and DM / group calls the way the official
 client does. This page covers the design, the protocol details, and the
 feasibility pass for video. The short protocol tables live in
-`docs/protocol.md` §11.
+`docs/protocol.md` §12.
 
 > Third-party clients break Discord's Terms of Service. See the README warning.
 

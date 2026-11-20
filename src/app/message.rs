@@ -49,6 +49,12 @@ pub enum Ui {
     /// A link whose visible text differs from its target: ask first.
     ConfirmLink(String),
     CancelLink,
+    /// Play a direct video file (embed or attachment) in the inline player.
+    /// VIDEO-HOOK: until the player is wired this opens the link externally
+    /// (after the confirm dialog).
+    PlayVideo(String),
+    /// The "X" on a message's embeds: sets `SUPPRESS_EMBEDS` on the message.
+    SuppressEmbeds(MessageId),
     Logout,
     WindowFocus(bool),
     WindowOpened,
@@ -239,6 +245,14 @@ pub enum Done {
         result: Result<Box<crate::net::model::Message>, String>,
     },
     ActionFailed(String),
+    /// `SUPPRESS_EMBEDS` was refused: put the embeds back.
+    SuppressFailed {
+        channel: ChannelId,
+        message: MessageId,
+        embeds: Vec<Embed>,
+        flags: u64,
+        error: String,
+    },
     ReactionFailed {
         channel: ChannelId,
         message: MessageId,

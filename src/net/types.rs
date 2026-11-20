@@ -489,7 +489,19 @@ pub struct WireEmbedMedia {
 impl From<WireEmbedMedia> for EmbedMedia {
     fn from(w: WireEmbedMedia) -> Self {
         EmbedMedia {
-            url: w.proxy_url.unwrap_or(w.url),
+            url: w.url,
+            proxy_url: w.proxy_url,
+            width: w.width,
+            height: w.height,
+        }
+    }
+}
+
+impl From<WireEmbedMedia> for EmbedVideo {
+    fn from(w: WireEmbedMedia) -> Self {
+        EmbedVideo {
+            url: w.url,
+            proxy_url: w.proxy_url,
             width: w.width,
             height: w.height,
         }
@@ -504,6 +516,19 @@ pub struct WireNamed {
     pub text: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub proxy_icon_url: Option<String>,
+}
+
+impl WireNamed {
+    /// The icon to download: the proxy URL when present.
+    fn icon(&self) -> Option<String> {
+        self.proxy_icon_url
+            .clone()
+            .or_else(|| self.icon_url.clone())
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -540,6 +565,12 @@ pub struct WireEmbed {
     pub image: Option<WireEmbedMedia>,
     #[serde(default)]
     pub thumbnail: Option<WireEmbedMedia>,
+    #[serde(default)]
+    pub video: Option<WireEmbedMedia>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub flags: Option<u64>,
 }
 
 impl From<WireEmbed> for Embed {
@@ -551,9 +582,15 @@ impl From<WireEmbed> for Embed {
             url: w.url,
             color: w.color,
             author_name: w.author.as_ref().and_then(|a| a.name.clone()),
+            author_icon: w.author.as_ref().and_then(WireNamed::icon),
             author_url: w.author.and_then(|a| a.url),
+            provider_url: w.provider.as_ref().and_then(|p| p.url.clone()),
             provider_name: w.provider.and_then(|p| p.name),
+            footer_icon: w.footer.as_ref().and_then(WireNamed::icon),
             footer: w.footer.and_then(|f| f.text),
+            timestamp_ms: w.timestamp.as_deref().and_then(parse_rfc3339_ms),
+            video: w.video.map(Into::into),
+            flags: w.flags.unwrap_or(0),
             fields: w
                 .fields
                 .into_iter()
@@ -653,6 +690,8 @@ pub struct WireMessage {
     pub attachments: Option<Vec<WireAttachment>>,
     #[serde(default)]
     pub embeds: Option<Vec<WireEmbed>>,
+    #[serde(default)]
+    pub flags: Option<u64>,
     #[serde(default)]
     pub sticker_items: Option<Vec<WireSticker>>,
     #[serde(default)]
@@ -814,6 +853,7 @@ impl WireMessage {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            flags: self.flags.unwrap_or(0),
             stickers: self
                 .sticker_items
                 .unwrap_or_default()
@@ -848,8 +888,20 @@ impl WireMessage {
             attachments: self
                 .attachments
                 .map(|v| v.into_iter().map(Into::into).collect()),
+            flags: self.flags,
         }
     }
+}
+
+/// ISO-8601 / RFC 3339 instant to Unix milliseconds (`None` when malformed
+/// or before 1970).
+pub fn parse_rfc3339_ms(s: &str) -> Option<u64> {
+    if s.len() > 64 {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .and_then(|t| u64::try_from(t.timestamp_millis()).ok())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

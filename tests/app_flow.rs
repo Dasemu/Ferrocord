@@ -1419,6 +1419,23 @@ mod voice {
     }
 
     #[test]
+    fn call_from_profile_popout() {
+        let mut a = app();
+        // Alice (2) has a 1:1 DM; we never call ourselves.
+        let dm = a.dm_with(Snowflake(2)).expect("DM with Alice");
+        assert_eq!(dm, mock::DM_ALICE);
+        assert_eq!(a.dm_with(mock::ME), None);
+        let _ = a.update(Message::Ui(Ui::OpenProfile {
+            user: Snowflake(2),
+            guild: None,
+        }));
+        assert!(a.profiles.popout.is_some());
+        let _ = a.update(v(VoiceUi::StartCall(dm)));
+        assert!(a.profiles.popout.is_none());
+        assert_eq!(a.voice.connected_channel(), Some(mock::DM_ALICE));
+    }
+
+    #[test]
     fn logout_leaves_voice() {
         let mut a = app();
         let _ = a.update(v(VoiceUi::Join(mock::VC_LOUNGE)));

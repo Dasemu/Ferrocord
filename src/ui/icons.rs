@@ -65,9 +65,10 @@ pub enum Icon {
     Signal,
     ShieldCheck,
     VolumeX,
+    Play,
 }
 
-const ALL: [(Icon, &[u8]); 57] = [
+const ALL: [(Icon, &[u8]); 58] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -239,6 +240,7 @@ const ALL: [(Icon, &[u8]); 57] = [
         Icon::VolumeX,
         include_bytes!("../../assets/icons/volume-x.svg"),
     ),
+    (Icon::Play, include_bytes!("../../assets/icons/play.svg")),
 ];
 
 /// Handles are created once so iced can cache the rasterised icons.

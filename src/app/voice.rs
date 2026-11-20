@@ -522,6 +522,19 @@ impl Voice {
 // -- app glue ---------------------------------------------------------------
 
 impl App {
+    /// The 1:1 DM channel with `user`, if one exists (for "Call" in a
+    /// profile popout).
+    pub fn dm_with(&self, user: UserId) -> Option<ChannelId> {
+        if self.chat.me_id() == Some(user) {
+            return None;
+        }
+        self.chat
+            .channels
+            .values()
+            .find(|c| c.kind == ChannelKind::Dm && c.recipients == [user])
+            .map(|c| c.id)
+    }
+
     pub(super) fn update_voice(&mut self, v: VoiceUi) -> Task<Message> {
         let now = super::now_ms();
         let me = self.chat.me_id();
@@ -549,6 +562,11 @@ impl App {
                     .is_some_and(|c| c.kind.is_private())
                 {
                     return Task::none();
+                }
+                // From a profile popout: close it, like the official client.
+                if self.profiles.popout.is_some() {
+                    self.profiles.popout = None;
+                    self.anim.close_popout();
                 }
                 let already = self.voice.active_call(ch);
                 let mut fx = self.voice.join(None, ch, now);
