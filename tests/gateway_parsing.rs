@@ -674,3 +674,130 @@ fn stickers_parse_on_messages_guilds_and_updates() {
     );
     assert_eq!(s.guild(Snowflake(5)).unwrap().stickers.len(), 2);
 }
+
+// -- profile cosmetics ------------------------------------------------------------
+
+#[test]
+fn presence_update_carries_activities() {
+    let mut d = fixture("presence_update.json");
+    d["activities"] = json!([
+        {"type": 4, "name": "Custom Status", "state": "away", "emoji": {"name": "zzz"}},
+        {"type": 0, "name": "Factorio", "application_id": "7", "timestamps": {"start": 1700000000000u64}}
+    ]);
+    let Event::PresenceUpdate {
+        user_id,
+        status,
+        activities,
+    } = parse_dispatch("PRESENCE_UPDATE", d).unwrap().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (user_id, status),
+        (sf("1000000000000000002"), Presence::Dnd)
+    );
+    assert_eq!(activities.len(), 2);
+    let mut s = ChatState::default();
+    s.set_activities(user_id, activities);
+    assert_eq!(s.activities_of(user_id).len(), 2);
+    // An update without activities clears them.
+    s.apply_event(
+        &parse("PRESENCE_UPDATE", "presence_update.json"),
+        &Ctx::default(),
+    );
+    assert!(s.activities_of(user_id).is_empty());
+}
+
+#[test]
+fn ready_presences_carry_activities() {
+    let mut d = fixture("ready.json");
+    d["presences"] = json!([
+        {"user": {"id": "1000000000000000002"}, "status": "online",
+         "activities": [{"type": 2, "name": "Spotify", "details": "Song"}]},
+        {"user": {"id": "1000000000000000003"}, "status": "online", "activities": []}
+    ]);
+    let Event::Ready(r) = parse_dispatch("READY", d).unwrap().unwrap() else {
+        panic!()
+    };
+    assert_eq!(r.presences.len(), 2);
+    assert_eq!(r.activities.len(), 1);
+    let mut s = ChatState::default();
+    s.load_ready(&r);
+    assert_eq!(
+        s.activities_of(sf("1000000000000000002"))[0].name,
+        "Spotify"
+    );
+}
+
+#[test]
+fn message_authors_and_member_lists_carry_cosmetics() {
+    let mut d = fixture("message_create.json");
+    d["author"]["avatar_decoration_data"] =
+        json!({"asset": "a_deco", "sku_id": "5", "expires_at": null});
+    d["author"]["primary_guild"] =
+        json!({"identity_guild_id": "9", "identity_enabled": true, "tag": "TAG", "badge": "b"});
+    d["author"]["collectibles"] = json!({"nameplate": {"asset": "nameplates/x/y/", "palette": "sky", "label": "l", "sku_id": "1"}});
+    d["author"]["display_name_styles"] =
+        json!({"font_id": 11, "effect_id": 2, "colors": [255, 65280]});
+    let Event::MessageCreate(m) = parse_dispatch("MESSAGE_CREATE", d).unwrap().unwrap() else {
+        panic!()
+    };
+    let a = &m.author;
+    assert_eq!(a.avatar_decoration.as_ref().unwrap().asset, "a_deco");
+    assert_eq!(a.primary_guild.as_ref().unwrap().visible_tag(), Some("TAG"));
+    assert!(a.collectibles.as_ref().unwrap().nameplate.is_some());
+    assert_eq!(a.name_style.as_ref().unwrap().colors, vec![255, 65280]);
+
+    // Member list: the member's server decoration wins, activities flow in,
+    // and the user in the cache is refreshed.
+    let mut d = fixture("member_list_update.json");
+    // Every member object of alice (the fixture re-sends her later).
+    fn decorate(v: &mut serde_json::Value, touched: &mut u32) {
+        match v {
+            serde_json::Value::Object(o) => {
+                if o.get("user")
+                    .is_some_and(|u| u["id"] == "1000000000000000002")
+                    && o.contains_key("roles")
+                {
+                    o.insert(
+                        "avatar_decoration_data".into(),
+                        json!({"asset": "guilddeco"}),
+                    );
+                    o.insert(
+                        "presence".into(),
+                        json!({"status": "online", "activities": [{"type": 0, "name": "Game"}]}),
+                    );
+                    *touched += 1;
+                }
+                o.values_mut().for_each(|c| decorate(c, touched));
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|c| decorate(c, touched)),
+            _ => {}
+        }
+    }
+    let mut touched = 0;
+    decorate(&mut d, &mut touched);
+    assert!(touched > 0);
+    let ev = parse_dispatch("GUILD_MEMBER_LIST_UPDATE", d)
+        .unwrap()
+        .unwrap();
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    s.member_list = Some(ferrocord::app::members::MemberListState::new(sf(
+        "2000000000000000001",
+    )));
+    s.apply_event(&ev, &Ctx::default());
+    let alice = sf("1000000000000000002");
+    assert_eq!(
+        s.users[&alice].avatar_decoration.as_ref().unwrap().asset,
+        "guilddeco"
+    );
+    assert_eq!(s.activities_of(alice)[0].name, "Game");
+}
+
+#[test]
+fn guild_subscription_asks_for_activities() {
+    let p = ferrocord::net::types::member_subscribe_payload(sf("1"), sf("2"), &[(0, 99)]);
+    let s = serde_json::to_value(&p).unwrap();
+    assert_eq!(s["d"]["activities"], json!(true));
+}

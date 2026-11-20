@@ -51,6 +51,10 @@ pub enum ScreenshotScreen {
     FolderMenu,
     FolderSettings,
     SearchFilters,
+    /// Profile popout with banner, theme colours, decoration and effect.
+    Profile,
+    /// The 1:1 DM profile panel.
+    ProfileDm,
     /// Multi-line composer and multi-line / emoji messages in a DM.
     Multiline,
 }
@@ -77,7 +81,7 @@ impl ScreenshotScreen {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "login" => Some(Self::Login),
-            "guild" | "server" => Some(Self::Guild),
+            "guild" | "server" | "members" => Some(Self::Guild),
             "dms" | "dm" => Some(Self::Dms),
             "embeds" | "attachments" => Some(Self::Embeds),
             "embeds-media" => Some(Self::EmbedMedia),
@@ -99,6 +103,8 @@ impl ScreenshotScreen {
             "folder-menu" => Some(Self::FolderMenu),
             "folder-settings" => Some(Self::FolderSettings),
             "search-filters" => Some(Self::SearchFilters),
+            "profile" | "popout" => Some(Self::Profile),
+            "profile-dm" => Some(Self::ProfileDm),
             "multiline" | "emoji" => Some(Self::Multiline),
             _ => None,
         }

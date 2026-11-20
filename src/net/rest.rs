@@ -562,7 +562,7 @@ impl RestClient {
         u.scheme() == "https"
             && (matches!(
                 host,
-                "cdn.discordapp.com" | "media.discordapp.net" | "media.tenor.com"
+                "cdn.discordapp.com" | "media.discordapp.net" | "media.tenor.com" | "i.scdn.co"
             ) || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
     }
 
