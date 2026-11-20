@@ -106,10 +106,17 @@ pub fn to_stereo(input: &[f32], channels: usize) -> Vec<f32> {
 pub fn from_stereo(input: &[f32], channels: usize) -> Vec<f32> {
     match channels {
         0 => Vec::new(),
-        1 => input.chunks_exact(2).map(|c| (c[0] + c[1]) * 0.5).collect(),
+        1 => input
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0] + c[1]) * 0.5)
+            .collect(),
         2 => input.to_vec(),
         n => input
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|c| {
                 let mut v = vec![0.0; n];
                 v[0] = c[0];

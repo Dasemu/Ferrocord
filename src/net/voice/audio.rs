@@ -320,7 +320,7 @@ impl FakeIo {
 
 impl AudioIo for FakeIo {
     fn capture(&mut self, out: &mut [f32]) -> bool {
-        for pair in out.chunks_exact_mut(2) {
+        for pair in out.as_chunks_mut::<2>().0 {
             let t = self.phase as f32 / SAMPLE_RATE as f32;
             let v = self.amplitude * (2.0 * std::f32::consts::PI * self.freq * t).sin();
             pair[0] = v;
