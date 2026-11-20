@@ -139,21 +139,20 @@ fn header<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             label,
         )
     };
+    // Guilds show the member list; DMs show the participants (or, in a 1:1
+    // DM, the other person's profile).
     let in_guild = matches!(app.view, View::Guild { .. });
-    let members: El<'a> = if in_guild {
-        tool(
-            Icon::Users,
-            if app.members_open {
-                "Hide Member List"
-            } else {
-                "Show Member List"
-            },
-            Ui::ToggleMembers,
-            app.members_open,
-        )
-    } else {
-        icon(Icon::Users, 24.0, p.text_secondary)
-    };
+    let members: El<'a> = tool(
+        Icon::Users,
+        match (in_guild, app.members_open) {
+            (true, true) => "Hide Member List",
+            (true, false) => "Show Member List",
+            (false, true) => "Hide User Profile",
+            (false, false) => "Show User Profile",
+        },
+        Ui::ToggleMembers,
+        app.members_open,
+    );
     let open = app.panels.open;
     let muted = app.chat.is_channel_muted(c.id);
     let searching = app.search.open || app.search.panel_visible();
@@ -349,7 +348,7 @@ fn message<'a>(
     let mut body = column![].spacing(4).width(Length::Fill);
     if let Some(e) = editing {
         body = body.push(edit_box(app, e));
-    } else if !m.content.is_empty() {
+    } else if !m.content.is_empty() && !m.content_is_gif_link() {
         let content = markdown::render(app, m.id, &m.content, base, 16.0);
         if m.edited {
             body = body.push(column![
@@ -363,8 +362,14 @@ fn message<'a>(
     for a in &m.attachments {
         body = body.push(attachment(app, a));
     }
+    for s in &m.stickers {
+        body = body.push(sticker(app, s, STICKER_SIZE));
+    }
     for e in &m.embeds {
-        body = body.push(embed(app, m, e));
+        body = body.push(match e.bare_media() {
+            Some(media) => image_box(app, &media.url, media.width, media.height),
+            None => embed(app, m, e),
+        });
     }
     if !m.reactions.is_empty() {
         body = body.push(reactions_row(app, c, m));
@@ -728,24 +733,68 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
+/// An image (attachment, GIF or image link) fitted into 400x300, with a
+/// placeholder until it has loaded.
+fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32>) -> El<'a> {
+    let p = app.theme.palette;
+    let (w, h) = fit_size(width.unwrap_or(400), height.unwrap_or(300), 400, 300);
+    match app.image(key) {
+        Some(handle) => iced::widget::image(handle.clone())
+            .width(w as f32)
+            .height(h as f32)
+            .border_radius(8.0)
+            .into(),
+        None => container(icon(Icon::Image, 32.0, p.text_muted))
+            .width(w as f32)
+            .height(h as f32)
+            .center_x(w as f32)
+            .center_y(h as f32)
+            .style(theme::rounded_bg(p.embed_bg, 8.0))
+            .into(),
+    }
+}
+
+/// Side of a sticker in a message (the official client's size).
+const STICKER_SIZE: f32 = 160.0;
+
+/// A sticker image, or a box with its name while loading and for Lottie
+/// stickers (vector animations, not rendered).
+pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a> {
+    let p = app.theme.palette;
+    if let Some(handle) = s
+        .image_url(&app.cfg.cdn_url)
+        .and_then(|url| app.image(&url))
+    {
+        return iced::widget::image(handle.clone())
+            .width(size)
+            .height(size)
+            .content_fit(iced::ContentFit::Contain)
+            .into();
+    }
+    container(
+        column![
+            icon(Icon::Sticker, size / 4.0, p.text_muted),
+            text(s.name.clone())
+                .size(12)
+                .color(p.text_muted)
+                .align_x(Alignment::Center),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center),
+    )
+    .width(size)
+    .height(size)
+    .padding(8)
+    .center_x(size)
+    .center_y(size)
+    .style(theme::rounded_bg(p.embed_bg, 8.0))
+    .into()
+}
+
 fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     let p = app.theme.palette;
     if a.is_image() {
-        let (w, h) = fit_size(a.width.unwrap_or(400), a.height.unwrap_or(300), 400, 300);
-        return match app.image(&preview_key(a)) {
-            Some(handle) => iced::widget::image(handle.clone())
-                .width(w as f32)
-                .height(h as f32)
-                .border_radius(8.0)
-                .into(),
-            None => container(icon(Icon::Image, 32.0, p.text_muted))
-                .width(w as f32)
-                .height(h as f32)
-                .center_x(w as f32)
-                .center_y(h as f32)
-                .style(theme::rounded_bg(p.embed_bg, 8.0))
-                .into(),
-        };
+        return image_box(app, &preview_key(a), a.width, a.height);
     }
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())
@@ -952,7 +1001,8 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             tool(Icon::CirclePlus, Some(Ui::PickFiles)),
             input,
             tool(Icon::Gift, None),
-            tool(Icon::Sticker, None),
+            tool(Icon::Gif, Some(Ui::OpenGifPicker)),
+            tool(Icon::Sticker, Some(Ui::OpenStickerPicker)),
             tool(
                 Icon::Smile,
                 Some(Ui::OpenEmojiPicker(PickerTarget::Composer))

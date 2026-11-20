@@ -68,7 +68,10 @@ run `cargo build --release`.
   categories, direct messages and group DMs.
 - Message history with Discord markdown (bold, italic, underline, strike,
   code, code blocks, spoilers, quotes, headings, lists, links, mentions,
-  custom emoji, timestamps), embeds, image and file attachments.
+  custom emoji, timestamps), embeds, image and file attachments, GIF and
+  image links shown as bare media, stickers.
+- GIF picker (Tenor, via Discord) and sticker picker in the composer; a
+  participants/profile panel in DMs.
 - Send messages, typing indicators, unread and mention state (synced with
   read states / `MESSAGE_ACK`), desktop notifications for mentions and DMs.
 - Local SQLite cache so the window opens instantly with your last state.

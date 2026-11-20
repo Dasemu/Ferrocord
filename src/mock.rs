@@ -98,6 +98,7 @@ fn guild(id: GuildId, name: &str, roles: Vec<Role>) -> Guild {
         roles,
         owner_id: Some(user(3).id),
         emojis: vec![],
+        stickers: vec![],
         premium_tier: 0,
     }
 }
@@ -117,7 +118,26 @@ fn custom_emoji(mut g: Guild) -> Guild {
             available: true,
         },
     ];
+    g.stickers = mock_stickers();
     g
+}
+
+/// Stickers of the mock Rust server: three images (drawn by
+/// [`mock_emoji`], preloaded in mock mode) and a Lottie one, which is shown
+/// as a named placeholder.
+pub fn mock_stickers() -> Vec<Sticker> {
+    let s = |id: u64, name: &str, format: StickerFormat| Sticker {
+        id: Snowflake(id),
+        name: name.into(),
+        format,
+        available: true,
+    };
+    vec![
+        s(1101, "Happy Ferris", StickerFormat::Png),
+        s(1102, "Party Crab", StickerFormat::Png),
+        s(1103, "Shipped it", StickerFormat::Apng),
+        s(1104, "Wave", StickerFormat::Lottie),
+    ]
 }
 
 fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
@@ -342,6 +362,7 @@ pub fn text_message(channel: ChannelId, id: MessageId, author: User, content: &s
         edited: false,
         attachments: vec![],
         embeds: vec![],
+        stickers: vec![],
         mentions: vec![],
         mention_roles: vec![],
         mention_everyone: false,
@@ -440,13 +461,63 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                 "Reminder set for **Saturday 18:00**.",
             ),
         ],
-        DM_BOB => vec![
-            gm(DM_BOB, 2900, 0, 3, &[], "thanks for the review yesterday!"),
-            gm(DM_BOB, 2880, 0, 1, &[], "anytime 👍"),
-        ],
+        DM_BOB => long_history(DM_BOB),
         DM_EVE => vec![gm(DM_EVE, 4400, 0, 6, &[], "see you at the meetup")],
         _ => general(channel),
     }
+}
+
+/// Avatar hash given to the users of the long mock DM, so their avatars are
+/// real raster images (see [`mock_emoji`]).
+pub const MOCK_AVATAR: &str = "mockavatar";
+
+/// A long, image-heavy conversation (300 messages: text of varying length,
+/// code blocks, image attachments, raster avatars) to exercise scrolling
+/// and rendering the way a real DM does.
+pub fn long_history(channel: ChannelId) -> Vec<Message> {
+    const LINES: [&str; 8] = [
+        "thanks for the review yesterday!",
+        "anytime 👍",
+        "did you try the new build on Windows? scrolling feels much smoother now",
+        "I think the cache eviction is off by one, look at this:
+```rust
+while self.bytes > self.budget && self.order.len() > 1 {
+    self.evict();
+}
+```",
+        "lol",
+        "having a **huge** library makes me understand why people want a lighter client, it adds up fast when you keep ten of these open all day",
+        "> quoted reply
+and an answer below it with `inline code` and a [link](https://example.com)",
+        "ok",
+    ];
+    let mut out = Vec::with_capacity(300);
+    for i in 0..300u64 {
+        let author = if i % 3 == 0 { 1 } else { 3 };
+        let mut m = gm(
+            channel,
+            3000 - i * 9,
+            0,
+            author,
+            &[],
+            LINES[(i % 8) as usize],
+        );
+        m.author.avatar = Some(MOCK_AVATAR.into());
+        if i % 8 == 5 {
+            m.attachments = vec![Attachment {
+                id: Snowflake(7000 + i),
+                filename: "screenshot.png".into(),
+                size: 482_133,
+                url: "mock://image/1".into(),
+                proxy_url: None,
+                content_type: Some("image/png".into()),
+                width: Some(400),
+                height: Some(225),
+            }];
+        }
+        out.push(m);
+    }
+    out
 }
 
 fn general(channel: ChannelId) -> Vec<Message> {
@@ -662,7 +733,26 @@ fn showcase() -> Vec<Message> {
         &[],
         "that looks amazing <:party:1002> <:ferris:1001>",
     );
-    vec![d, b, c, a, e]
+    // A GIF link: shown as the bare GIF, without the URL or an embed card.
+    let gif_url = "https://tenor.example/view/celebrate-123";
+    let mut f = gm(CH_SHOWCASE, 3, 0, 2, &[], gif_url);
+    f.embeds = vec![Embed {
+        kind: Some("gifv".into()),
+        url: Some(gif_url.into()),
+        provider_name: Some("Tenor".into()),
+        thumbnail: Some(EmbedMedia {
+            url: "mock://gif/1".into(),
+            width: Some(220),
+            height: Some(165),
+        }),
+        ..Default::default()
+    }];
+    // A sticker-only message, and one with a Lottie sticker (placeholder).
+    let mut g = gm(CH_SHOWCASE, 4, 0, 3, &[], "");
+    g.stickers = vec![mock_stickers()[1].clone()];
+    let mut h = gm(CH_SHOWCASE, 2, 0, 4, &[], "");
+    h.stickers = vec![mock_stickers()[3].clone()];
+    vec![d, b, c, a, e, f, g, h]
 }
 
 /// A small round "emoji" image (original artwork: a coloured face) used for
@@ -688,6 +778,34 @@ pub fn mock_emoji(rgb: [u8; 3]) -> (u32, Vec<u8>) {
         }
     }
     (n, px)
+}
+
+/// Sizes of the mock GIF previews (`mock://gif/<n>`, n from 1).
+pub const MOCK_GIF_SIZES: [(u32, u32); 8] = [
+    (220, 124),
+    (200, 200),
+    (240, 135),
+    (180, 240),
+    (220, 165),
+    (240, 120),
+    (200, 150),
+    (160, 160),
+];
+
+/// Mock GIF picker results: eight "trending" GIFs, four for any search.
+pub fn gifs(query: &str) -> Vec<Gif> {
+    let n = if query.trim().is_empty() { 8 } else { 4 };
+    MOCK_GIF_SIZES
+        .iter()
+        .take(n)
+        .enumerate()
+        .map(|(i, (w, h))| Gif {
+            url: format!("https://tenor.example/view/mock-{}", i + 1),
+            preview: format!("mock://gif/{}", i + 1),
+            width: *w,
+            height: *h,
+        })
+        .collect()
 }
 
 /// Procedurally generated RGBA image (a stylised landscape) used as the

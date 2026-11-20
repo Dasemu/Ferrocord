@@ -1,4 +1,5 @@
 //! Lucide icons (ISC licence, see `assets/icons/LICENSE`), embedded at compile time.
+//! `gif.svg` is Ferrocord's own, drawn in the same style.
 
 use std::sync::LazyLock;
 
@@ -17,6 +18,7 @@ pub enum Icon {
     Download,
     EyeOff,
     File,
+    Gif,
     Gift,
     Hash,
     Headphones,
@@ -59,7 +61,7 @@ pub enum Icon {
     PinOff,
 }
 
-const ALL: [(Icon, &[u8]); 50] = [
+const ALL: [(Icon, &[u8]); 51] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -94,6 +96,7 @@ const ALL: [(Icon, &[u8]); 50] = [
         include_bytes!("../../assets/icons/eye-off.svg"),
     ),
     (Icon::File, include_bytes!("../../assets/icons/file.svg")),
+    (Icon::Gif, include_bytes!("../../assets/icons/gif.svg")),
     (Icon::Gift, include_bytes!("../../assets/icons/gift.svg")),
     (Icon::Hash, include_bytes!("../../assets/icons/hash.svg")),
     (

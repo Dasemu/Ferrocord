@@ -41,6 +41,8 @@ impl App {
                 self.window_focused = false;
                 self.menu = None;
                 self.emoji_picker = None;
+                self.gif_picker = None;
+                self.sticker_picker = None;
                 self.release_view_caches();
                 iced::window::close(id)
             }

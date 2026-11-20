@@ -39,16 +39,18 @@ pub fn view(app: &App) -> El<'_> {
             let mut r = row![rail::view(app), sidebar::view(app), chat::view(app)];
             if app.search.panel_visible() {
                 r = r.push(search::view(app));
-            } else if app.members_open
-                && matches!(
-                    app.view,
+            } else if app.members_open {
+                match app.view {
                     crate::app::View::Guild {
-                        channel: Some(_),
-                        ..
+                        channel: Some(_), ..
+                    } => r = r.push(members::view(app)),
+                    crate::app::View::Home(Some(c)) => {
+                        if let Some(c) = app.chat.channels.get(&c) {
+                            r = r.push(members::dm_view(app, c));
+                        }
                     }
-                )
-            {
-                r = r.push(members::view(app));
+                    _ => {}
+                }
             }
             r.height(Length::Fill).into()
         }

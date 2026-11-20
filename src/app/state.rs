@@ -214,6 +214,25 @@ impl ChatState {
         self.guilds.iter().find(|g| g.id == id)
     }
 
+    /// People shown in a DM's side panel: the other recipients, plus the
+    /// current user in a group DM (as the official client does), sorted by
+    /// display name. Recipients we have no user object for are skipped.
+    pub fn dm_participants(&self, c: &Channel) -> Vec<&User> {
+        let mut out: Vec<&User> = c
+            .recipients
+            .iter()
+            .filter_map(|id| self.users.get(id))
+            .collect();
+        if c.kind == ChannelKind::GroupDm
+            && let Some(me) = &self.me
+            && !c.recipients.contains(&me.id)
+        {
+            out.push(me);
+        }
+        out.sort_by_cached_key(|u| u.display_name().to_lowercase());
+        out
+    }
+
     /// Loads READY (or the boot snapshot) wholesale.
     pub fn load_ready(&mut self, r: &ReadyData) {
         self.me = r.me.clone();
@@ -453,6 +472,11 @@ impl ChatState {
             Event::GuildEmojis { guild_id, emojis } => {
                 if let Some(g) = self.guilds.iter_mut().find(|g| g.id == *guild_id) {
                     g.emojis.clone_from(emojis);
+                }
+            }
+            Event::GuildStickers { guild_id, stickers } => {
+                if let Some(g) = self.guilds.iter_mut().find(|g| g.id == *guild_id) {
+                    g.stickers.clone_from(stickers);
                 }
             }
             Event::Connection(_) | Event::Resumed | Event::AuthFailed | Event::Fatal(_) => {}
@@ -1140,6 +1164,7 @@ impl ChatState {
             edited: false,
             attachments: vec![],
             embeds: vec![],
+            stickers: vec![],
             mentions: vec![],
             mention_roles: vec![],
             mention_everyone: false,
@@ -1224,6 +1249,31 @@ mod tests {
         // Read states of channels we no longer know do not count.
         s.channels.clear();
         assert_eq!(s.attention_count(), 0);
+    }
+
+    #[test]
+    fn dm_participants_lists_recipients_and_me_in_groups() {
+        let s = loaded();
+        let ids = |c: ChannelId| -> Vec<UserId> {
+            s.dm_participants(&s.channels[&c])
+                .iter()
+                .map(|u| u.id)
+                .collect()
+        };
+        // 1:1 DM: just the other person.
+        assert_eq!(ids(mock::DM_ALICE), s.channels[&mock::DM_ALICE].recipients);
+        // Group DM: everyone, including me, sorted by display name.
+        let group = s.dm_participants(&s.channels[&mock::DM_GROUP]);
+        assert_eq!(
+            group.len(),
+            s.channels[&mock::DM_GROUP].recipients.len() + 1
+        );
+        assert!(group.iter().any(|u| u.id == mock::ME));
+        let names: Vec<String> = group
+            .iter()
+            .map(|u| u.display_name().to_lowercase())
+            .collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "{names:?}");
     }
 
     fn loaded() -> ChatState {
@@ -1635,6 +1685,7 @@ mod tests {
             roles: vec![],
             owner_id: None,
             emojis: vec![],
+            stickers: vec![],
             premium_tier: 0,
         };
         let ch = Channel {

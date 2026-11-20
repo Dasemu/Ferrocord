@@ -499,6 +499,7 @@ impl App {
                 roles: vec![],
                 owner_id: self.chat.me_id(),
                 emojis: vec![],
+                stickers: vec![],
                 premium_tier: 0,
             };
             let ctx = self.ctx();

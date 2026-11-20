@@ -6,6 +6,7 @@ mod background;
 pub mod emoji;
 pub mod features;
 pub mod folders;
+pub mod gifs;
 pub mod images;
 pub mod input;
 pub mod jump;
@@ -17,6 +18,7 @@ pub mod rail;
 pub mod search;
 pub mod servers;
 pub mod state;
+pub mod stickers;
 pub mod upload;
 pub mod window;
 
@@ -110,6 +112,8 @@ pub struct App {
     pub pending_delete: Option<(ChannelId, MessageId)>,
     pub menu: Option<MessageMenu>,
     pub emoji_picker: Option<OpenPicker>,
+    pub gif_picker: Option<gifs::GifPicker>,
+    pub sticker_picker: Option<stickers::StickerPicker>,
     pub draft: Vec<upload::DraftAttachment>,
     pub uploads: Vec<upload::ActiveUpload>,
     upload_handles: HashMap<u64, iced::task::Handle>,
@@ -217,6 +221,8 @@ impl App {
             pending_delete: None,
             menu: None,
             emoji_picker: None,
+            gif_picker: None,
+            sticker_picker: None,
             draft: Vec::new(),
             uploads: Vec::new(),
             upload_handles: HashMap::new(),
@@ -322,12 +328,51 @@ impl App {
             }
             self.chat.insert_history(c.id, h, false, true);
         }
+        for (i, (w, h)) in mock::MOCK_GIF_SIZES.iter().enumerate() {
+            let (w, h, px) = mock::mock_image(*w, *h);
+            self.images.insert(
+                format!("mock://gif/{}", i + 1),
+                iced::widget::image::Handle::from_rgba(w, h, px),
+                (w * h * 4) as usize,
+            );
+        }
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
             "mock://image/1".into(),
             iced::widget::image::Handle::from_rgba(w, h, px),
             (w * h * 4) as usize,
         );
+        // Raster avatars for the users of the long mock DM.
+        for (n, rgb) in [(1u64, [120u8, 200, 255]), (3, [250, 170, 40])] {
+            let mut u = mock::user(n);
+            u.avatar = Some(mock::MOCK_AVATAR.into());
+            let (side, px) = mock::mock_emoji(rgb);
+            for size in [64, 80] {
+                if let Some(url) = self.rest.avatar_url(&u, size) {
+                    self.images.insert(
+                        url,
+                        iced::widget::image::Handle::from_rgba(side, side, px.clone()),
+                        (side * side * 4) as usize,
+                    );
+                }
+            }
+        }
+        // Mock sticker images, under the CDN URLs the views ask for.
+        for (st, rgb) in mock::mock_stickers().into_iter().zip([
+            [255u8, 140, 60],
+            [230, 70, 70],
+            [90, 200, 120],
+            [0, 0, 0],
+        ]) {
+            if let Some(url) = st.image_url(&self.cfg.cdn_url) {
+                let (n, px) = mock::mock_emoji(rgb);
+                self.images.insert(
+                    url,
+                    iced::widget::image::Handle::from_rgba(n, n, px),
+                    (n * n * 4) as usize,
+                );
+            }
+        }
         for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
             let (n, px) = mock::mock_emoji(rgb);
             self.images.insert(
@@ -946,6 +991,12 @@ impl App {
             return Task::none();
         }
         self.composer.clear();
+        self.send_text(c, content)
+    }
+
+    /// Sends `content` to `c` as a text message (optimistic echo, then
+    /// REST), as a reply if one is being composed.
+    pub(crate) fn send_text(&mut self, c: ChannelId, content: String) -> Task<Message> {
         let now = now_ms();
         let nonce = Snowflake::from_timestamp_ms(now, fastrand::u64(0..4096)).to_string();
         let reply = self.reply_target(c);
@@ -1401,6 +1452,13 @@ impl App {
             } => self.on_around(channel, target, result),
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
+            Done::GifSearchDue(generation) => self.gif_search_due(generation),
+            Done::Gifs { generation, result } => {
+                if let Some(p) = self.gif_picker.as_mut() {
+                    p.finish(generation, result);
+                }
+                self.request_images()
+            }
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
                 if self.highlight == Some(m) {
@@ -1521,6 +1579,11 @@ impl App {
                 for a in m.attachments.iter().filter(|a| a.is_image()) {
                     urls.push(attachment_preview_url(a));
                 }
+                urls.extend(
+                    m.stickers
+                        .iter()
+                        .filter_map(|s| s.image_url(&self.cfg.cdn_url)),
+                );
                 if let Some(a) = m.referenced.as_ref().and_then(|r| r.author.as_ref())
                     && let Some(u) = self.rest.avatar_url(a, 80)
                 {
@@ -1558,6 +1621,18 @@ impl App {
                 {
                     urls.push(u);
                 }
+            }
+        }
+        if let Some(p) = &self.gif_picker {
+            urls.extend(p.results.iter().map(|g| g.preview.clone()));
+        }
+        if self.sticker_picker.is_some() {
+            for g in &self.chat.guilds {
+                urls.extend(
+                    g.stickers
+                        .iter()
+                        .filter_map(|s| s.image_url(&self.cfg.cdn_url)),
+                );
             }
         }
         for m in self.search.results.iter() {

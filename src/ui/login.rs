@@ -117,14 +117,6 @@ pub fn view(app: &App) -> El<'_> {
             radius: 5.0.into(),
             ..Default::default()
         },
-        shadow: iced::Shadow {
-            color: Color {
-                a: 0.3,
-                ..Color::BLACK
-            },
-            offset: iced::Vector::new(0.0, 2.0),
-            blur_radius: 10.0,
-        },
         ..Default::default()
     });
 

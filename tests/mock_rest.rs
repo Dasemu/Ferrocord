@@ -192,6 +192,10 @@ async fn media_downloads_are_capped_and_host_restricted() {
     assert!(rest.is_allowed_media_url("https://media.discordapp.net/attachments/1/2/x.png"));
     assert!(rest.is_allowed_media_url("https://images-ext-1.discordapp.net/external/x"));
     assert!(!rest.is_allowed_media_url("https://images-ext-1.discordapp.net.evil.com/x"));
+    // GIF picker previews.
+    assert!(rest.is_allowed_media_url("https://media.tenor.com/abc/preview.png"));
+    assert!(!rest.is_allowed_media_url("http://media.tenor.com/abc/preview.png"));
+    assert!(!rest.is_allowed_media_url("https://media.tenor.com.evil.com/x.png"));
     assert!(
         rest.fetch_bytes("https://evil.example.com/a.png")
             .await
@@ -570,4 +574,68 @@ async fn search_filters_become_query_parameters() {
         rec[1].path,
         "/channels/10/messages/search?has=file&offset=0&include_nsfw=true"
     );
+}
+
+#[tokio::test]
+async fn gifs_trending_and_search() {
+    let server = http(Arc::new(|req, _| {
+        let gif = |n: u32| {
+            json!({"id": n.to_string(), "title": "", "url": format!("https://tenor.com/view/g-{n}"),
+                   "src": format!("https://media.tenor.com/{n}.mp4"),
+                   "gif_src": format!("https://media.tenor.com/{n}.gif"),
+                   "preview": if n == 2 { String::new() } else { format!("https://media.tenor.com/{n}.png") },
+                   "width": 220, "height": 120})
+        };
+        if req.path.starts_with("/gifs/trending-gifs") {
+            Response::json(200, json!([gif(1)]))
+        } else if req.path.starts_with("/gifs/search") {
+            Response::json(200, json!([gif(2), {"url": "", "gif_src": "x"}]))
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let trending = rest.gifs("  ").await.unwrap();
+    assert_eq!(trending.len(), 1);
+    assert_eq!(trending[0].url, "https://tenor.com/view/g-1");
+    assert_eq!(trending[0].preview, "https://media.tenor.com/1.png");
+    // No preview: falls back to the GIF; entries without a URL are dropped.
+    let found = rest.gifs("happy cat").await.unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].preview, "https://media.tenor.com/2.gif");
+    let rec = server.recorded();
+    assert!(rec[0].path.starts_with("/gifs/trending-gifs?"));
+    assert!(
+        rec[1].path.starts_with("/gifs/search?q=happy%20cat&"),
+        "{}",
+        rec[1].path
+    );
+}
+
+#[tokio::test]
+async fn send_sticker_posts_sticker_ids() {
+    let server = http(Arc::new(|req, _| {
+        if req.method == "POST" && req.path == "/channels/10/messages" {
+            let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+            let mut m = msg(77);
+            m["content"] = json!("");
+            m["sticker_items"] =
+                json!([{"id": body["sticker_ids"][0], "name": "Wave", "format_type": 1}]);
+            Response::json(200, m)
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let m = rest
+        .send_sticker(Snowflake(10), Snowflake(555), "n1", None)
+        .await
+        .unwrap();
+    assert_eq!(m.stickers[0].id, Snowflake(555));
+    let body: serde_json::Value = serde_json::from_str(&server.recorded()[0].body).unwrap();
+    assert_eq!(body["sticker_ids"], json!(["555"]));
+    assert_eq!(body["content"], json!(""));
+    assert_eq!(body["nonce"], json!("n1"));
 }
