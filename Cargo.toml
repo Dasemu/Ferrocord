@@ -126,3 +126,21 @@ panic = "unwind"
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
+
+# iced comes from ferroiced (https://github.com/Kartudev/ferroiced): iced 0.14.1
+# plus a tiny-skia fast path for opaque images (video frames, GIFs). Crate
+# names are unchanged, so every iced crate in the graph must be patched to
+# the same source, or two copies of iced_graphics get mixed.
+[patch.crates-io]
+iced = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_core = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_debug = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_futures = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_graphics = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_program = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_renderer = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_runtime = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_tiny_skia = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_wgpu = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_widget = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_winit = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
