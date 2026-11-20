@@ -46,6 +46,9 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 ## Gotchas
 - Third-party clients violate Discord's ToS; keep the README warning intact.
 - Keep iced default features on (they carry the x11/wayland backends).
+- iced comes from the `ferroiced` fork (`[patch.crates-io]` in `Cargo.toml`):
+  iced 0.14.1 plus a tiny-skia fast path for opaque images. Patch every iced
+  crate to the same source; after changing it run `cargo update -p iced`.
 - Integration tests use local mock WebSocket/HTTP servers; never real accounts.
 - Endpoints can be overridden with `FERROCORD_GATEWAY_URL`, `FERROCORD_API_URL`,
   `FERROCORD_REMOTE_AUTH_URL`, `FERROCORD_CDN_URL`.

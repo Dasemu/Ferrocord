@@ -29,6 +29,10 @@ binary built from it, with no separate licence. If this matters for your use,
 the helper can be left out (`--no-default-features`) and the app then offers
 "Open externally" for videos.
 
+The iced GUI crates are built from [ferroiced](https://github.com/Kartudev/ferroiced),
+a fork of [iced](https://github.com/iced-rs/iced) 0.14.1 (MIT, © Héctor Ramón
+and Iced contributors) with one change in `iced_tiny_skia`.
+
 Rust crate dependencies keep their own licences (see `Cargo.lock`; all are
 MIT, Apache-2.0, ISC, BSD, Zlib or similar permissive licences).
 Noto Color Emoji is used from the system if installed and is not bundled.
