@@ -147,6 +147,8 @@ pub enum Ui {
     ToggleAutostart,
     /// "Reduce motion": no avatar, emoji, decoration or effect animation.
     ToggleReduceMotion,
+    /// "Play GIFs automatically" in messages.
+    ToggleAutoplayGifs,
     // -- profile popout and animation
     OpenProfile {
         user: UserId,

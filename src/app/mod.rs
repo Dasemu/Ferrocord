@@ -15,6 +15,7 @@ pub mod images;
 pub mod input;
 pub mod jump;
 pub mod markdown;
+pub mod media_anim;
 pub mod members;
 pub mod message;
 pub mod panels;
@@ -403,6 +404,7 @@ impl App {
             }
         }
         self.mock_load_cosmetics();
+        self.mock_load_media_anims();
         // Mock sticker images, under the CDN URLs the views ask for.
         for (st, rgb) in mock::mock_stickers().into_iter().zip([
             [255u8, 140, 60],
@@ -944,7 +946,8 @@ impl App {
             | Ui::HoverEnter(_)
             | Ui::HoverLeave(_)
             | Ui::AnimTick(_)
-            | Ui::ToggleReduceMotion => self.update_cosmetics(u),
+            | Ui::ToggleReduceMotion
+            | Ui::ToggleAutoplayGifs => self.update_cosmetics(u),
             other => self.update_action(other),
         }
     }
@@ -1682,13 +1685,17 @@ impl App {
                 Task::none()
             }
             Done::Video { session, progress } => self.on_video(session, progress),
-            Done::Image { key, bytes } => {
-                match bytes {
-                    Some(b) => self.images.insert_bytes(key, b),
-                    None => self.images.mark_failed(&key),
+            Done::Image { key, bytes } => match bytes {
+                Some(b) => {
+                    let t = self.decode_media_anim(&key, &b);
+                    self.images.insert_bytes(key, b);
+                    t
                 }
-                Task::none()
-            }
+                None => {
+                    self.images.mark_failed(&key);
+                    Task::none()
+                }
+            },
         }
     }
 

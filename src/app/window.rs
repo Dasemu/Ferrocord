@@ -182,6 +182,10 @@ pub struct Prefs {
     /// "Reduce motion": avatars, emoji, decorations and profile effects
     /// stay still.
     pub reduce_motion: bool,
+    /// "Play GIFs automatically": GIFs, animated emoji and stickers in
+    /// messages play while the window is focused (the official client's
+    /// default). Off: they animate only while their message is hovered.
+    pub autoplay_gifs: bool,
 }
 
 impl Default for Prefs {
@@ -191,6 +195,7 @@ impl Default for Prefs {
             start_minimized: false,
             muted: false,
             reduce_motion: false,
+            autoplay_gifs: true,
         }
     }
 }
@@ -199,6 +204,7 @@ pub const KEY_CLOSE_TO_TRAY: &str = "pref.close_to_tray";
 pub const KEY_START_MINIMIZED: &str = "pref.start_minimized";
 pub const KEY_MUTED: &str = "pref.muted";
 pub const KEY_REDUCE_MOTION: &str = "pref.reduce_motion";
+pub const KEY_AUTOPLAY_GIFS: &str = "pref.autoplay_gifs";
 
 impl Prefs {
     pub fn load(store: &Store) -> Self {
@@ -212,6 +218,7 @@ impl Prefs {
             start_minimized: flag(KEY_START_MINIMIZED, d.start_minimized),
             muted: flag(KEY_MUTED, d.muted),
             reduce_motion: flag(KEY_REDUCE_MOTION, d.reduce_motion),
+            autoplay_gifs: flag(KEY_AUTOPLAY_GIFS, d.autoplay_gifs),
         }
     }
 }

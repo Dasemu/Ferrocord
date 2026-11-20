@@ -1,5 +1,6 @@
 //! Views: pure functions `&App -> Element<Message>`.
 
+pub mod anim_image;
 pub mod chat;
 pub mod cosmetics;
 pub mod embeds;

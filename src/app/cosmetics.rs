@@ -381,10 +381,18 @@ impl App {
             return Task::none();
         }
         let now = Instant::now();
+        // Message GIFs and stickers are decoded from the image loader's
+        // bytes (`decode_media_anim`); they are fetched here only when that
+        // already happened and the animation was evicted since.
+        let messages = self
+            .message_anim_assets()
+            .into_iter()
+            .filter(|(k, c)| *c == Class::Emoji || self.images.get(k).is_some());
         let wanted: Vec<(String, Class)> = self
             .hover_assets()
             .into_iter()
             .chain(self.popout_assets())
+            .chain(messages)
             .collect();
         let mut tasks = Vec::new();
         for (url, class) in wanted {
@@ -510,6 +518,11 @@ impl App {
                 self.prefs.reduce_motion = !self.prefs.reduce_motion;
                 self.refresh_hot();
                 let t = self.save_pref(super::window::KEY_REDUCE_MOTION, self.prefs.reduce_motion);
+                Task::batch([t, self.request_images()])
+            }
+            Ui::ToggleAutoplayGifs => {
+                self.prefs.autoplay_gifs = !self.prefs.autoplay_gifs;
+                let t = self.save_pref(super::window::KEY_AUTOPLAY_GIFS, self.prefs.autoplay_gifs);
                 Task::batch([t, self.request_images()])
             }
             _ => Task::none(),

@@ -120,6 +120,19 @@ fn media<'a>(
         .style(theme::link_button(p))
         .into();
     }
+    if let Some(a) = b.key.as_deref().and_then(|k| app.media_anim(k)) {
+        return container(
+            super::anim_image::message_anim(app, a, w, h)
+                .content_fit(fit)
+                .border_radius(radius),
+        )
+        .width(w)
+        .height(h)
+        .center_x(w)
+        .center_y(h)
+        .style(theme::rounded_bg(app.theme.palette.bg_app, radius))
+        .into();
+    }
     match b.key.as_deref().and_then(|k| app.image(k)) {
         // No `Cover`/crop/clip: the software renderer ignores them and the
         // image would overflow its box. `Contain` letterboxes instead.

@@ -23,8 +23,9 @@ use image::{AnimationDecoder, ImageDecoder};
 
 use crate::net::model::{MessageId, UserId};
 
-/// Total decoded-frame budget of the cache.
-pub const CACHE_BUDGET: usize = 32 * 1024 * 1024;
+/// Total decoded-frame budget of the cache (cosmetics plus the GIFs,
+/// stickers and emoji of the open conversation).
+pub const CACHE_BUDGET: usize = 48 * 1024 * 1024;
 /// A failed fetch / decode is retried after this long.
 pub const RETRY_AFTER: Duration = Duration::from_secs(300);
 /// Frames are never shown for less than this (GIF delay 0 means "default").
@@ -43,6 +44,10 @@ pub enum Class {
     Banner,
     Effect,
     Emoji,
+    /// GIF / animated WebP attachments and embed images in messages.
+    Media,
+    /// GIF / APNG stickers in messages.
+    Sticker,
 }
 
 impl Class {
@@ -60,6 +65,9 @@ impl Class {
             // view scales them to the card.
             Self::Effect => Limits::new(120, 40, 10 * MB, 256),
             Self::Emoji => Limits::new(80, 32, MB, 96),
+            // Shown at most 400 px wide (the chat's media box).
+            Self::Media => Limits::new(240, 64, 16 * MB, 400),
+            Self::Sticker => Limits::new(160, 48, 4 * MB, 160),
         }
     }
 }
@@ -122,6 +130,22 @@ impl Anim {
             t -= f.delay;
         }
         self.frames.len() - 1
+    }
+
+    /// Time from `elapsed` until the shown frame changes; `None` for a
+    /// still image (nothing to redraw).
+    pub fn until_next(&self, elapsed: Duration) -> Option<Duration> {
+        if self.frames.len() <= 1 || self.total.is_zero() {
+            return None;
+        }
+        let mut t = Duration::from_nanos((elapsed.as_nanos() % self.total.as_nanos()) as u64);
+        for f in &self.frames {
+            if t < f.delay {
+                return Some(f.delay - t);
+            }
+            t -= f.delay;
+        }
+        Some(MIN_DELAY)
     }
 }
 
@@ -458,6 +482,9 @@ pub struct AnimState {
     /// The open popout has something animated.
     pub popout_hot: bool,
     now: Instant,
+    /// Shared start of the self-playing message animations
+    /// (`ui::anim_image`), so they stay in step across view rebuilds.
+    pub epoch: Instant,
 }
 
 impl Default for AnimState {
@@ -471,6 +498,7 @@ impl Default for AnimState {
             popout_since: None,
             popout_hot: false,
             now,
+            epoch: now,
         }
     }
 }
