@@ -378,7 +378,7 @@ pub fn url_is_spoilered(content: &str, url: &str) -> bool {
     let mut parts = content.split("||").enumerate();
     // Odd segments are inside a pair; an unclosed last one does not count.
     let total = content.matches("||").count();
-    parts.any(|(i, seg)| i % 2 == 1 && i <= total && seg.contains(url))
+    parts.any(|(i, seg)| i % 2 == 1 && i < total && seg.contains(url))
 }
 
 #[cfg(test)]

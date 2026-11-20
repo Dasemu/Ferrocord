@@ -70,7 +70,9 @@ fn every_embed_type_parses_and_plans() {
     let kinds: Vec<_> = m.embeds.iter().map(|e| e.kind.clone().unwrap()).collect();
     assert_eq!(
         kinds,
-        ["rich", "article", "link", "video", "gifv", "image", "rich", "rich", "rich"]
+        [
+            "rich", "article", "link", "video", "gifv", "image", "rich", "rich", "rich"
+        ]
     );
     let groups = embeds::group_embeds(&m.embeds);
     // The three same-URL tweet embeds became one card.
@@ -150,7 +152,10 @@ fn text_edit_keeps_the_embeds_and_removal_clears_them() {
         "id": "5000000000000000020", "channel_id": "4000000000000000002",
         "content": "edited", "edited_timestamp": "2026-11-18T13:00:00+00:00"
     })));
-    assert_eq!((m.content.as_str(), m.embeds.len(), m.edited), ("edited", n, true));
+    assert_eq!(
+        (m.content.as_str(), m.embeds.len(), m.edited),
+        ("edited", n, true)
+    );
     // Suppression: empty embeds and the new flags in one update.
     m.apply_patch(&patch(json!({
         "id": "5000000000000000020", "channel_id": "4000000000000000002",
@@ -208,8 +213,16 @@ fn huge_embed_text_does_not_panic_or_blow_up() {
         ],
         ..Default::default()
     };
-    assert!(embeds::clip(e.title.as_deref().unwrap(), embeds::MAX_TITLE).chars().count() <= embeds::MAX_TITLE);
-    assert_eq!(embeds::field_rows(&e.fields, 3).len(), embeds::MAX_FIELDS.div_ceil(3));
+    assert!(
+        embeds::clip(e.title.as_deref().unwrap(), embeds::MAX_TITLE)
+            .chars()
+            .count()
+            <= embeds::MAX_TITLE
+    );
+    assert_eq!(
+        embeds::field_rows(&e.fields, 3).len(),
+        embeds::MAX_FIELDS.div_ceil(3)
+    );
 }
 
 #[tokio::test]
@@ -241,7 +254,10 @@ async fn suppress_embeds_patches_the_flags() {
 #[tokio::test]
 async fn refused_suppress_is_an_error() {
     let server = http(Arc::new(|_, _| {
-        Response::json(403, json!({"message": "Missing Permissions", "code": 50013}))
+        Response::json(
+            403,
+            json!({"message": "Missing Permissions", "code": 50013}),
+        )
     }))
     .await;
     let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new("t0k"))).unwrap();
@@ -306,7 +322,9 @@ fn only_web_links_reach_the_confirm_dialog() {
     assert_eq!(a.pending_link.as_deref(), Some("https://example.com"));
     // The inline player is not wired yet: playing asks before opening.
     let _ = a.update(Message::Ui(Ui::CancelLink));
-    let _ = a.update(Message::Ui(Ui::PlayVideo("https://media.discordapp.net/x.mp4".into())));
+    let _ = a.update(Message::Ui(Ui::PlayVideo(
+        "https://media.discordapp.net/x.mp4".into(),
+    )));
     assert_eq!(
         a.pending_link.as_deref(),
         Some("https://media.discordapp.net/x.mp4")
