@@ -689,6 +689,11 @@ pub fn video_scrim() -> Color {
     rgba(0x000000, 0.62)
 }
 
+/// Dark margin around the full-window image viewer.
+pub fn lightbox_scrim() -> Color {
+    rgba(0x000000, 0.85)
+}
+
 /// Text and icons on the player chrome.
 pub fn video_fg() -> Color {
     rgb(0xffffff)

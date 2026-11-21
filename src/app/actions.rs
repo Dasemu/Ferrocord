@@ -608,6 +608,9 @@ impl App {
         if let Some(task) = self.escape_video() {
             return task;
         }
+        if self.lightbox.take().is_some() {
+            return Task::none();
+        }
         if self.emoji_picker.take().is_some()
             || self.gif_picker.take().is_some()
             || self.sticker_picker.take().is_some()

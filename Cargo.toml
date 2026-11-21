@@ -96,9 +96,8 @@ wry = { version = "0.57", optional = true }
 # Window + event loop for the wry webview (wry's own windowing companion).
 tao = { version = "0.37", optional = true }
 
-# Video helper (`ferrocord-player` only). Unix only: other platforms build the
-# helper as a stub and the app offers "Open externally".
-[target.'cfg(unix)'.dependencies]
+# Video helper (`ferrocord-player` only; Linux and Windows). The app itself
+# links none of these: they sit behind the `video` feature the helper requires.
 # H.264 decoder: Cisco's BSD OpenH264, built from source and linked statically (Baseline/Main/High, B-frames).
 openh264 = { version = "0.9", optional = true }
 # Pure-Rust MP4 demuxer for the H.264 track (sample table, avcC, rotation).
@@ -111,8 +110,7 @@ matroska-demuxer = { version = "0.8", optional = true }
 rusty_vp9 = { version = "0.3", optional = true }
 # Pure-Rust VP8 decoder (RFC 6386, conformance-tested on the WebM vectors).
 vp8-decoder = { version = "0.1", optional = true }
-# Opus, audiopus_sys (static libopus) and cpal are shared with voice: see
-# [dependencies] (one version each, always built).
+# Opus, audiopus_sys (static libopus) and cpal are shared with voice (above).
 
 [target.'cfg(windows)'.dependencies]
 # Registers the toast AppUserModelID (else toasts show as "PowerShell");

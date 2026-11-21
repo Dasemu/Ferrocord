@@ -18,12 +18,14 @@ use super::{
 use crate::app::actions::{composer_id, edit_id, search_id};
 use crate::app::composer;
 use crate::app::emoji::PickerTarget;
+use crate::app::lightbox::{Lightbox, proxy_resized};
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
 use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
 use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 use crate::ui::anim_image::message_anim;
+use crate::ui::lightbox::zoomable;
 
 pub fn view(app: &App) -> El<'_> {
     let p = app.theme.palette;
@@ -813,20 +815,29 @@ fn detached_bar<'a>(app: &'a App, c: &Channel) -> El<'a> {
 
 /// An image (attachment, GIF or image link) fitted into 400x300, with a
 /// placeholder until it has loaded.
-fn image_box<'a>(app: &'a App, key: &str, width: Option<u32>, height: Option<u32>) -> El<'a> {
+fn image_box<'a>(
+    app: &'a App,
+    key: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    zoom: Lightbox,
+) -> El<'a> {
     let p = app.theme.palette;
     let (w, h) = fit_size(width.unwrap_or(400), height.unwrap_or(300), 400, 300);
     if let Some(a) = app.media_anim(key) {
-        return message_anim(app, a, w as f32, h as f32)
-            .border_radius(8.0)
-            .into();
+        return zoomable(
+            message_anim(app, a, w as f32, h as f32).border_radius(8.0),
+            zoom,
+        );
     }
     match app.image(key) {
-        Some(handle) => iced::widget::image(handle.clone())
-            .width(w as f32)
-            .height(h as f32)
-            .border_radius(8.0)
-            .into(),
+        Some(handle) => zoomable(
+            iced::widget::image(handle.clone())
+                .width(w as f32)
+                .height(h as f32)
+                .border_radius(8.0),
+            zoom,
+        ),
         None => container(icon(Icon::Image, 32.0, p.text_muted))
             .width(w as f32)
             .height(h as f32)
@@ -885,7 +896,20 @@ pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a>
 fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     let p = app.theme.palette;
     if a.is_image() {
-        return image_box(app, &preview_key(a), a.width, a.height);
+        let key = preview_key(a);
+        let (nw, nh) = (a.width.unwrap_or(400), a.height.unwrap_or(300));
+        let base = a.proxy_url.as_deref().unwrap_or(&a.url);
+        // GIFs keep their chat-size animation; still images get a sharper copy.
+        let full = (app.media_anim(&key).is_none() && !base.starts_with("mock://"))
+            .then(|| proxy_resized(base, nw, nh, 1920, 1080));
+        let zoom = Lightbox {
+            key: key.clone(),
+            full,
+            width: nw,
+            height: nh,
+            url: Some(a.url.clone()),
+        };
+        return image_box(app, &key, a.width, a.height, zoom);
     }
     if let Some(clip) = Clip::from_attachment(a) {
         return video::inline(app, &clip);

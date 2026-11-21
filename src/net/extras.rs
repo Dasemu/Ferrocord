@@ -447,17 +447,19 @@ pub fn parse_joined_guild(v: &Value) -> Option<(GuildId, String)> {
     Some((sf(g, "id")?, s(g, "name").unwrap_or_default()))
 }
 
-/// Body of `POST /guilds`.
+/// Template the official client's "Create My Own" sends: Discord's
+/// "Blank Server". Without it a user account's `POST /guilds` gets 403.
+pub const BLANK_GUILD_TEMPLATE: &str = "2TffvPucqHkN";
+
+/// Body of `POST /guilds`, shaped like the official client's.
 pub fn create_guild_body(name: &str, icon_data_uri: Option<&str>) -> Value {
-    let mut b = json!({
+    json!({
         "name": name.trim(),
+        "icon": icon_data_uri,
         "channels": [],
         "system_channel_id": null,
-    });
-    if let Some(i) = icon_data_uri {
-        b["icon"] = Value::String(i.to_owned());
-    }
-    b
+        "guild_template_code": BLANK_GUILD_TEMPLATE,
+    })
 }
 
 /// Longest icon file accepted for a new server.
@@ -829,7 +831,8 @@ mod tests {
     fn create_guild_payload_and_icons() {
         let b = create_guild_body("  My server ", None);
         assert_eq!(b["name"], "My server");
-        assert!(b.get("icon").is_none());
+        assert!(b["icon"].is_null());
+        assert_eq!(b["guild_template_code"], BLANK_GUILD_TEMPLATE);
         let b = create_guild_body("x", Some("data:image/png;base64,AA"));
         assert_eq!(b["icon"], "data:image/png;base64,AA");
 

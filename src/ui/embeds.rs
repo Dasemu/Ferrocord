@@ -12,6 +12,7 @@ use crate::app::embeds::{
     self, Group, MAX_AUTHOR, MAX_DESCRIPTION, MAX_FIELD_NAME, MAX_FIELD_VALUE, MAX_FOOTER,
     MAX_TITLE, MediaBox, Plan, VideoAction, clip, web_url,
 };
+use crate::app::lightbox::Lightbox;
 use crate::app::{App, Message, Ui, now_ms};
 use crate::media::clip::Clip;
 use crate::net::model::{self as model, Embed};
@@ -92,6 +93,32 @@ fn placeholder<'a>(app: &App, w: u32, h: u32, glyph: Icon) -> El<'a> {
 /// One image slot at its final size: the image, or a placeholder until it
 /// has loaded; hidden behind a click when spoilered.
 fn media<'a>(
+    app: &'a App,
+    m: &model::Message,
+    b: &MediaBox,
+    fit: ContentFit,
+    radius: f32,
+    spoiler: bool,
+) -> El<'a> {
+    let slot = media_slot(app, m, b, fit, radius, spoiler);
+    let loaded = |k: &str| app.media_anim(k).is_some() || app.image(k).is_some();
+    match b.key.as_deref() {
+        Some(key) if !spoiler && loaded(key) => super::lightbox::zoomable(
+            slot,
+            Lightbox {
+                key: key.to_owned(),
+                full: None,
+                width: b.w,
+                height: b.h,
+                url: None,
+            },
+        ),
+        _ => slot,
+    }
+}
+
+/// [`media`] without the click that opens the viewer (video posters).
+fn media_slot<'a>(
     app: &'a App,
     m: &model::Message,
     b: &MediaBox,
@@ -270,7 +297,7 @@ fn video_view<'a>(
         };
         return video::inline(app, &clip);
     }
-    let poster = media(app, m, b, ContentFit::Contain, 4.0, spoiler);
+    let poster = media_slot(app, m, b, ContentFit::Contain, 4.0, spoiler);
     let play = container(icon(Icon::Play, 26.0, Color::WHITE))
         .width(56)
         .height(56)

@@ -99,8 +99,10 @@ Requirements: Rust stable (1.88+), and on Linux `pkg-config`, `cmake` and a
 C/C++ compiler (the H.264 decoder is built from source), `libssl-dev`,
 `libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`, `libasound2-dev`,
 `libwebkit2gtk-4.1-dev` (login helper only).
-`cargo build` builds `ferrocord`, `ferrocord-player` and `ferrocord-login`; the
-helpers must sit next to the app (`--no-default-features` builds neither).
+`cargo build` builds `ferrocord`, `ferrocord-player` and `ferrocord-login`
+(`.exe` on Windows); the helpers must sit next to the app
+(`--no-default-features` builds neither). Without `ferrocord-player`, videos
+and Tenor/Giphy GIFs (which are MP4) cannot play.
 `ferrocord-login` shows Discord's login page in the system webview: WebView2 on
 Windows (built into Windows 11), WebKitGTK 4.1 on Linux (`libwebkit2gtk-4.1-0`).
 Only the helper links the browser engine; it runs only while you log in.
