@@ -243,6 +243,7 @@ async fn create_guild_sends_name_and_icon() {
     let b = body(r);
     assert_eq!(b["name"], "My new server");
     assert_eq!(b["icon"], "data:image/png;base64,AAAA");
+    assert_eq!(b["guild_template_code"], "2TffvPucqHkN");
 }
 
 #[tokio::test]
