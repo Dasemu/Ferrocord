@@ -32,9 +32,10 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     /// Discord asked for a captcha before allowing the action. Ferrocord
-    /// does not solve captchas.
+    /// never solves captchas itself; the login flow lets the user solve it
+    /// on Discord's own page.
     #[error("captcha required")]
-    CaptchaRequired,
+    CaptchaRequired(Box<crate::net::captcha::CaptchaChallenge>),
     /// The operation was cancelled (task dropped, logout, shutdown).
     #[error("cancelled")]
     Cancelled,
@@ -56,9 +57,8 @@ impl Error {
             Error::Store(_) => "The local cache could not be read.".into(),
             Error::Keyring(reason) => format!("Secure storage unavailable: {reason}"),
             Error::Io(_) => "A local file could not be accessed.".into(),
-            Error::CaptchaRequired => "Discord wants you to solve a captcha for this, which \
-                Ferrocord cannot do. Do it once in the official app or on discord.com, then \
-                try again here."
+            Error::CaptchaRequired(_) => "Discord asked for a captcha before allowing this. \
+                Open it on discord.com (or in the official app) once, then try again here."
                 .into(),
             Error::Cancelled => "Cancelled.".into(),
         }

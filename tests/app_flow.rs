@@ -1038,7 +1038,10 @@ mod round3 {
             panic!()
         };
         let g = f.generation();
-        let msg = ferrocord::error::Error::CaptchaRequired.user_message();
+        let msg = ferrocord::error::Error::CaptchaRequired(Box::new(
+            ferrocord::net::captcha::CaptchaChallenge::parse(r#"{"captcha_key":[]}"#).unwrap(),
+        ))
+        .user_message();
         let _ = a.update(Message::Done(ferrocord::app::Done::Joined {
             generation: g,
             result: Err(msg),

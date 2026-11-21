@@ -49,6 +49,10 @@ pub enum RaEvent {
     /// Login confirmed; store this token.
     Token(Secret),
     Cancelled,
+    /// Discord wants a captcha for the ticket exchange. The ticket is bound
+    /// to this socket, so the app moves on to Discord's own login page,
+    /// where Discord shows the challenge itself.
+    CaptchaRequired(Box<crate::net::captcha::CaptchaChallenge>),
     /// Session expired (the server closes after `timeout_ms`).
     Expired,
     Error(String),
@@ -233,10 +237,14 @@ pub fn spawn(url: String, rest: RestClient) -> impl Stream<Item = RaEvent> + Sen
 }
 
 async fn run(url: &str, rest: RestClient, tx: &mpsc::Sender<RaEvent>) -> Result<()> {
-    // RSA key generation is CPU-bound: keep it off the async workers.
-    let mut state = tokio::task::spawn_blocking(RemoteAuth::new)
-        .await
-        .map_err(|_| Error::Cancelled)??;
+    // RSA key generation is CPU-bound: keep it off the async workers. Like
+    // the official client, fetch the logged-out fingerprint (and Discord's
+    // cookies) meanwhile; the ticket exchange sends it as `X-Fingerprint`.
+    let (state, fingerprint) = tokio::join!(
+        tokio::task::spawn_blocking(RemoteAuth::new),
+        rest.fingerprint()
+    );
+    let mut state = state.map_err(|_| Error::Cancelled)??;
     let mut req = url.into_client_request()?;
     req.headers_mut().insert(
         "Origin",
@@ -291,7 +299,19 @@ async fn run(url: &str, rest: RestClient, tx: &mpsc::Sender<RaEvent>) -> Result<
                             let _ = tx.send(ev).await;
                         }
                         RaAction::ExchangeTicket(ticket) => {
-                            let enc = rest.remote_auth_login(&ticket).await?;
+                            let enc = match rest
+                                .remote_auth_login_with(&ticket, fingerprint.as_deref(), None)
+                                .await
+                            {
+                                Ok(enc) => enc,
+                                Err(Error::CaptchaRequired(c)) => {
+                                    tracing::info!(challenge = ?c, "remote auth: captcha required");
+                                    let _ = tx.send(RaEvent::CaptchaRequired(c)).await;
+                                    let _ = ws.close(None).await;
+                                    return Ok(());
+                                }
+                                Err(e) => return Err(e),
+                            };
                             let token = state.decrypt_token(&enc)?;
                             let _ = tx.send(RaEvent::Token(token)).await;
                             let _ = ws.close(None).await;
