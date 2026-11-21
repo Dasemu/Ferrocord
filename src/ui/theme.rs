@@ -287,12 +287,11 @@ pub fn rounded_bg(color: Color, radius: f32) -> impl Fn(&Theme) -> container::St
     }
 }
 
-// No style here sets `container::Style::shadow`. The tiny-skia renderer
-// (the default) draws a quad's shadow without clipping it to the region being
-// repainted, so whenever only part of the window is redrawn (scrolling, hover)
-// the semi-transparent shadow is painted again over the parts that are not,
-// and they darken frame after frame until they turn black. Shadows are faked
-// with gradients, which are clipped like any other fill.
+// Shadows are safe now: ferroiced's tiny-skia clips a quad's shadow to the
+// damage region and counts it in damage tracking, so partial redraws no longer
+// stack it up. No style here sets `container::Style::shadow` on purpose: the
+// header keeps its gradient bottom edge as the house look, and the guard test
+// below keeps it that way. Real shadows could replace that gradient later.
 
 /// Background of a bar whose bottom edge darkens like the subtle drop shadow
 /// of the official client's headers.
@@ -754,8 +753,8 @@ mod tests {
 
     #[test]
     fn container_styles_have_no_shadow() {
-        // tiny-skia paints quad shadows unclipped: see the note above
-        // `bar_with_bottom_edge`.
+        // Shadows are clipped by ferroiced now, but these styles stay
+        // shadowless by design: see the note above `bar_with_bottom_edge`.
         let p = Palette::DARK;
         let t = Theme::Dark;
         for style in [header(p)(&t), sidebar_header(p)(&t), popup(p)(&t)] {
