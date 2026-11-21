@@ -55,15 +55,20 @@ Expand-Archive ferrocord-*-windows-x86_64.zip .
 .errocord-*-windows-x86_64errocord.exe
 ```
 
-The token is stored in Windows Credential Manager. The Windows build has no
+The zip has `ferrocord.exe` and `ferrocord-login.exe` (Discord's login page in
+WebView2); keep them together. The token is stored in Windows Credential
+Manager. The Windows build has no
 tray icon, single-instance lock or autostart yet, and notification clicks do
 not open the channel. To build it yourself install Rust (MSVC toolchain) and
 run `cargo build --release`.
 
 ## Features
 
-- Token login (token stored only in the OS keyring) and QR-code login
-  (remote auth) using the official mobile app.
+- QR-code login (remote auth) using the official mobile app; "Log in with
+  Discord's page" (discord.com/login in a system webview window, where Discord
+  shows its own captcha, 2FA and QR prompts; opens on its own when Discord
+  asks for a captcha); token login. The session is stored only in the OS
+  keyring.
 - Server rail with unread pills and mention badges, channel list with
   categories, direct messages and group DMs.
 - Message history with Discord markdown (bold, italic, underline, strike,
@@ -92,9 +97,13 @@ run `cargo build --release`.
 
 Requirements: Rust stable (1.88+), and on Linux `pkg-config`, `cmake` and a
 C/C++ compiler (the H.264 decoder is built from source), `libssl-dev`,
-`libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`, `libasound2-dev`.
-`cargo build` builds both `ferrocord` and `ferrocord-player`; the helper must
-sit next to the app (use `--no-default-features` to build without video).
+`libdbus-1-dev`, `libxkbcommon-dev`, `libwayland-dev`, `libasound2-dev`,
+`libwebkit2gtk-4.1-dev` (login helper only).
+`cargo build` builds `ferrocord`, `ferrocord-player` and `ferrocord-login`; the
+helpers must sit next to the app (`--no-default-features` builds neither).
+`ferrocord-login` shows Discord's login page in the system webview: WebView2 on
+Windows (built into Windows 11), WebKitGTK 4.1 on Linux (`libwebkit2gtk-4.1-0`).
+Only the helper links the browser engine; it runs only while you log in.
 
 ```sh
 cargo build --release

@@ -78,25 +78,9 @@ pub struct Hello {
     pub heartbeat_interval: u64,
 }
 
-/// Client properties sent in IDENTIFY. We identify honestly as Ferrocord.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClientProperties {
-    pub os: String,
-    pub browser: String,
-    pub device: String,
-    pub client_version: String,
-}
-
-impl Default for ClientProperties {
-    fn default() -> Self {
-        Self {
-            os: std::env::consts::OS.to_string(),
-            browser: crate::config::APP_NAME.into(),
-            device: String::new(),
-            client_version: env!("CARGO_PKG_VERSION").into(),
-        }
-    }
-}
+/// Client properties sent in IDENTIFY (honest: `browser = "Ferrocord"`).
+/// The same object is sent as `X-Super-Properties` on REST requests.
+pub use super::identity::ClientProperties;
 
 /// Capability bits for user-account IDENTIFY. We do NOT request READY
 /// deduplication of users or the lazy "properties" layout, but the parser

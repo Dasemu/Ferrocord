@@ -157,7 +157,7 @@ impl JoinForm {
 pub fn invite_error_text(e: &crate::error::Error, joining: bool) -> String {
     use crate::error::Error;
     match e {
-        Error::CaptchaRequired => e.user_message(),
+        Error::CaptchaRequired(_) => e.user_message(),
         Error::Http { status: 404, .. } => "This invite is invalid or has expired.".into(),
         Error::Http { status: 403, .. } if joining => {
             "You cannot join this server (you may be banned from it).".into()
@@ -365,7 +365,15 @@ mod tests {
             status,
             message: m.into(),
         };
-        assert!(invite_error_text(&Error::CaptchaRequired, true).contains("captcha"));
+        assert!(
+            invite_error_text(
+                &Error::CaptchaRequired(Box::new(
+                    crate::net::captcha::CaptchaChallenge::parse(r#"{"captcha_key":[]}"#).unwrap()
+                )),
+                true
+            )
+            .contains("captcha")
+        );
         assert!(
             invite_error_text(&http(404, "Unknown Invite"), false)
                 .contains("invalid or has expired")

@@ -639,3 +639,104 @@ async fn send_sticker_posts_sticker_ids() {
     assert_eq!(body["content"], json!(""));
     assert_eq!(body["nonce"], json!("n1"));
 }
+
+#[tokio::test]
+async fn captcha_retry_sends_the_solution_headers() {
+    let server = http(Arc::new(|req, n| {
+        assert_eq!(req.path, "/users/@me/remote-auth/login");
+        if n == 0 {
+            Response::json(
+                400,
+                json!({
+                    "captcha_key": ["captcha-required"],
+                    "captcha_sitekey": "a9b5fb07-92ff-493f-86fe-352a2803b3df",
+                    "captcha_service": "hcaptcha",
+                    "captcha_rqdata": "rq-data",
+                    "captcha_rqtoken": "rq-token",
+                    "captcha_session_id": "sess-9"
+                }),
+            )
+        } else {
+            Response::json(200, json!({"encrypted_token": "ENC"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", None).unwrap();
+    let err = rest
+        .remote_auth_login_with("TICKET", Some("fp.1"), None)
+        .await
+        .unwrap_err();
+    let Error::CaptchaRequired(challenge) = err else {
+        panic!("{err:?}")
+    };
+    assert!(err_free(&challenge));
+    let solution =
+        ferrocord::net::captcha::CaptchaSolution::new("P1_user-solved", &challenge).unwrap();
+    let enc = rest
+        .remote_auth_login_with("TICKET", Some("fp.1"), Some(&solution))
+        .await
+        .unwrap();
+    assert_eq!(enc, "ENC");
+    let rec = server.recorded();
+    assert_eq!(rec.len(), 2);
+    assert!(rec[0].header("x-captcha-key").is_none());
+    // The retry is the same request plus the official captcha headers.
+    assert_eq!(rec[1].body, rec[0].body);
+    assert_eq!(rec[1].header("x-captcha-key"), Some("P1_user-solved"));
+    assert_eq!(rec[1].header("x-captcha-rqtoken"), Some("rq-token"));
+    assert_eq!(rec[1].header("x-captcha-session-id"), Some("sess-9"));
+    assert_eq!(rec[1].header("x-fingerprint"), Some("fp.1"));
+}
+
+fn err_free(c: &ferrocord::net::captcha::CaptchaChallenge) -> bool {
+    c.is_solvable() && c.rqdata.as_deref() == Some("rq-data")
+}
+
+#[tokio::test]
+async fn every_request_carries_the_honest_client_headers() {
+    use base64::Engine;
+    let server = http(Arc::new(|_, _| {
+        Response::json(200, json!({"id": "1", "username": "me"}))
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    rest.me().await.unwrap();
+    let r = &server.recorded()[0];
+    assert_eq!(
+        r.header("user-agent"),
+        Some(ferrocord::net::rest::user_agent().as_str())
+    );
+    let sp = base64::engine::general_purpose::STANDARD
+        .decode(r.header("x-super-properties").unwrap())
+        .unwrap();
+    let sp: serde_json::Value = serde_json::from_slice(&sp).unwrap();
+    assert_eq!(sp["browser"], "Ferrocord");
+    assert_eq!(sp["browser_user_agent"], ferrocord::net::rest::user_agent());
+    assert_eq!(
+        r.header("x-discord-locale"),
+        Some(ferrocord::net::identity::locale())
+    );
+    assert_eq!(
+        r.header("x-discord-timezone"),
+        ferrocord::net::identity::timezone()
+    );
+}
+
+#[tokio::test]
+async fn fingerprint_comes_from_experiments_and_rejects_garbage() {
+    let server = http(Arc::new(|req, n| {
+        assert_eq!(req.path, "/experiments");
+        match n {
+            0 => Response::json(200, json!({"fingerprint": "111.AbC-_", "assignments": []})),
+            1 => Response::json(200, json!({"fingerprint": "bad\r\nvalue"})),
+            2 => Response::json(200, json!({"assignments": []})),
+            _ => Response::json(500, json!({})),
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", None).unwrap();
+    assert_eq!(rest.fingerprint().await.as_deref(), Some("111.AbC-_"));
+    assert_eq!(rest.fingerprint().await, None);
+    assert_eq!(rest.fingerprint().await, None);
+    assert_eq!(rest.fingerprint().await, None);
+}

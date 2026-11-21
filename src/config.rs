@@ -24,6 +24,12 @@ pub const DEFAULT_REMOTE_AUTH_URL: &str = "wss://remote-auth-gateway.discord.gg/
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenshotScreen {
     Login,
+    /// QR login hit a captcha; Discord's page is open in its window.
+    LoginCaptcha,
+    /// "Log in with Discord's page" chosen; its window is open.
+    LoginWeb,
+    /// Discord's page could not open (no system webview).
+    LoginWebFailed,
     Guild,
     Dms,
     Embeds,
@@ -97,6 +103,9 @@ impl ScreenshotScreen {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "login" => Some(Self::Login),
+            "login-captcha" => Some(Self::LoginCaptcha),
+            "login-web" => Some(Self::LoginWeb),
+            "login-web-failed" => Some(Self::LoginWebFailed),
             "guild" | "server" | "members" => Some(Self::Guild),
             "dms" | "dm" => Some(Self::Dms),
             "embeds" | "attachments" => Some(Self::Embeds),
@@ -215,7 +224,7 @@ impl Config {
                         .next()
                         .and_then(|s| ScreenshotScreen::parse(&s))
                         .ok_or(
-                            "--screenshot needs one of: login, guild, dms, embeds, search, compose, settings",
+                            "--screenshot needs one of: login, login-captcha, login-web, login-web-failed, guild, dms, embeds, search, compose, settings",
                         )?;
                     let out = args.next().ok_or("--screenshot needs an output path")?;
                     screenshot = Some((screen, PathBuf::from(out)));

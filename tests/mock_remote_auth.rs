@@ -37,6 +37,17 @@ async fn full_qr_login_flow() {
     // REST: ticket -> encrypted token.
     let pk = public_key.clone();
     let rest_server = http(Arc::new(move |req, _| {
+        // The official client fetches its logged-out fingerprint first;
+        // the response also sets Discord's device cookies.
+        if req.path == "/experiments" {
+            assert!(req.header("authorization").is_none());
+            return Response::json(
+                200,
+                json!({"fingerprint": "1234567890.FiNgErPrInT", "assignments": []}),
+            )
+            .with_header("set-cookie", "__dcfduid=dcf123; Path=/; HttpOnly")
+            .with_header("set-cookie", "__sdcfduid=sdcf456; Path=/; HttpOnly");
+        }
         assert_eq!(req.path, "/users/@me/remote-auth/login");
         let body: Value = serde_json::from_str(&req.body).unwrap();
         assert_eq!(body["ticket"], "TICKET-123");
@@ -137,8 +148,85 @@ async fn full_qr_login_flow() {
         RaEvent::Token(t) => assert_eq!(t.expose(), "the.resulting.token"),
         other => panic!("{other:?}"),
     }
-    // The ticket exchange is unauthenticated.
-    assert!(rest_server.recorded()[0].header("authorization").is_none());
+    let recorded = rest_server.recorded();
+    assert_eq!(recorded[0].path, "/experiments");
+    let login = recorded
+        .iter()
+        .find(|r| r.path == "/users/@me/remote-auth/login")
+        .unwrap();
+    // The ticket exchange is unauthenticated and complete: fingerprint,
+    // cookies, super properties, locale.
+    assert!(login.header("authorization").is_none());
+    assert_eq!(
+        login.header("x-fingerprint"),
+        Some("1234567890.FiNgErPrInT")
+    );
+    let cookie = login.header("cookie").unwrap_or("");
+    assert!(cookie.contains("__dcfduid=dcf123"), "{cookie}");
+    assert!(cookie.contains("__sdcfduid=sdcf456"), "{cookie}");
+    assert!(login.header("x-super-properties").is_some());
+    assert!(login.header("x-discord-locale").is_some());
+    assert!(login.header("x-captcha-key").is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn captcha_on_the_ticket_exchange_is_reported_with_the_challenge() {
+    let rest_server = http(Arc::new(move |req, _| {
+        if req.path == "/experiments" {
+            return Response::json(500, json!({"message": "down"}));
+        }
+        Response::json(
+            400,
+            json!({
+                "captcha_key": ["captcha-required"],
+                "captcha_sitekey": "a9b5fb07-92ff-493f-86fe-352a2803b3df",
+                "captcha_service": "hcaptcha",
+                "captcha_rqdata": "rq-data",
+                "captcha_rqtoken": "rq-token"
+            }),
+        )
+    }))
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/?v=2", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+        ws.send(Ws::text(r#"{"op":"hello","heartbeat_interval":41250}"#))
+            .await
+            .unwrap();
+        next_non_heartbeat(&mut ws).await;
+        ws.send(Ws::text(r#"{"op":"pending_login","ticket":"T"}"#))
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+    });
+    let rest = RestClient::new(&rest_server.base(), "http://cdn", None).unwrap();
+    let mut events = Box::pin(remote_auth::spawn(url, rest));
+    let ev = tokio::time::timeout(STEP, events.next())
+        .await
+        .unwrap()
+        .unwrap();
+    let RaEvent::CaptchaRequired(c) = ev else {
+        panic!("{ev:?}")
+    };
+    assert!(c.is_solvable());
+    assert_eq!(c.rqtoken.as_deref(), Some("rq-token"));
+    // A failed fingerprint fetch is not fatal; the header is just absent.
+    let login = rest_server
+        .recorded()
+        .into_iter()
+        .find(|r| r.path == "/users/@me/remote-auth/login")
+        .unwrap();
+    assert!(login.header("x-fingerprint").is_none());
+    // The stream ends after the terminal event.
+    assert!(
+        tokio::time::timeout(STEP, events.next())
+            .await
+            .unwrap()
+            .is_none()
+    );
     server.await.unwrap();
 }
 

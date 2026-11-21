@@ -10,7 +10,11 @@ publish = false
 default-run = "ferrocord"
 
 [features]
-default = ["video"]
+default = ["video", "web-login"]
+# "Log in with Discord's page": the `ferrocord-login` helper shows
+# discord.com/login in the system webview (WebView2 / WebKitGTK 4.1) so
+# Discord can show its own captcha. Only the helper links the webview.
+web-login = ["dep:wry", "dep:tao"]
 # In-chat video playback: the `ferrocord-player` helper process decodes MP4
 # (H.264 + AAC) and WebM (VP8/VP9 + Opus) with statically linked / pure-Rust
 # decoders; no system codec libraries. The main binary links none of them.
@@ -28,16 +32,21 @@ name = "ferrocord-player"
 path = "src/bin/ferrocord-player/main.rs"
 required-features = ["video"]
 
+[[bin]]
+name = "ferrocord-login"
+path = "src/bin/ferrocord-login/main.rs"
+required-features = ["web-login"]
+
 [[test]]
 name = "video_player"
 required-features = ["video"]
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio", "image", "advanced", "svg"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "io-util", "process"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures = "0.3"
-reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "http2", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "http2", "stream", "cookies"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 flate2 = "1"
@@ -60,6 +69,10 @@ qrcode = { version = "0.14", default-features = false }
 # Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
 unicode-segmentation = "1"
 emojis = "0.9"
+# System UI language for X-Discord-Locale / IDENTIFY (already in the tree via iced).
+sys-locale = "0.3"
+# IANA time zone for X-Discord-Timezone (already in the tree via chrono).
+iana-time-zone = "0.1"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png", "gif", "webp"] }
@@ -76,6 +89,12 @@ audiopus_sys = { version = "0.2", features = ["static"] }
 # Microphone capture and speaker output (ALSA/PulseAudio/PipeWire via ALSA, WASAPI, CoreAudio);
 # also the video helper's sound output.
 cpal = "0.16"
+
+# Login helper (`ferrocord-login` only): Discord's login page in the OS
+# webview (WebView2 on Windows, WebKitGTK 4.1 on Linux); the app links neither.
+wry = { version = "0.57", optional = true }
+# Window + event loop for the wry webview (wry's own windowing companion).
+tao = { version = "0.37", optional = true }
 
 # Video helper (`ferrocord-player` only). Unix only: other platforms build the
 # helper as a stub and the app offers "Open externally".

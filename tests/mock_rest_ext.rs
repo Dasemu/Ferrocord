@@ -220,7 +220,7 @@ async fn joining_with_a_captcha_demand_is_reported_not_solved() {
     .await;
     let rest = client(&server.base());
     let err = rest.join_invite("abc", None).await.unwrap_err();
-    assert!(matches!(err, Error::CaptchaRequired), "{err:?}");
+    assert!(matches!(err, Error::CaptchaRequired(_)), "{err:?}");
     assert!(err.user_message().contains("captcha"));
     // Exactly one attempt: no retry loop, no solver.
     assert_eq!(server.recorded().len(), 1);

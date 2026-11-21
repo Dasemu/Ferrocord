@@ -1,6 +1,8 @@
-//! Login flows (token, QR) and the authentication state machine.
+//! Login flows (QR, Discord's login page, token) and the authentication
+//! state machine.
 
 pub mod secrets;
+pub mod web_login;
 
 use crate::net::model::User;
 
@@ -106,12 +108,57 @@ pub enum QrState {
     Scanned {
         username: String,
     },
+    /// Discord wants a captcha before it finishes the QR login. The app
+    /// opens Discord's own login page, where the user solves it.
+    CaptchaRequired,
     Failed(String),
+}
+
+/// Why Discord's login page was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebLoginReason {
+    /// The user pressed "Log in with Discord's page".
+    Chosen,
+    /// The QR login hit a captcha.
+    Captcha,
+}
+
+/// "Log in with Discord's page" sub-state of the login screen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WebLoginState {
+    /// Starting the helper window.
+    Opening(WebLoginReason),
+    /// Discord's page is open in its own window.
+    Open(WebLoginReason),
+    /// It could not open (or stopped): the message says what to do.
+    Failed(String),
+}
+
+impl WebLoginState {
+    /// The helper should be running.
+    pub fn is_active(&self) -> bool {
+        matches!(self, WebLoginState::Opening(_) | WebLoginState::Open(_))
+    }
+
+    /// Next state after a helper event. `None` = the flow is over (token
+    /// handed to validation, or the window was closed).
+    pub fn apply(&self, ev: &web_login::WebLoginEvent) -> Option<WebLoginState> {
+        use web_login::WebLoginEvent as E;
+        match (self, ev) {
+            (WebLoginState::Opening(r) | WebLoginState::Open(r), E::Opened) => {
+                Some(WebLoginState::Open(*r))
+            }
+            (_, E::Token(_) | E::Closed) => None,
+            (_, E::Failed(f)) => Some(WebLoginState::Failed(f.user_message())),
+            (s, E::Opened) => Some(s.clone()),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::secrets::Secret;
     use crate::net::model::Snowflake;
 
     fn user() -> User {
@@ -173,6 +220,22 @@ mod tests {
     fn ignores_out_of_order_events() {
         let s = AuthState::LoggedOut { error: None }.apply(AuthEvent::Validated(user()));
         assert_eq!(s, AuthState::LoggedOut { error: None });
+    }
+
+    #[test]
+    fn web_login_state_machine() {
+        use web_login::{WebLoginEvent as E, WebLoginFailure};
+        let s = WebLoginState::Opening(WebLoginReason::Captcha);
+        assert!(s.is_active());
+        let s = s.apply(&E::Opened).unwrap();
+        assert_eq!(s, WebLoginState::Open(WebLoginReason::Captcha));
+        assert_eq!(s.apply(&E::Token(Secret::new("a.b.c"))), None);
+        assert_eq!(s.apply(&E::Closed), None);
+        let f = s.apply(&E::Failed(WebLoginFailure::NoWebEngine)).unwrap();
+        assert!(matches!(&f, WebLoginState::Failed(m) if m.contains("then try again")));
+        assert!(!f.is_active());
+        // A late "opened" never revives a failed run.
+        assert_eq!(f.apply(&E::Opened), Some(f.clone()));
     }
 
     #[test]
