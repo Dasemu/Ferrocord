@@ -204,7 +204,11 @@ async fn helper_protocol_end_to_end() {
 
 #[cfg(feature = "web-login")]
 #[test]
-fn the_real_helper_is_built_next_to_the_app() {
-    // `cargo test` builds every binary of the package.
-    assert!(web_login::helper_path().is_some());
+fn the_real_helper_is_built_and_found_in_its_directory() {
+    // Cargo builds every binary for integration tests and names its path
+    // (test binaries themselves may live elsewhere, e.g. `build/*/out`).
+    let exe = std::path::Path::new(env!("CARGO_BIN_EXE_ferrocord-login"));
+    assert!(exe.is_file());
+    let dir = exe.parent().unwrap();
+    assert_eq!(web_login::helper_in(dir).as_deref(), Some(exe));
 }
