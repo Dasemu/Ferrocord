@@ -5,6 +5,7 @@ pub mod actions;
 pub mod anim;
 mod background;
 pub mod composer;
+pub mod context;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji;
@@ -15,6 +16,7 @@ pub mod images;
 pub mod input;
 pub mod jump;
 pub mod markdown;
+pub mod media_anim;
 pub mod members;
 pub mod message;
 pub mod panels;
@@ -120,6 +122,8 @@ pub struct App {
     pub editing: Option<Editing>,
     pub pending_delete: Option<(ChannelId, MessageId)>,
     pub menu: Option<MessageMenu>,
+    /// Right-click menu of a user or channel.
+    pub ctx_menu: Option<context::CtxMenu>,
     pub emoji_picker: Option<OpenPicker>,
     pub gif_picker: Option<gifs::GifPicker>,
     pub sticker_picker: Option<stickers::StickerPicker>,
@@ -240,6 +244,7 @@ impl App {
             editing: None,
             pending_delete: None,
             menu: None,
+            ctx_menu: None,
             emoji_picker: None,
             gif_picker: None,
             sticker_picker: None,
@@ -403,6 +408,7 @@ impl App {
             }
         }
         self.mock_load_cosmetics();
+        self.mock_load_media_anims();
         // Mock sticker images, under the CDN URLs the views ask for.
         for (st, rgb) in mock::mock_stickers().into_iter().zip([
             [255u8, 140, 60],
@@ -944,7 +950,8 @@ impl App {
             | Ui::HoverEnter(_)
             | Ui::HoverLeave(_)
             | Ui::AnimTick(_)
-            | Ui::ToggleReduceMotion => self.update_cosmetics(u),
+            | Ui::ToggleReduceMotion
+            | Ui::ToggleAutoplayGifs => self.update_cosmetics(u),
             other => self.update_action(other),
         }
     }
@@ -1682,13 +1689,17 @@ impl App {
                 Task::none()
             }
             Done::Video { session, progress } => self.on_video(session, progress),
-            Done::Image { key, bytes } => {
-                match bytes {
-                    Some(b) => self.images.insert_bytes(key, b),
-                    None => self.images.mark_failed(&key),
+            Done::Image { key, bytes } => match bytes {
+                Some(b) => {
+                    let t = self.decode_media_anim(&key, &b);
+                    self.images.insert_bytes(key, b);
+                    t
                 }
-                Task::none()
-            }
+                None => {
+                    self.images.mark_failed(&key);
+                    Task::none()
+                }
+            },
         }
     }
 
@@ -2150,6 +2161,10 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
                     .summary(&escape_markup(&n.title))
                     .body(&escape_markup(&n.body))
                     .icon("dev.ferro.ferrocord");
+                // The registered AppUserModelID (`win_app_id`): without it
+                // the toast is attributed to PowerShell.
+                #[cfg(windows)]
+                note.app_id(crate::config::APP_ID);
                 // Desktop entry and click actions are freedesktop (XDG)
                 // notification features; Windows toasts have neither.
                 #[cfg(all(unix, not(target_os = "macos")))]

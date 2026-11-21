@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.10.0"
+version = "0.10.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -95,6 +95,11 @@ vp8-decoder = { version = "0.1", optional = true }
 # Opus, audiopus_sys (static libopus) and cpal are shared with voice: see
 # [dependencies] (one version each, always built).
 
+[target.'cfg(windows)'.dependencies]
+# Registers the toast AppUserModelID (else toasts show as "PowerShell");
+# same version already in the tree via the notification backend.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_Shell"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
 ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
@@ -126,3 +131,21 @@ panic = "unwind"
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
+
+# iced comes from ferroiced (https://github.com/Kartudev/ferroiced): iced 0.14.1
+# plus a tiny-skia fast path for opaque images (video frames, GIFs). Crate
+# names are unchanged, so every iced crate in the graph must be patched to
+# the same source, or two copies of iced_graphics get mixed.
+[patch.crates-io]
+iced = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_core = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_debug = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_futures = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_graphics = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_program = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_renderer = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_runtime = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_tiny_skia = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_wgpu = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_widget = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }
+iced_winit = { git = "https://github.com/Kartudev/ferroiced", branch = "main" }

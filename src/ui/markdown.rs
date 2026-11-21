@@ -164,6 +164,14 @@ fn flow<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
         match i {
             Inline::LineBreak => lines = lines.push(finish(&mut line)),
             Inline::Emoji { name, id, animated } => {
+                if let Some(a) = ctx.app.emoji_anim(*id, *animated) {
+                    line.push(
+                        super::anim_image::message_anim(ctx.app, a, emoji_size, emoji_size)
+                            .content_fit(iced::ContentFit::Contain)
+                            .into(),
+                    );
+                    continue;
+                }
                 match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                     Some(h) => line.push(
                         iced::widget::image(h.clone())
@@ -427,6 +435,13 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
     let mut r = row![].spacing(4);
     for i in v {
         if let Inline::Emoji { name, id, animated } = i {
+            if let Some(a) = ctx.app.emoji_anim(*id, *animated) {
+                r = r.push(
+                    super::anim_image::message_anim(ctx.app, a, 48.0, 48.0)
+                        .content_fit(iced::ContentFit::Contain),
+                );
+                continue;
+            }
             let el: El<'a> = match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
                 Some(h) => iced::widget::image(h.clone()).width(48).height(48).into(),
                 None => container(text(format!(":{name}:")).size(16).color(p.text_secondary))

@@ -13,6 +13,7 @@
 //! |---|---|
 //! | `R` ready | `u32` width, `u32` height, `u64` duration ms (0 = unknown) |
 //! | `F` frame | `u32` width, `u32` height, `w*h*4` RGBA bytes |
+//! | `P` timed frame | `u64` time ms, then the fields of `F` (frames mode only) |
 //! | `T` time | `u64` position ms, `u64` duration ms, `u8` state |
 //! | `E` failed | `u8` kind (0 error, 1 missing decoder), `u32` length, UTF-8 text |
 
@@ -71,6 +72,18 @@ pub enum Msg {
         /// RGBA pixels, `width * height * 4` bytes.
         rgba: Vec<u8>,
     },
+    /// A frame with its presentation time (frames mode, see
+    /// [`crate::media::gifv`]).
+    Picture {
+        /// Presentation time in ms.
+        time_ms: u64,
+        /// Width.
+        width: u32,
+        /// Height.
+        height: u32,
+        /// RGBA pixels, `width * height * 4` bytes.
+        rgba: Vec<u8>,
+    },
     /// Playback position.
     Time {
         /// Position in ms.
@@ -105,6 +118,21 @@ fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
 }
 
+/// Size and pixels of a frame, checked before anything is allocated.
+fn read_pixels<R: Read>(r: &mut R) -> io::Result<(u32, u32, Vec<u8>)> {
+    let (width, height) = (u32le(r)?, u32le(r)?);
+    if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
+        return Err(bad("frame size out of range"));
+    }
+    let len = width as usize * height as usize * 4;
+    if len > MAX_FRAME_BYTES {
+        return Err(bad("frame too large"));
+    }
+    let mut rgba = vec![0u8; len];
+    r.read_exact(&mut rgba)?;
+    Ok((width, height, rgba))
+}
+
 /// Reads one message; `Ok(None)` at a clean end of stream.
 pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Option<Msg>> {
     let mut tag = [0u8; 1];
@@ -118,17 +146,18 @@ pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Option<Msg>> {
             duration_ms: u64le(r)?,
         },
         b'F' => {
-            let (width, height) = (u32le(r)?, u32le(r)?);
-            if width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
-                return Err(bad("frame size out of range"));
-            }
-            let len = width as usize * height as usize * 4;
-            if len > MAX_FRAME_BYTES {
-                return Err(bad("frame too large"));
-            }
-            let mut rgba = vec![0u8; len];
-            r.read_exact(&mut rgba)?;
+            let (width, height, rgba) = read_pixels(r)?;
             Msg::Frame {
+                width,
+                height,
+                rgba,
+            }
+        }
+        b'P' => {
+            let time_ms = u64le(r)?;
+            let (width, height, rgba) = read_pixels(r)?;
+            Msg::Picture {
+                time_ms,
                 width,
                 height,
                 rgba,
@@ -172,6 +201,22 @@ pub fn write_frame<W: Write>(w: &mut W, width: u32, height: u32, rgba: &[u8]) ->
     w.flush()
 }
 
+/// Writes a timed frame (frames mode) without copying the pixels.
+pub fn write_picture<W: Write>(
+    w: &mut W,
+    time_ms: u64,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> io::Result<()> {
+    w.write_all(b"P")?;
+    w.write_all(&time_ms.to_le_bytes())?;
+    w.write_all(&width.to_le_bytes())?;
+    w.write_all(&height.to_le_bytes())?;
+    w.write_all(rgba)?;
+    w.flush()
+}
+
 /// Writes any message.
 pub fn write_msg<W: Write>(w: &mut W, m: &Msg) -> io::Result<()> {
     match m {
@@ -180,6 +225,12 @@ pub fn write_msg<W: Write>(w: &mut W, m: &Msg) -> io::Result<()> {
             height,
             rgba,
         } => return write_frame(w, *width, *height, rgba),
+        Msg::Picture {
+            time_ms,
+            width,
+            height,
+            rgba,
+        } => return write_picture(w, *time_ms, *width, *height, rgba),
         Msg::Ready {
             width,
             height,
@@ -283,6 +334,12 @@ mod tests {
                 height: 1,
                 rgba: vec![1, 2, 3, 4, 5, 6, 7, 8],
             },
+            Msg::Picture {
+                time_ms: 40,
+                width: 1,
+                height: 1,
+                rgba: vec![9, 8, 7, 255],
+            },
             Msg::Time {
                 position_ms: 1234,
                 duration_ms: 5000,
@@ -332,6 +389,11 @@ mod tests {
         wide.extend((MAX_DIM + 1).to_le_bytes());
         wide.extend(1u32.to_le_bytes());
         assert!(read_msg(&mut Cursor::new(wide)).is_err());
+        let mut timed = vec![b'P'];
+        timed.extend(0u64.to_le_bytes());
+        timed.extend(MAX_DIM.to_le_bytes());
+        timed.extend(MAX_DIM.to_le_bytes());
+        assert!(read_msg(&mut Cursor::new(timed)).is_err());
         // Truncated frame body.
         let mut cut = vec![b'F'];
         cut.extend(2u32.to_le_bytes());

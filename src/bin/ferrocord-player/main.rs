@@ -10,6 +10,11 @@
 //! video and ends it when the video closes, so a decoder never outlives its
 //! video and the main process links no codec.
 //!
+//! `ferrocord-player --frames <w>x<h> <frames> <bytes> <file>` is the
+//! *frames mode* used for `gifv` embeds (`ferrocord::media::gifv`): picture
+//! only, decoded as fast as possible, scaled to fit `w` x `h`, evenly
+//! spaced frames within the budget written as timed pictures, then exit.
+//!
 //! The codecs live in [`codec`] and the demuxers in [`mp4`] / [`webm`], free
 //! of any playback logic, so a second binary can reuse them.
 //!
@@ -49,6 +54,7 @@ mod player {
     use std::sync::mpsc::{self, RecvTimeoutError};
     use std::time::{Duration, Instant};
 
+    use ferrocord::media::gifv::{FRAMES_FLAG, FrameSpec, Sampler};
     use ferrocord::media::video_proto::{self as proto, Cmd, Msg, PlayState};
 
     use super::audio::{self, AHEAD_MS, AudioSource, Output};
@@ -77,9 +83,16 @@ mod player {
     type Out = BufWriter<std::fs::File>;
 
     pub fn run() {
-        let Some(path) = std::env::args().nth(1) else {
-            eprintln!("usage: ferrocord-player <file>");
-            std::process::exit(2);
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let (path, frames) = match args.as_slice() {
+            [flag, b, n, bytes, path] if flag == FRAMES_FLAG => {
+                match FrameSpec::parse(b, n, bytes) {
+                    Some(spec) => (path.clone(), Some(spec)),
+                    None => usage(),
+                }
+            }
+            [path] if !path.starts_with("--") => (path.clone(), None),
+            _ => usage(),
         };
         // stdout as a plain file: no line buffering for binary frames.
         let out_file = match io::stdout()
@@ -93,8 +106,9 @@ mod player {
         let mut out: Out = BufWriter::with_capacity(1 << 20, out_file);
         // A hostile file must never take the app down, and a bug in a
         // demuxer must still end with a message instead of silence.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Player::open(Path::new(&path)).and_then(|p| p.run(&mut out))
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match frames {
+            Some(spec) => run_frames(Path::new(&path), spec, &mut out),
+            None => Player::open(Path::new(&path)).and_then(|p| p.run(&mut out)),
         }));
         let failure = match result {
             Ok(Ok(())) => return,
@@ -103,6 +117,73 @@ mod player {
         };
         send(&mut out, &failure);
         std::process::exit(1);
+    }
+
+    fn usage() -> ! {
+        eprintln!("usage: ferrocord-player [--frames <w>x<h> <frames> <bytes>] <file>");
+        std::process::exit(2);
+    }
+
+    /// Frames mode: the picture track only, decoded as fast as it goes,
+    /// with the frames the [`Sampler`] keeps written as timed pictures.
+    fn run_frames(path: &Path, spec: FrameSpec, out: &mut Out) -> Result<(), Msg> {
+        if !path.is_file() {
+            return Err(fail("the video file is missing"));
+        }
+        let container = source::detect(path).map_err(track_failure)?;
+        let duration_ms = match container {
+            Container::Mp4 => mp4::duration_ms(path).map_err(track_failure)?,
+            Container::Webm => 0,
+        };
+        let Some(mut v) = open_picture(path, container, spec.max_w as usize, spec.max_h as usize)?
+        else {
+            return Err(fail("the file has no picture"));
+        };
+        let duration_ms = if duration_ms == 0 {
+            v.info.duration_ms
+        } else {
+            duration_ms
+        };
+        let (w, h) = (v.out_w as u32, v.out_h as u32);
+        let Some(mut sampler) = Sampler::new(spec, duration_ms, u64::from(w) * u64::from(h) * 4)
+        else {
+            return Err(fail("the clip is too large to loop"));
+        };
+        v.fill()?;
+        if v.ready.is_none() {
+            return Err(fail(format!(
+                "no picture could be decoded from the {} stream",
+                v.info.codec.name()
+            )));
+        }
+        send(
+            out,
+            &Msg::Ready {
+                width: w,
+                height: h,
+                duration_ms,
+            },
+        );
+        // Times count from the first picture (edit lists and B-frame delays
+        // can start a stream above zero).
+        let mut start = None;
+        while let Some((t, px)) = v.ready.take() {
+            let t = t.max(0) as u64;
+            let t = t.saturating_sub(*start.get_or_insert(t));
+            if sampler.keep(t)
+                && proto::write_picture(out, t, w, h, &px)
+                    .and_then(|()| out.flush())
+                    .is_err()
+            {
+                // The app stopped reading: nothing left to do.
+                std::process::exit(0);
+            }
+            if sampler.done() {
+                break;
+            }
+            v.fill()?;
+        }
+        Ok(())
     }
 
     fn send(out: &mut Out, m: &Msg) {
@@ -266,6 +347,49 @@ mod player {
 
     type Opened = Option<(Box<dyn PacketSource>, VideoInfo)>;
 
+    /// The picture track with a decoder whose frames fit `max_w` x `max_h`;
+    /// `None` for a file without one.
+    fn open_picture(
+        path: &Path,
+        container: Container,
+        max_w: usize,
+        max_h: usize,
+    ) -> Result<Option<Video>, Msg> {
+        let Some((source, info)) = open_video(path, container).map_err(track_failure)? else {
+            return Ok(None);
+        };
+        let (dw, dh) = info.rotation.display(info.width, info.height);
+        if dw == 0 || dh == 0 {
+            return Err(fail("the video has no picture size"));
+        }
+        if dw > MAX_SIDE || dh > MAX_SIDE || dw * dh > MAX_PIXELS {
+            return Err(fail(format!(
+                "the video is too large ({dw}x{dh}; the limit is {MAX_SIDE}x{MAX_SIDE})"
+            )));
+        }
+        let (out_w, out_h) = yuv::fit(dw, dh, max_w, max_h);
+        let geo = Geometry {
+            rotation: info.rotation,
+            out_w,
+            out_h,
+            matrix: Matrix::for_height(info.height),
+        };
+        let decoder = codec::new_decoder(&info, geo).map_err(fail)?;
+        Ok(Some(Video {
+            source,
+            decoder,
+            info,
+            packet: Packet::default(),
+            queue: VecDeque::new(),
+            ready: None,
+            out_w,
+            out_h,
+            bad: 0,
+            eos: false,
+            flushed: false,
+        }))
+    }
+
     fn open_video(path: &Path, container: Container) -> Result<Opened, TrackError> {
         Ok(match container {
             Container::Mp4 => mp4::Mp4Video::open(path)?.map(|v| {
@@ -289,44 +413,12 @@ mod player {
                 Container::Mp4 => mp4::duration_ms(path).map_err(track_failure)?,
                 Container::Webm => 0,
             };
-            let video = match open_video(path, container).map_err(track_failure)? {
-                Some((src, info)) => {
-                    if duration_ms == 0 {
-                        duration_ms = info.duration_ms;
-                    }
-                    let (dw, dh) = info.rotation.display(info.width, info.height);
-                    if dw == 0 || dh == 0 {
-                        return Err(fail("the video has no picture size"));
-                    }
-                    if dw > MAX_SIDE || dh > MAX_SIDE || dw * dh > MAX_PIXELS {
-                        return Err(fail(format!(
-                            "the video is too large ({dw}x{dh}; the limit is {MAX_SIDE}x{MAX_SIDE})"
-                        )));
-                    }
-                    let (out_w, out_h) = yuv::fit(dw, dh, MAX_W, MAX_H);
-                    let geo = Geometry {
-                        rotation: info.rotation,
-                        out_w,
-                        out_h,
-                        matrix: Matrix::for_height(info.height),
-                    };
-                    let decoder = codec::new_decoder(&info, geo).map_err(fail)?;
-                    Some(Video {
-                        source: src,
-                        decoder,
-                        info,
-                        packet: Packet::default(),
-                        queue: VecDeque::new(),
-                        ready: None,
-                        out_w,
-                        out_h,
-                        bad: 0,
-                        eos: false,
-                        flushed: false,
-                    })
-                }
-                None => None,
-            };
+            let video = open_picture(path, container, MAX_W, MAX_H)?;
+            if duration_ms == 0
+                && let Some(v) = &video
+            {
+                duration_ms = v.info.duration_ms;
+            }
             let audio = match audio::open(path, container) {
                 Ok(a) => a,
                 Err(e) => {

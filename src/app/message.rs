@@ -147,6 +147,8 @@ pub enum Ui {
     ToggleAutostart,
     /// "Reduce motion": no avatar, emoji, decoration or effect animation.
     ToggleReduceMotion,
+    /// "Play GIFs automatically" in messages.
+    ToggleAutoplayGifs,
     // -- profile popout and animation
     OpenProfile {
         user: UserId,
@@ -197,6 +199,15 @@ pub enum Ui {
     DragEnd,
     RailMenu(RailItem),
     CloseRailMenu,
+    // -- context menus (users, channels, servers)
+    ContextOpen(super::context::CtxTarget),
+    ContextClose,
+    CopyToClipboard(String),
+    MentionUser(UserId),
+    MarkChannelRead(ChannelId),
+    MarkGuildRead(GuildId),
+    MuteGuild(GuildId, bool),
+    SuppressEveryone(GuildId, bool),
     ToggleFolder(u64),
     CreateFolder(GuildId),
     MoveToFolder(GuildId, u64),

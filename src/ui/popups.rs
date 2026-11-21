@@ -21,7 +21,7 @@ const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
 /// Number of popup slots [`layers`] always returns.
-pub const SLOTS: usize = 9;
+pub const SLOTS: usize = 10;
 
 /// The popup layers, bottom to top, always exactly [`SLOTS`] long: a closed
 /// popup is an empty placeholder so the widget tree keeps its shape (see
@@ -103,12 +103,16 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
         Some((card, at)) => popup_layer(app, card, at, Ui::CloseRailMenu),
         None => super::empty(),
     };
+    let ctx = match super::context_menu::view(app) {
+        Some((card, at)) => popup_layer(app, card, at, Ui::ContextClose),
+        None => super::empty(),
+    };
     let profile = match super::profile::popout(app) {
         Some((card, at)) => popup_layer(app, card, at, Ui::CloseProfile),
         None => super::empty(),
     };
     vec![
-        status, menu, picker, gif, sticker, delete, popover, rail_menu, profile,
+        status, menu, picker, gif, sticker, delete, popover, rail_menu, ctx, profile,
     ]
 }
 
@@ -165,25 +169,27 @@ fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
     } else if gp.results.is_empty() {
         notice(p, "No GIFs found")
     } else {
-        scrollable(
-            container(
-                row![
-                    iced::widget::Column::with_children(left)
-                        .spacing(GAP)
-                        .width(tile_w),
-                    iced::widget::Column::with_children(right)
-                        .spacing(GAP)
-                        .width(tile_w),
-                ]
-                .spacing(GAP),
+        super::smooth_scroll::smooth(
+            scrollable(
+                container(
+                    row![
+                        iced::widget::Column::with_children(left)
+                            .spacing(GAP)
+                            .width(tile_w),
+                        iced::widget::Column::with_children(right)
+                            .spacing(GAP)
+                            .width(tile_w),
+                    ]
+                    .spacing(GAP),
+                )
+                .padding(Padding::from([0, 8])),
             )
-            .padding(Padding::from([0, 8])),
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(theme::thin_scrollbar(p, false))
+            .height(Length::Fill),
         )
-        .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::new().width(4).scroller_width(4),
-        ))
-        .style(theme::thin_scrollbar(p, false))
-        .height(Length::Fill)
         .into()
     };
     container(
@@ -267,13 +273,15 @@ fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker)
             .center_x(Length::Fill)
             .into()
     } else {
-        scrollable(list)
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().width(4).scroller_width(4),
-            ))
-            .style(theme::thin_scrollbar(p, false))
-            .height(Length::Fill)
-            .into()
+        super::smooth_scroll::smooth(
+            scrollable(list)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill),
+        )
+        .into()
     };
     container(column![container(search).padding(8), body].spacing(4))
         .width(STICKER_PICKER_W)
@@ -601,12 +609,14 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
                     .color(p.text_muted)
             )
             .padding(Padding::from([8, 12]).bottom(4)),
-            scrollable(container(grid).padding(Padding::from([0, 8])))
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new().width(4).scroller_width(4),
-                ))
-                .style(theme::thin_scrollbar(p, false))
-                .height(Length::Fill),
+            super::smooth_scroll::smooth(
+                scrollable(container(grid).padding(Padding::from([0, 8])))
+                    .direction(scrollable::Direction::Vertical(
+                        scrollable::Scrollbar::new().width(4).scroller_width(4),
+                    ))
+                    .style(theme::thin_scrollbar(p, false))
+                    .height(Length::Fill)
+            ),
         ]
         .spacing(4),
     )

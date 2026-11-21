@@ -329,7 +329,7 @@ downloads never carry the token.
 * Caps per asset (source frames read, frames kept, bytes kept, width) are
   per `Class`; extra frames are merged (delay added to the kept frame) so the
   duration is unchanged. Sources above 2048 px are refused.
-* `AnimCache` is an LRU with a 32 MB budget. Banner and effect frames are
+* `AnimCache` is an LRU with a 48 MB budget. Banner and effect frames are
   dropped when the popout closes.
 * Lists and messages show the still image; hovering a row / message starts
   the clock for that avatar, decoration and (in messages) animated emoji.
@@ -338,6 +338,19 @@ downloads never carry the token.
   the popout shows one); "Reduce motion" in Settings turns all of it off.
 * Handles are created once when data arrives (`Handle::from_rgba` in the
   decode task), never in `view`.
+* **Message media** (`app/media_anim.rs`): GIF / animated WebP attachments
+  and embed images, GIF / APNG stickers and animated custom emoji (content
+  and reactions) of the newest 30 messages of the open conversation play by
+  themselves while "Play GIFs automatically" is on (default, as in the
+  official client) and the window is focused. Attachments and stickers are
+  decoded from the bytes the image loader already fetched (classes `Media`,
+  `Sticker`); emoji fetch their `.gif`. They are drawn by
+  `ui::anim_image::AnimImage`, which records the frame time on each redraw and
+  calls `Shell::request_redraw_at` for its next frame change while it is
+  inside the viewport: no `Message`, no `view()`/layout per frame, and
+  tiny-skia repaints only its rectangle. Off-screen or unfocused images ask
+  for nothing. With the setting off, emoji keep the hover behaviour above and
+  GIFs show their first frame; "Reduce motion" stops everything.
 
 ### Display name styles
 
@@ -376,8 +389,8 @@ default gg Sans are not bundled: a bold weight of Inter stands in for them.
   click: a direct mp4/webm on the media proxy -> `Ui::PlayVideo(url)` (the
   hook for the inline player; today it asks via the confirm-link dialog and
   opens the browser), anything else (YouTube, Twitch iframes) -> the page
-  link through `Ui::ConfirmLink`. `gifv` stays a bare still frame;
-  `gifv_source` returns the looping MP4 for the animation engine.
+  link through `Ui::ConfirmLink`. `gifv` is bare media: its still frame,
+  then its MP4 (`gifv_source`) looping muted like a GIF (section 12).
 * **Safety.** Only http(s) reaches `pending_link`/the browser; texts are cut
   to Discord's own limits (`clip`), at most 10 embeds and 25 fields are drawn.
 * **Live updates.** `MESSAGE_UPDATE` is a `MessagePatch` of `Option`s: an
@@ -399,7 +412,8 @@ card background.
 **What plays.** Attachments whose `content_type` is `video/*` or whose name
 ends in `.mp4 .m4v .mov .webm .mkv`, and embeds (`type: video`, a bare video
 link) whose `video.proxy_url` / `video.url` is a file with such an extension
-(`media::clip::Clip`). `gifv` / `image` embeds keep their bare-image rendering,
+(`media::clip::Clip`). `gifv` / `image` embeds keep their bare-image rendering
+(a `gifv` loops instead, see *gifv* below),
 and page players (YouTube, ...) stay link cards: their `video.url` is a web
 page, never fetched. The inline box is at most 400x300 px (never enlarged),
 like the official client.
@@ -470,6 +484,24 @@ size on hover.
 **Mock mode.** `--mock` plays a scripted test pattern (`media::video::spawn_mock`)
 instead of downloading: no network, no disk, no helper. Screenshots:
 `--screenshot video` and `--screenshot video-fullscreen`.
+
+**gifv.** Tenor / Giphy links arrive as `gifv` embeds whose `video` is a
+short silent MP4; like the official client it loops muted, with no controls,
+and several can play at once. It does not use the viewer above:
+`app::media_anim` treats the MP4 (`gifv_source`) as one more animated
+message asset (class `Gifv`) of the newest 30 messages, at most 6 clips. The
+file is downloaded (16 MB cap, allowlisted hosts) to a scratch file, and the
+helper runs once in *frames mode* (`ferrocord-player --frames <w>x<h>
+<frames> <bytes> <file>`, `media::gifv`): picture track only, decoded as fast
+as possible, fitted to 400x300, evenly spaced frames within 48 frames / 6 MB
+(`gifv::Sampler`, at most ~30 fps and the first 30 s), each written as a `P`
+message (time + RGBA), then it exits and the file is deleted. Delays come
+from the frame times; the frames become an `Anim` drawn by
+`ui::anim_image`, so a gifv follows the GIF rules ("Play GIFs
+automatically", window focus, "Reduce motion", redraws only while visible,
+no `view()` per frame). At most two helpers decode at once, each is killed
+after 20 s. Without the helper (non-Unix builds) or on any failure the still
+frame stays (retried after 5 min). Mock: `mock::MOCK_GIFV` in #showcase.
 
 ## 13. Voice and calls
 

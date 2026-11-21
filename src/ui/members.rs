@@ -51,7 +51,7 @@ pub fn view(app: &App) -> El<'_> {
                 .center_x(Length::Fill),
         );
     }
-    container(
+    container(super::smooth_scroll::smooth(
         scrollable(col)
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new().width(4).scroller_width(4),
@@ -59,7 +59,7 @@ pub fn view(app: &App) -> El<'_> {
             .on_scroll(|vp| Message::Ui(Ui::MembersScrolled(vp)))
             .style(theme::thin_scrollbar(p, false))
             .height(Length::Fill),
-    )
+    ))
     .width(WIDTH)
     .height(Length::Fill)
     .style(theme::bg(p.bg_sidebar))
@@ -182,13 +182,15 @@ pub fn dm_view<'a>(app: &'a App, c: &Channel) -> El<'a> {
                 };
                 col = col.push(person_row(app, u, u.display_name(), color, presence, None));
             }
-            scrollable(col)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new().width(4).scroller_width(4),
-                ))
-                .style(theme::thin_scrollbar(p, false))
-                .height(Length::Fill)
-                .into()
+            super::smooth_scroll::smooth(
+                scrollable(col)
+                    .direction(scrollable::Direction::Vertical(
+                        scrollable::Scrollbar::new().width(4).scroller_width(4),
+                    ))
+                    .style(theme::thin_scrollbar(p, false))
+                    .height(Length::Fill),
+            )
+            .into()
         }
     };
     container(body)

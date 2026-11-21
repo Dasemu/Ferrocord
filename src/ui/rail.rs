@@ -337,23 +337,22 @@ fn folder_view<'a>(app: &'a App, f: &'a GuildFolder, id: u64, members: &[&'a Gui
 
 /// Right-click menu of a rail entry.
 pub fn menu(app: &App) -> Option<(El<'_>, iced::Point)> {
+    use super::context_menu::{Row, card, guild_rows};
     let m = app.rail.menu?;
-    let p = app.theme.palette;
-    let mut items: Vec<(Icon, String, Ui, bool)> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
     match m.item {
         RailItem::Guild(g) => {
+            rows.extend(guild_rows(app, g));
             match app.chat.folders.folder_of(g) {
-                None => items.push((
+                None => rows.push(Row::item(
                     Icon::Folder,
-                    "Create Folder".into(),
+                    "Create Folder",
                     Ui::CreateFolder(g),
-                    false,
                 )),
-                Some(_) => items.push((
+                Some(_) => rows.push(Row::item(
                     Icon::X,
-                    "Remove from Folder".into(),
+                    "Remove from Folder",
                     Ui::RemoveFromFolder(g),
-                    false,
                 )),
             }
             for f in app.chat.folders.items.iter().filter(|f| f.id.is_some()) {
@@ -363,53 +362,27 @@ pub fn menu(app: &App) -> Option<(El<'_>, iced::Point)> {
                 }
                 let label =
                     folders::folder_label(f, |gid| app.chat.guild(gid).map(|g| g.name.as_str()));
-                items.push((
+                rows.push(Row::item(
                     Icon::Folder,
                     format!("Move to {}", model::truncate_chars(&label, 22)),
                     Ui::MoveToFolder(g, id),
-                    false,
                 ));
             }
         }
         RailItem::Folder(f) => {
-            items.push((
+            rows.push(Row::item(
                 Icon::Settings,
-                "Folder Settings".into(),
+                "Folder Settings",
                 Ui::OpenFolderSettings(f),
-                false,
             ));
-            items.push((
+            rows.push(Row::danger(
                 Icon::Trash,
-                "Ungroup Servers".into(),
+                "Ungroup Servers",
                 Ui::UngroupFolder(f),
-                true,
             ));
         }
     }
-    let height = items.len() as f32 * 32.0 + 16.0;
-    let mut col = column![].spacing(2).padding(8);
-    for (i, label, action, danger) in items {
-        let fg = if danger { p.danger } else { p.text_secondary };
-        col = col.push(
-            button(
-                row![
-                    text(label).size(14).font(INTER_MEDIUM).width(Length::Fill),
-                    icon(i, 18.0, fg),
-                ]
-                .align_y(Alignment::Center),
-            )
-            .padding(Padding::from([6, 8]))
-            .width(Length::Fill)
-            .on_press(ui(action))
-            .style(theme::menu_item(p, danger)),
-        );
-    }
-    let at = crate::app::input::clamp_popup(
-        m.at,
-        iced::Size::new(220.0, height),
-        crate::app::input::window_size(),
-    );
-    Some((container(col).width(220).style(theme::popup(p)).into(), at))
+    Some(card(app, rows, m.at))
 }
 
 pub fn view(app: &App) -> El<'_> {
@@ -503,13 +476,13 @@ pub fn view(app: &App) -> El<'_> {
     col = col.push(tip(app, add.into(), "Add a Server"));
     col = col.push(tip(app, explore.into(), "Discover"));
 
-    container(
+    container(super::smooth_scroll::smooth(
         scrollable(col)
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new().width(0).scroller_width(0),
             ))
             .height(Length::Fill),
-    )
+    ))
     .width(t.metrics.rail_width)
     .height(Length::Fill)
     .style(theme::bg(p.bg_app))

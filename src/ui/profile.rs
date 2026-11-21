@@ -39,13 +39,15 @@ pub fn panel<'a>(app: &'a App, u: &User) -> El<'a> {
     let profile = app.profiles.get((u.id, None));
     let user = known_user(app, u.id, profile);
     let w = super::members::WIDTH;
-    scrollable(card(app, &user, profile, None, w, false))
-        .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::new().width(4).scroller_width(4),
-        ))
-        .style(theme::thin_scrollbar(app.theme.palette, false))
-        .height(Length::Fill)
-        .into()
+    super::smooth_scroll::smooth(
+        scrollable(card(app, &user, profile, None, w, false))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(theme::thin_scrollbar(app.theme.palette, false))
+            .height(Length::Fill),
+    )
+    .into()
 }
 
 /// The freshest `User`: the profile's, else the one we know from lists.

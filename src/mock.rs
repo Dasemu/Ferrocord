@@ -824,6 +824,13 @@ fn showcase() -> Vec<Message> {
         kind: Some("gifv".into()),
         url: Some(gif_url.into()),
         provider_name: Some("Tenor".into()),
+        // Loops muted like a GIF (`app::media_anim`, `mock_gifv_frames`).
+        video: Some(EmbedVideo {
+            url: MOCK_GIFV.into(),
+            proxy_url: None,
+            width: Some(MOCK_GIFV_SIZE.0),
+            height: Some(MOCK_GIFV_SIZE.1),
+        }),
         thumbnail: Some(EmbedMedia {
             url: "mock://gif/1".into(),
             proxy_url: None,
@@ -857,7 +864,98 @@ fn showcase() -> Vec<Message> {
         width: Some(1280),
         height: Some(720),
     }];
-    vec![d, b, c, a, e, f, g, h, v]
+    // An animated GIF attachment (plays by itself, see `app::media_anim`).
+    let mut i = gm(CH_SHOWCASE, 0, 1, 5, &[], "");
+    i.attachments = vec![Attachment {
+        id: Snowflake(5101),
+        filename: "bounce.gif".into(),
+        size: 96_512,
+        url: MOCK_ANIM_GIF.into(),
+        proxy_url: None,
+        content_type: Some("image/gif".into()),
+        width: Some(MOCK_ANIM_SIZE.0),
+        height: Some(MOCK_ANIM_SIZE.1),
+    }];
+    vec![d, b, c, a, e, f, g, h, v, i]
+}
+
+/// The MP4 of the mock `gifv` embed (its frames come from
+/// [`mock_gifv_frames`]; the still is `mock://gif/1`).
+pub const MOCK_GIFV: &str = "mock://gifv/celebrate.mp4";
+pub const MOCK_GIFV_SIZE: (u32, u32) = (220, 165);
+
+/// Frames of the mock `gifv`: a rainbow pinwheel turning, 24 frames at
+/// 25 fps (what the helper's frames mode hands over for an MP4).
+pub fn mock_gifv_frames() -> Vec<(u32, u32, Vec<u8>, std::time::Duration)> {
+    use std::f32::consts::TAU;
+    let (w, h) = MOCK_GIFV_SIZE;
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    (0..24u32)
+        .map(|f| {
+            let turn = f as f32 / 24.0 * TAU / 3.0;
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+                    let a = dy.atan2(dx) + turn;
+                    let c = if dx.hypot(dy) < 70.0 {
+                        let [r, g, b] = hue_rgb((a / TAU).rem_euclid(1.0));
+                        let k = if (a * 3.0).sin() > 0.0 { 1.0 } else { 0.55 };
+                        [(r * k) as u8, (g * k) as u8, (b * k) as u8, 255]
+                    } else {
+                        [32, 34, 52, 255]
+                    };
+                    px.extend_from_slice(&c);
+                }
+            }
+            (w, h, px, std::time::Duration::from_millis(40))
+        })
+        .collect()
+}
+
+/// A saturated colour for `hue` in 0..1, as 0..255 floats.
+fn hue_rgb(hue: f32) -> [f32; 3] {
+    let h = hue * 6.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    let (r, g, b) = match h as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    [r * 255.0, g * 255.0, b * 255.0]
+}
+
+/// Key of the mock animated GIF attachment.
+pub const MOCK_ANIM_GIF: &str = "mock://anim/bounce.gif";
+pub const MOCK_ANIM_SIZE: (u32, u32) = (240, 160);
+
+/// Frames of the mock GIF: a ball bouncing across a gradient, 12 frames.
+pub fn mock_anim_frames() -> Vec<(u32, u32, Vec<u8>, std::time::Duration)> {
+    let (w, h) = MOCK_ANIM_SIZE;
+    (0..12u32)
+        .map(|f| {
+            let t = f as f32 / 12.0;
+            let cx = 30.0 + t * (w as f32 - 60.0);
+            let cy = h as f32 - 30.0 - (t * std::f32::consts::PI).sin() * (h as f32 - 60.0);
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                    let c = if d < 22.0 {
+                        [242, 63, 66, 255]
+                    } else {
+                        let g = (60.0 + 80.0 * y as f32 / h as f32) as u8;
+                        [g / 2, g / 2, g, 255]
+                    };
+                    px.extend_from_slice(&c);
+                }
+            }
+            (w, h, px, std::time::Duration::from_millis(80))
+        })
+        .collect()
 }
 
 /// Images behind the embed demo channels: (key, width, height, hue shift).
