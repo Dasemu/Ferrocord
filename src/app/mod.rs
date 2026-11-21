@@ -5,6 +5,7 @@ pub mod actions;
 pub mod anim;
 mod background;
 pub mod composer;
+pub mod context;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji;
@@ -121,6 +122,8 @@ pub struct App {
     pub editing: Option<Editing>,
     pub pending_delete: Option<(ChannelId, MessageId)>,
     pub menu: Option<MessageMenu>,
+    /// Right-click menu of a user or channel.
+    pub ctx_menu: Option<context::CtxMenu>,
     pub emoji_picker: Option<OpenPicker>,
     pub gif_picker: Option<gifs::GifPicker>,
     pub sticker_picker: Option<stickers::StickerPicker>,
@@ -241,6 +244,7 @@ impl App {
             editing: None,
             pending_delete: None,
             menu: None,
+            ctx_menu: None,
             emoji_picker: None,
             gif_picker: None,
             sticker_picker: None,
@@ -2157,6 +2161,10 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
                     .summary(&escape_markup(&n.title))
                     .body(&escape_markup(&n.body))
                     .icon("dev.ferro.ferrocord");
+                // The registered AppUserModelID (`win_app_id`): without it
+                // the toast is attributed to PowerShell.
+                #[cfg(windows)]
+                note.app_id(crate::config::APP_ID);
                 // Desktop entry and click actions are freedesktop (XDG)
                 // notification features; Windows toasts have neither.
                 #[cfg(all(unix, not(target_os = "macos")))]

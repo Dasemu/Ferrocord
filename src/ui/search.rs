@@ -82,12 +82,14 @@ pub fn view(app: &App) -> El<'_> {
 
     container(column![
         header,
-        scrollable(col)
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().width(4).scroller_width(4),
-            ))
-            .style(theme::thin_scrollbar(p, false))
-            .height(Length::Fill),
+        super::smooth_scroll::smooth(
+            scrollable(col)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill)
+        ),
         if s.total > crate::net::rest::SEARCH_PAGE {
             El::from(pager)
         } else {

@@ -583,10 +583,12 @@ pub fn discover(app: &App) -> Option<El<'_>> {
             d.category == Some(c.id),
         ));
     }
-    let side = container(scrollable(cats).height(Length::Fill))
-        .width(t.metrics.sidebar_width)
-        .height(Length::Fill)
-        .style(theme::bg(p.bg_sidebar));
+    let side = container(super::smooth_scroll::smooth(
+        scrollable(cats).height(Length::Fill),
+    ))
+    .width(t.metrics.sidebar_width)
+    .height(Length::Fill)
+    .style(theme::bg(p.bg_sidebar));
 
     // Hero with the search box.
     let search = text_input("Explore communities", &d.input)
@@ -690,15 +692,17 @@ pub fn discover(app: &App) -> Option<El<'_>> {
     .height(t.metrics.header_height);
     let main = column![
         container(top).width(Length::Fill).style(theme::header(p)),
-        scrollable(column![hero, body])
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new()
-                    .width(8)
-                    .scroller_width(8)
-                    .margin(2),
-            ))
-            .style(theme::thin_scrollbar(p, true))
-            .height(Length::Fill),
+        super::smooth_scroll::smooth(
+            scrollable(column![hero, body])
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new()
+                        .width(8)
+                        .scroller_width(8)
+                        .margin(2),
+                ))
+                .style(theme::thin_scrollbar(p, true))
+                .height(Length::Fill)
+        ),
     ]
     .width(Length::Fill);
     let page: El<'_> = container(row![

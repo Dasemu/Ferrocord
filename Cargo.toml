@@ -95,6 +95,11 @@ vp8-decoder = { version = "0.1", optional = true }
 # Opus, audiopus_sys (static libopus) and cpal are shared with voice: see
 # [dependencies] (one version each, always built).
 
+[target.'cfg(windows)'.dependencies]
+# Registers the toast AppUserModelID (else toasts show as "PowerShell");
+# same version already in the tree via the notification backend.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_Shell"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # StatusNotifierItem tray (pure Rust over the zbus already in the tree).
 ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }

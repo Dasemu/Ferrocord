@@ -2,6 +2,7 @@
 
 pub mod anim_image;
 pub mod chat;
+pub mod context_menu;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji_font;
@@ -17,6 +18,7 @@ pub mod search;
 pub mod servers;
 pub mod settings;
 pub mod sidebar;
+pub mod smooth_scroll;
 pub mod theme;
 pub mod video;
 pub mod voice;
@@ -324,8 +326,8 @@ fn banner(app: &App) -> Option<El<'_>> {
     )
 }
 
-/// Round avatar with its decoration: animated while its row or message is
-/// hovered (see `App::phase_of`).
+/// Round avatar with its decoration; animated ones play all the time
+/// (see `App::phase_of`).
 pub fn avatar<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
     cosmetics::avatar_decorated(app, user, size, app.phase_of(user.id))
 }
@@ -343,6 +345,19 @@ pub fn avatar_circle<'a>(
     } else {
         crate::app::cosmetics::AV_LIST
     };
+    if phase == crate::app::cosmetics::Phase::Live
+        && let Some(a) = app.avatar_live(user, cdn_size)
+    {
+        return anim_image::anim_image(
+            a.clone(),
+            app.anim.epoch,
+            app.cosmetics_playing(),
+            size,
+            size,
+        )
+        .border_radius(size / 2.0)
+        .into();
+    }
     if let Some(h) = app.avatar_frame(user, cdn_size, phase) {
         return iced::widget::image(h.clone())
             .width(size)

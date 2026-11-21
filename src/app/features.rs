@@ -31,6 +31,9 @@ impl App {
         if let Some(t) = self.update_rail(u.clone()) {
             return t;
         }
+        if let Some(t) = self.update_context(u.clone()) {
+            return t;
+        }
         match u {
             // -- header
             Ui::TogglePopover(k) => self.toggle_popover(k),
@@ -153,6 +156,7 @@ impl App {
         self.status_menu = false;
         self.panels.open = None;
         self.rail.menu = None;
+        self.ctx_menu = None;
     }
 
     // -- popovers ------------------------------------------------------------------

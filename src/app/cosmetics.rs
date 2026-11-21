@@ -11,7 +11,7 @@ use std::time::Instant;
 use iced::Task;
 use iced::widget::image::Handle;
 
-use super::anim::{self, Class, Hover};
+use super::anim::{self, Class};
 use super::profile::{self, Effects, Popout};
 use super::{App, Done, Message, Ui, input, markdown};
 use crate::net::cosmetics::{self, AvatarDecoration, Nameplate, PrimaryGuild};
@@ -33,7 +33,10 @@ const MAX_EFFECT_LAYERS: usize = 6;
 pub enum Phase {
     /// Static frame.
     Still,
-    /// Animates while the pointer is over the row / message.
+    /// Lists and messages: animated images play by themselves
+    /// (`ui::anim_image`), all the time while the window is focused.
+    Live,
+    /// Animates while the pointer is over the message (custom emoji).
     Hover,
     /// Animates while the popout is open.
     Popout,
@@ -49,25 +52,49 @@ impl App {
     }
 
     /// The phase an avatar of `user` is drawn in inside lists and messages.
-    pub fn phase_of(&self, user: UserId) -> Phase {
-        if !self.prefs.reduce_motion && self.anim.is_hovering_user(user) {
-            Phase::Hover
-        } else {
+    pub fn phase_of(&self, _user: UserId) -> Phase {
+        if self.prefs.reduce_motion {
             Phase::Still
+        } else {
+            Phase::Live
         }
+    }
+
+    /// Whether list / message cosmetics play now (paused, on their first
+    /// frame, while the window is in the background).
+    pub fn cosmetics_playing(&self) -> bool {
+        !self.prefs.reduce_motion && self.window_focused
+    }
+
+    /// The decoded animation of a list / message avatar, if cached.
+    pub fn avatar_live(&self, user: &User, size: u32) -> Option<&Arc<anim::Anim>> {
+        if self.prefs.reduce_motion {
+            return None;
+        }
+        self.anim
+            .cache
+            .get(&cosmetics::avatar_anim_url(self.cdn(), user, size)?)
+    }
+
+    /// The decoded animation of a list / message decoration, if cached.
+    pub fn decoration_live(&self, deco: &AvatarDecoration, size: u32) -> Option<&Arc<anim::Anim>> {
+        if self.prefs.reduce_motion || !deco.animated() {
+            return None;
+        }
+        self.anim.cache.get(&deco.url(self.cdn(), size, true))
     }
 
     fn elapsed(&self, phase: Phase) -> std::time::Duration {
         match phase {
             Phase::Hover => self.anim.hover_elapsed(),
             Phase::Popout => self.anim.popout_elapsed(),
-            Phase::Still => std::time::Duration::ZERO,
+            Phase::Still | Phase::Live => std::time::Duration::ZERO,
         }
     }
 
     /// Animated frame for `url` in `phase`, if cached.
     fn anim_frame(&self, url: &str, phase: Phase) -> Option<&Handle> {
-        if phase == Phase::Still || self.prefs.reduce_motion {
+        if matches!(phase, Phase::Still | Phase::Live) || self.prefs.reduce_motion {
             return None;
         }
         Some(self.anim.cache.get(url)?.frame_at(self.elapsed(phase)))
@@ -165,16 +192,6 @@ impl App {
         Some((p, self.profiles.get((p.user, p.guild))))
     }
 
-    /// Best known `User` for a hover target.
-    fn hover_user(&self, h: &Hover) -> Option<User> {
-        if let (Some(m), Some(c)) = (h.message, self.open_channel())
-            && let Some(msg) = self.chat.message(c, m)
-        {
-            return Some(msg.author.clone());
-        }
-        self.chat.users.get(&h.user).cloned()
-    }
-
     fn message_emoji_animates(&self, m: MessageId) -> Vec<Snowflake> {
         let Some(c) = self.open_channel() else {
             return vec![];
@@ -192,7 +209,59 @@ impl App {
         ids
     }
 
-    /// Animations the hovered row / message could show.
+    /// Animated avatars and decorations of the users on screen (message
+    /// authors, member list, DM list, yourself). They play all the time, so
+    /// their number is capped to keep the cache from thrashing.
+    fn live_assets(&self) -> Vec<(String, Class)> {
+        const MAX_LIVE: usize = 32;
+        let mut v: Vec<(String, Class)> = Vec::new();
+        if self.prefs.reduce_motion {
+            return v;
+        }
+        let cdn = self.cdn();
+        let mut users: Vec<&User> = Vec::new();
+        if let Some(me) = &self.chat.me {
+            users.push(me);
+        }
+        if let Some(c) = self.open_channel()
+            && let Some(w) = self.chat.messages.get(&c)
+        {
+            users.extend(w.messages.iter().rev().take(40).map(|m| &m.author));
+        }
+        if let Some(l) = &self.chat.member_list {
+            users.extend(l.loaded().take(60).filter_map(|i| match i {
+                MemberItem::Member(m) => Some(&m.user),
+                _ => None,
+            }));
+        }
+        if let super::View::Home(_) = self.view {
+            users.extend(
+                self.chat
+                    .dm_list()
+                    .into_iter()
+                    .take(30)
+                    .filter_map(|c| c.recipients.first().and_then(|u| self.chat.users.get(u))),
+            );
+        }
+        let mut seen = std::collections::HashSet::new();
+        for u in users {
+            if v.len() >= MAX_LIVE {
+                break;
+            }
+            if !seen.insert(u.id) {
+                continue;
+            }
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, u, AV_LIST) {
+                v.push((url, Class::AvatarList));
+            }
+            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
+                v.push((d.url(cdn, DEC_LIST, true), Class::DecorationList));
+            }
+        }
+        v
+    }
+
+    /// Animations the hovered message could show (its custom emoji).
     fn hover_assets(&self) -> Vec<(String, Class)> {
         let mut v = Vec::new();
         let Some(h) = self.anim.hover else {
@@ -202,14 +271,6 @@ impl App {
             return v;
         }
         let cdn = self.cdn();
-        if let Some(u) = self.hover_user(&h) {
-            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, AV_LIST) {
-                v.push((url, Class::Avatar));
-            }
-            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
-                v.push((d.url(cdn, DEC_LIST, true), Class::Decoration));
-            }
-        }
         if let Some(m) = h.message {
             for id in self.message_emoji_animates(m) {
                 v.push((emoji_anim_url(cdn, id), Class::Emoji));
@@ -390,6 +451,7 @@ impl App {
         let wanted: Vec<(String, Class)> = self
             .hover_assets()
             .into_iter()
+            .chain(self.live_assets())
             .chain(self.popout_assets())
             .chain(messages)
             .collect();
@@ -534,6 +596,7 @@ impl App {
 
     fn open_profile_popout(&mut self, user: UserId, guild: Option<GuildId>) -> Task<Message> {
         self.menu = None;
+        self.ctx_menu = None;
         self.emoji_picker = None;
         self.status_menu = false;
         let window = input::window_size();

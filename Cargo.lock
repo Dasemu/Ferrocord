@@ -1754,6 +1754,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "vp8-decoder",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 
