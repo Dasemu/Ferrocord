@@ -1,8 +1,8 @@
 //! The video helper against real clips (generated with ffmpeg and
 //! committed: 128x72, 2 s, H.264 High with B-frames + AAC in MP4, and VP9 /
 //! VP8 + Opus in WebM), hostile files, and the app-side `Player` against
-//! scripted fake helpers. No network, no window: frames are just bytes.
-#![cfg(unix)]
+//! scripted fake helpers (shell scripts: Unix only). No network, no
+//! window: frames are just bytes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -344,6 +344,7 @@ async fn the_container_is_taken_from_the_bytes_not_the_name() {
 }
 
 /// Writes an executable shell script acting as the helper.
+#[cfg(unix)]
 fn script(dir: &Path, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let p = dir.join("helper.sh");
@@ -355,6 +356,7 @@ fn script(dir: &Path, body: &str) -> PathBuf {
 /// Starts a helper script written moments ago. A child forked by another test
 /// thread can still hold the script's write descriptor until it execs, so
 /// exec fails with ETXTBSY ("Text file busy"); retry as Go's os/exec does.
+#[cfg(unix)]
 fn spawn_script(
     helper: &Path,
     file: &Path,
@@ -370,6 +372,7 @@ fn spawn_script(
     spawn_with(helper, file)
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn player_parses_helper_output_and_delivers_commands() {
     let dir = tmp("script");
@@ -419,6 +422,7 @@ cat > "$1.cmds""#,
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_hostile_helper_cannot_make_the_app_allocate_or_hang() {
     let dir = tmp("hostile-helper");
@@ -440,6 +444,7 @@ sleep 1"#,
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_helper_the_loader_refuses_is_reported_with_the_loader_message() {
     let dir = tmp("noloader");
