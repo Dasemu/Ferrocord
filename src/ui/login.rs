@@ -9,7 +9,7 @@ use super::El;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER_BOLD, INTER_SEMIBOLD};
 use crate::app::{App, Message, Ui};
-use crate::auth::{AuthState, QrState};
+use crate::auth::{AuthState, QrState, WebLoginReason, WebLoginState};
 
 pub fn view(app: &App) -> El<'_> {
     let t = &app.theme;
@@ -85,7 +85,11 @@ pub fn view(app: &App) -> El<'_> {
     } else {
         login.on_press(Message::Ui(Ui::SubmitToken))
     };
-    left = left.push(Space::new().height(8)).push(login).push(
+    left = left
+        .push(Space::new().height(8))
+        .push(login)
+        .push(web_login(app))
+        .push(
         row![
             icon(Icon::TriangleAlert, 16.0, p.mention_bar),
             text("Unofficial client. Using third-party clients breaks Discord's Terms of Service and can get your account banned.")
@@ -155,6 +159,34 @@ fn qr_panel(app: &App) -> El<'_> {
             "Check your phone!",
             format!("Logging in as {username}. Confirm on the mobile app."),
         ),
+        Some(QrState::CaptchaRequired)
+            if app.web_login.as_ref().is_some_and(WebLoginState::is_active) =>
+        {
+            (
+                icon(Icon::ShieldCheck, 64.0, Color::BLACK),
+                "Discord wants a captcha",
+                "Finish logging in on Discord's own page: it shows the captcha there. \
+                 Close it to get a new QR code."
+                    .into(),
+            )
+        }
+        Some(QrState::CaptchaRequired) => (
+            button(
+                column![
+                    icon(Icon::QrCode, 48.0, Color::BLACK),
+                    text("New QR code").size(14).color(Color::BLACK),
+                ]
+                .spacing(4)
+                .align_x(Alignment::Center),
+            )
+            .on_press(Message::Ui(Ui::RetryQr))
+            .style(theme::link_button(p))
+            .into(),
+            "Discord wants a captcha",
+            "Discord only shows it on its own page: use \u{201c}Log in with Discord's page\u{201d}, \
+             or try a new QR code."
+                .into(),
+        ),
         Some(QrState::Failed(e)) => (
             button(
                 column![
@@ -195,6 +227,99 @@ fn qr_panel(app: &App) -> El<'_> {
     .width(240)
     .align_x(Alignment::Center)
     .into()
+}
+
+/// "Log in with Discord's page": the button, or what is happening with it.
+fn web_login(app: &App) -> El<'_> {
+    let p = app.theme.palette;
+    let busy = matches!(app.auth, AuthState::Validating);
+    let open_button = |label: &'static str| {
+        let b = button(
+            row![
+                icon(Icon::ExternalLink, 16.0, p.header_text),
+                text(label)
+                    .size(14)
+                    .font(INTER_SEMIBOLD)
+                    .color(p.header_text),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(Padding::from([9, 16]))
+        .style(theme::secondary_button(p));
+        if busy {
+            b
+        } else {
+            b.on_press(Message::Ui(Ui::OpenWebLogin))
+        }
+    };
+    let note = |s: String, c: Color| text(s).size(12).color(c).width(Length::Fill);
+    let body: El<'_> = match &app.web_login {
+        None => column![
+            open_button("Log in with Discord's page"),
+            note(
+                "Opens discord.com/login in a Ferrocord window (captcha, 2FA and QR work there). \
+                 When you have logged in, Ferrocord keeps that session in the system keyring \
+                 and closes the window."
+                    .into(),
+                p.text_muted,
+            ),
+        ]
+        .spacing(6)
+        .into(),
+        Some(WebLoginState::Opening(_) | WebLoginState::Open(_)) => {
+            let opening = matches!(app.web_login, Some(WebLoginState::Opening(_)));
+            let captcha = matches!(
+                app.web_login,
+                Some(
+                    WebLoginState::Opening(WebLoginReason::Captcha)
+                        | WebLoginState::Open(WebLoginReason::Captcha)
+                )
+            );
+            let headline = if opening {
+                "Opening Discord's login page…"
+            } else {
+                "Discord's login page is open in its own window."
+            };
+            let detail = if captcha {
+                "Discord asked for a captcha. Log in there (scan the code again or use your \
+                 email and password) and solve the captcha; Ferrocord continues on its own."
+            } else {
+                "Log in there; Ferrocord takes over the session and closes the window on its own."
+            };
+            container(
+                column![
+                    row![
+                        icon(Icon::ExternalLink, 16.0, p.header_text),
+                        text(headline)
+                            .size(14)
+                            .font(INTER_SEMIBOLD)
+                            .color(p.header_text),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    note(detail.into(), p.text_secondary),
+                    button(text("Cancel").size(13).color(p.link))
+                        .padding(0)
+                        .style(theme::link_button(p))
+                        .on_press(Message::Ui(Ui::CancelWebLogin)),
+                ]
+                .spacing(6),
+            )
+            .padding(12)
+            .width(Length::Fill)
+            .style(theme::rounded_bg(p.bg_app, 4.0))
+            .into()
+        }
+        Some(WebLoginState::Failed(e)) => column![
+            open_button("Try Discord's page again"),
+            note(e.clone(), p.danger),
+        ]
+        .spacing(6)
+        .into(),
+    };
+    container(body).padding(Padding::ZERO.top(8)).into()
 }
 
 fn qr_image<'a>(app: &App, size: usize, modules: &[bool]) -> El<'a> {

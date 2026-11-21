@@ -431,6 +431,30 @@ pub fn primary_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::
     }
 }
 
+/// Grey filled button (secondary actions, like Discord's "secondary").
+pub fn secondary_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let bg = match status {
+            button::Status::Hovered | button::Status::Pressed => p.bg_selected,
+            button::Status::Disabled => Color {
+                a: 0.5,
+                ..p.bg_hover
+            },
+            button::Status::Active => p.bg_hover,
+        };
+        button::Style {
+            background: Some(Background::Color(bg)),
+            text_color: p.header_text,
+            border: Border {
+                radius: Metrics::DEFAULT.radius.into(),
+                width: 1.0,
+                color: p.border,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 /// Red filled button (destructive actions).
 pub fn danger_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {

@@ -34,6 +34,10 @@ pub enum Ui {
     TokenInput(String),
     SubmitToken,
     RetryQr,
+    /// "Log in with Discord's page": open discord.com/login in the helper.
+    OpenWebLogin,
+    /// Close Discord's page (kills the helper).
+    CancelWebLogin,
     SelectHome,
     SelectGuild(GuildId),
     SelectChannel(ChannelId),
@@ -240,6 +244,7 @@ pub enum Done {
     },
     TokenSaved(Result<(), String>),
     Qr(RaEvent),
+    WebLogin(crate::auth::web_login::WebLoginEvent),
     CachedHistory {
         channel: ChannelId,
         messages: Vec<crate::net::model::Message>,
