@@ -109,7 +109,7 @@ impl RestClient {
     }
 
     /// `POST /invites/{code}` — joins the server. A captcha demand comes
-    /// back as [`Error::Captcha`]; Ferrocord never tries to solve it.
+    /// back as [`Error::CaptchaRequired`]; Ferrocord never solves it.
     pub async fn join_invite(
         &self,
         code: &str,

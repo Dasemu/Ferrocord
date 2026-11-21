@@ -28,7 +28,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config cmake libssl-dev libdbus-1-dev libxkbcommon-dev \
-            libwayland-dev libfontconfig1-dev libasound2-dev dbus gnome-keyring
+            libwayland-dev libfontconfig1-dev libasound2-dev dbus gnome-keyring \
+            libwebkit2gtk-4.1-dev libgtk-3-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -54,6 +55,12 @@ jobs:
           cargo build --bin ferrocord-player --target-dir target/helper
           .github/scripts/check-helper-libs.sh target/helper/debug/ferrocord-player
           if ldd target/debug/ferrocord | grep -Eqi 'openh264|stdc\+\+|opus|vpx'; then echo "::error::ferrocord links a codec library"; exit 1; fi
+
+      # Only the login helper may link the browser engine (WebKitGTK).
+      - name: Only ferrocord-login links WebKitGTK
+        run: |
+          if ldd target/debug/ferrocord | grep -Eqi 'webkit|javascriptcore|gtk-3|soup'; then echo "::error::ferrocord links WebKitGTK/GTK"; exit 1; fi
+          ldd target/debug/ferrocord-login | grep -q 'libwebkit2gtk-4\.1' || { echo "::error::ferrocord-login does not link WebKitGTK 4.1"; exit 1; }
 
       # The StatusNotifierItem test needs a session bus; without one it
       # skips itself in the step above, so run it again under a private bus.

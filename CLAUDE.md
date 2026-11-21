@@ -9,7 +9,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|guild|dms|embeds|voice|call|incoming-call> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`.
@@ -58,6 +58,9 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - File dialog: `rfd` (xdg-portal). Clipboard files/images: `arboard`.
 - Keyring tests must use `MemoryStore` (no Secret Service in CI).
 - `main` defaults `ICED_BACKEND=tiny-skia` (wgpu costs 100-200 MB RSS).
+- Login captcha: Discord's page opens in the `ferrocord-login` helper (`wry`; WebView2 / WebKitGTK 4.1,
+  build needs `libwebkit2gtk-4.1-dev`). Only the helper may link the webview (CI ldd check). Never render
+  hCaptcha on our own page or fake an origin; never solve captchas. REST identity headers live in `net/identity.rs`.
 - Voice: static libopus (needs `cmake`), `cpal` (`libasound2-dev`); the voice subscription exists
   only in a call. DAVE is mandatory (close 4017); keep `davey` calls under `catch_unwind`.
 - Unicode emoji need the `Noto Color Emoji` span (`ui::emoji_font::emoji_text`/`emoji_runs`); `text_editor` (composer) cannot take spans and falls back to the loaded font. The bundled TTF (OFL) loads only if no system copy exists.

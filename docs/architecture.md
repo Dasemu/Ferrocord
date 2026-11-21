@@ -251,10 +251,17 @@ streams run as `Subscription::run_with` keyed by a generation counter (the
 token is never hashed); bumping the counter reconnects, dropping the
 subscription disconnects.
 
+**Login helper.** "Log in with Discord's page" runs the `ferrocord-login`
+helper (`wry` + `tao`: WebView2 / WebKitGTK) as a `Subscription::run_with`
+keyed by `web_login_generation`; dropping it kills the helper and wipes its
+profile directory. QR captcha → `QrState::CaptchaRequired` + the helper opens
+automatically; `auth::WebLoginState` is the pure state machine. See
+`docs/protocol.md` §4.1.
+
 **Screens and navigation.**
 
 ```
-Splash (no cache, restoring) ──▶ Login ──(token / QR)──▶ Main
+Splash (no cache, restoring) ──▶ Login ──(QR / Discord's page / token)──▶ Main
                                    ▲                       │
                                    └──── logout / 4004 ────┘
 Main = Server rail │ Sidebar │ Chat pane

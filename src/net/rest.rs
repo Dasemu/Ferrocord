@@ -61,17 +61,44 @@ impl std::fmt::Debug for RestClient {
     }
 }
 
-pub fn user_agent() -> String {
-    format!(
-        "Ferrocord/{} (+https://github.com/Dasemu/Ferrocord)",
-        env!("CARGO_PKG_VERSION")
-    )
+pub use super::identity::user_agent;
+
+/// Headers every REST request carries besides `User-Agent` (see
+/// [`super::identity`]): the same set the official clients send.
+pub fn client_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderValue};
+    let mut h = HeaderMap::new();
+    let props = super::identity::current();
+    let pairs = [
+        (
+            "X-Super-Properties",
+            Some(super::identity::super_properties(props)),
+        ),
+        (
+            "X-Discord-Locale",
+            Some(super::identity::locale().to_owned()),
+        ),
+        (
+            "X-Discord-Timezone",
+            super::identity::timezone().map(String::from),
+        ),
+    ];
+    for (name, value) in pairs {
+        if let Some(v) = value.and_then(|v| HeaderValue::from_str(&v).ok()) {
+            h.insert(name, v);
+        }
+    }
+    h
 }
 
 impl RestClient {
     pub fn new(base: &str, cdn: &str, token: Option<Secret>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(user_agent())
+            .default_headers(client_headers())
+            // Cookies Discord sets (`__dcfduid`, `__sdcfduid`, `__cfruid`)
+            // are sent back like a browser would; kept in memory only.
+            .cookie_store(true)
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
             .build()?;
@@ -181,14 +208,12 @@ impl RestClient {
             let text = resp.text().await?;
             if !status.is_success() {
                 // Discord answers "captcha required" with a body that has
-                // `captcha_key` instead of `message`. Ferrocord never tries
-                // to solve it; the caller shows a clear message.
+                // `captcha_key` instead of `message`. Ferrocord never solves
+                // it; the caller decides what the user sees.
                 if status == StatusCode::BAD_REQUEST
-                    && serde_json::from_str::<Value>(&text)
-                        .ok()
-                        .is_some_and(|v| v.get("captcha_key").is_some())
+                    && let Some(c) = super::captcha::CaptchaChallenge::parse(&text)
                 {
-                    return Err(Error::CaptchaRequired);
+                    return Err(Error::CaptchaRequired(Box::new(c)));
                 }
                 // The error body has a `message` field; it is a server
                 // description, not user content.
@@ -528,17 +553,49 @@ impl RestClient {
     /// `POST /users/@me/remote-auth/login` — exchanges a QR-login ticket for
     /// the RSA-encrypted token.
     pub async fn remote_auth_login(&self, ticket: &str) -> Result<String> {
+        self.remote_auth_login_with(ticket, None, None).await
+    }
+
+    /// The ticket exchange as the official client sends it: with the
+    /// `X-Fingerprint` from [`fingerprint`](Self::fingerprint) and, when
+    /// retrying after a captcha the user solved, the captcha headers.
+    pub async fn remote_auth_login_with(
+        &self,
+        ticket: &str,
+        fingerprint: Option<&str>,
+        captcha: Option<&super::captcha::CaptchaSolution>,
+    ) -> Result<String> {
+        let body = serde_json::json!({ "ticket": ticket });
+        let fingerprint = fingerprint.filter(|f| super::captcha::header_safe(f));
         let v = self
-            .request(
-                Method::POST,
-                "/users/@me/remote-auth/login",
-                Some(serde_json::json!({ "ticket": ticket })),
-            )
+            .send_with(Method::POST, "/users/@me/remote-auth/login", |mut req| {
+                if let Some(f) = fingerprint {
+                    req = req.header("X-Fingerprint", f);
+                }
+                if let Some(c) = captcha {
+                    for (k, v) in c.headers() {
+                        req = req.header(k, v);
+                    }
+                }
+                req.json(&body)
+            })
             .await?;
         v["encrypted_token"]
             .as_str()
             .map(String::from)
             .ok_or_else(|| Error::Protocol("remote-auth login without encrypted_token".into()))
+    }
+
+    /// `GET /experiments` while logged out: the official client fetches it
+    /// first and sends its `fingerprint` as `X-Fingerprint` on the login
+    /// calls. The response also sets Discord's `__dcfduid`/`__sdcfduid`
+    /// cookies. `None` if the call fails or the value is unusable.
+    pub async fn fingerprint(&self) -> Option<String> {
+        let v = self.request(Method::GET, "/experiments", None).await.ok()?;
+        v["fingerprint"]
+            .as_str()
+            .filter(|f| f.len() <= 128 && super::captcha::header_safe(f))
+            .map(String::from)
     }
 
     /// Whether `url` points at Discord's CDN / media proxy (or the

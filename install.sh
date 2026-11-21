@@ -8,6 +8,7 @@
 # Release, verifies its SHA-256 checksum and installs into the user's home:
 #   binary        ${XDG_BIN_HOME:-$HOME/.local/bin}/ferrocord
 #   video helper  ${XDG_BIN_HOME:-$HOME/.local/bin}/ferrocord-player (in-chat video; no codec packages needed)
+#   login helper  ${XDG_BIN_HOME:-$HOME/.local/bin}/ferrocord-login (Discord's login page; needs WebKitGTK 4.1)
 #   desktop entry ${XDG_DATA_HOME:-$HOME/.local/share}/applications/dev.ferro.ferrocord.desktop
 #   icon          ${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/dev.ferro.ferrocord.svg
 #   version file  ${XDG_DATA_HOME:-$HOME/.local/share}/ferrocord/installed-version
@@ -45,6 +46,8 @@ VERSION_FILE="$STATE_DIR/installed-version"
 BIN_PATH="$BIN_DIR/$CRATE"
 PLAYER_NAME="$CRATE-player"
 PLAYER_PATH="$BIN_DIR/$PLAYER_NAME"
+LOGIN_NAME="$CRATE-login"
+LOGIN_PATH="$BIN_DIR/$LOGIN_NAME"
 DESKTOP_PATH="$APPS_DIR/$APP_ID.desktop"
 ICON_PATH="$ICON_DIR/$APP_ID.svg"
 
@@ -63,11 +66,11 @@ refresh_caches() {
 }
 
 uninstall() {
-    rm -f "$BIN_PATH" "$PLAYER_PATH" "$DESKTOP_PATH" "$ICON_PATH" "$VERSION_FILE"
+    rm -f "$BIN_PATH" "$PLAYER_PATH" "$LOGIN_PATH" "$DESKTOP_PATH" "$ICON_PATH" "$VERSION_FILE"
     # The directory may also hold the app's own data: remove it only if empty.
     rmdir "$STATE_DIR" >/dev/null 2>&1 || true
     refresh_caches
-    say "$APP_NAME removed (binary, video helper, desktop entry, icon)."
+    say "$APP_NAME removed (binary, video and login helpers, desktop entry, icon)."
     say "Your account data and keyring entries were left untouched."
 }
 
@@ -159,6 +162,14 @@ if [ -f "$SRC/$PLAYER_NAME" ]; then
     mv -f "$BIN_DIR/.$PLAYER_NAME.new.$$" "$PLAYER_PATH"
 fi
 
+# The login helper ships from v0.12: Discord's login page (with its captcha)
+# in the system webview. Installed next to the app, like the video helper.
+if [ -f "$SRC/$LOGIN_NAME" ]; then
+    cp "$SRC/$LOGIN_NAME" "$BIN_DIR/.$LOGIN_NAME.new.$$"
+    chmod 755 "$BIN_DIR/.$LOGIN_NAME.new.$$"
+    mv -f "$BIN_DIR/.$LOGIN_NAME.new.$$" "$LOGIN_PATH"
+fi
+
 # Desktop entry: keep the field code of the shipped Exec=, use the absolute path.
 exec_args="$(sed -n 's/^Exec=[^ ]*//p' "$SRC/packaging/$APP_ID.desktop" | head -n 1)"
 case "$BIN_PATH" in
@@ -191,4 +202,9 @@ esac
 say "Runtime libraries (usually already present on a desktop install):"
 say "  Linux: libssl3 (OpenSSL 3), libxkbcommon0, libwayland-client0, libfontconfig1, libx11-6 and a GPU driver (Mesa/Vulkan; set ICED_BACKEND=tiny-skia if you have none); a Secret Service provider such as gnome-keyring or KWallet for the keyring."
 say "Video: videos play inside the chat with the bundled decoders (MP4 with H.264/AAC, WebM with VP8/VP9/Opus); no codec packages are needed, only ALSA's libasound2 for sound. Other formats offer 'Open externally'."
+say "Login: scan the QR code with the Discord app, or use 'Log in with Discord's page' (needs WebKitGTK 4.1)."
+if [ -f "$LOGIN_PATH" ] && command -v ldconfig >/dev/null 2>&1 \
+    && ! ldconfig -p 2>/dev/null | grep -q 'libwebkit2gtk-4\.1\.so\.0'; then
+    warn "WebKitGTK 4.1 was not found; 'Log in with Discord's page' needs it (Debian/Ubuntu: libwebkit2gtk-4.1-0, Fedora: webkit2gtk4.1, Arch: webkit2gtk-4.1). QR login works without it."
+fi
 say "Run it from your app menu or with: $CRATE"

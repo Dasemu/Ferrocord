@@ -1,9 +1,11 @@
 //! Discord protocol client: Gateway (WebSocket), REST API, remote-auth (QR
 //! login). Owns sockets; never touches UI types.
 
+pub mod captcha;
 pub mod cosmetics;
 pub mod extras;
 pub mod gateway;
+pub mod identity;
 pub mod model;
 pub mod ratelimit;
 pub mod remote_auth;

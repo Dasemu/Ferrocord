@@ -38,7 +38,7 @@ states or remote auth.
 |---|---|---|---|
 | 0 | DISPATCH | ← | Tracks `s`; parsed by `types::parse_dispatch`. |
 | 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
-| 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`), presence. |
+| 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`; same object as `X-Super-Properties`), presence. |
 | 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`); also saved with `PATCH /users/@me/settings`. |
 | 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, channels: {id: [[0,99]]}}`, sent while the member sidebar is open. |
 | 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
@@ -107,7 +107,26 @@ so no ISO-8601 parsing is needed on the hot path.
 
 Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 `Authorization: <token>` (user tokens have no `Bot ` prefix) and an honest
-`User-Agent: Ferrocord/<version>`.
+`User-Agent: Ferrocord/<version>`. Every request also carries the headers the
+official clients send (`net/identity.rs`), with honest values:
+
+| Header | Value |
+|---|---|
+| `X-Super-Properties` | base64 of the same JSON as IDENTIFY's `properties`: `os` (`Windows`/`Linux`), `browser: "Ferrocord"`, `device: ""`, `system_locale`, `browser_user_agent` (= the `User-Agent`), `browser_version`, `os_version` (kernel release on Linux), `release_channel: "stable"`, `client_version`. No `client_build_number`: Ferrocord does not claim to be Discord's build. |
+| `X-Discord-Locale` | system UI language (`en-US`, `sys-locale`) |
+| `X-Discord-Timezone` | IANA zone (`Europe/Madrid`, `iana-time-zone`), omitted if unknown |
+| `Cookie` | what Discord sets (`__dcfduid`, `__sdcfduid`, `__cfruid`), in-memory jar, never written to disk |
+
+While logged out, `GET /experiments` gives a `fingerprint` that the login
+calls send as `X-Fingerprint` (the official client does the same).
+
+**Captcha.** A 400 body with `captcha_key` becomes
+`Error::CaptchaRequired(CaptchaChallenge)` (`net/captcha.rs`: `captcha_key`,
+`captcha_sitekey`, `captcha_service`, `captcha_rqdata`, `captcha_rqtoken`,
+`captcha_session_id`; lenient, size-capped, header-safe). A retry carries the
+user's solution as `X-Captcha-Key` plus `X-Captcha-Rqtoken` /
+`X-Captcha-Session-Id` (`CaptchaSolution::headers`), exactly the official
+client's retry. Ferrocord never solves a captcha and uses no solver service.
 
 | Call | Endpoint |
 |---|---|
@@ -123,7 +142,8 @@ Base: `https://discord.com/api/v9` (`FERROCORD_API_URL`). Header
 | Upload | `POST .../messages` `multipart/form-data`: `payload_json` + `files[n]`, streamed from disk with an explicit `Content-Length` |
 | Status | `PATCH /users/@me/settings {status}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
-| QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` |
+| QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` with `X-Fingerprint` |
+| Fingerprint | `GET /experiments` (logged out) → `fingerprint` |
 | GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US`; picking sends the Tenor `url` as text (shown back as a `gifv` embed) |
 | Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
 | Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (HTTPS, never with the token) |
@@ -162,9 +182,61 @@ it. Failures turn it red with "Message could not be delivered.".
 8. ← `cancel` when declined on the phone; the socket closes at `timeout_ms`.
 
 Client heartbeats are `{ "op": "heartbeat" }`. The protocol is implemented
-and tested end to end against a local mock (`tests/mock_remote_auth.rs`);
-it has **not** been verified against the real service (no account here),
-and Discord may require a captcha for the ticket exchange in some regions.
+and tested end to end against a local mock (`tests/mock_remote_auth.rs`).
+`v=2` and the `Origin` match the official web client.
+
+### Captcha on the QR login
+
+Users reported "QR login unavailable — Discord wants you to solve a captcha".
+The only REST call of the QR flow is the ticket exchange, so that is where
+Discord asks (the gateway itself cannot answer with a captcha). Before v0.12
+that request was much barer than the official client's: no
+`X-Super-Properties`, no `X-Fingerprint` (no `GET /experiments` first), no
+Discord cookies, no locale/time zone: all signals Discord's risk scoring
+uses on the request that creates a new session. Those are now sent (above).
+Discord can still demand a captcha (new IP, VPN, account history), so:
+
+1. `RaEvent::CaptchaRequired` replaces the dead-end error;
+2. the app opens **Discord's own login page** (§4.1) automatically. The ticket
+   is bound to the QR socket and the challenge only works on discord.com, so
+   the user finishes there (scan again, or email + password) and solves the
+   captcha Discord shows.
+
+### 4.1 Log in with Discord's page (`auth/web_login.rs`, `ferrocord-login`)
+
+Also a button on the login screen. The `ferrocord-login` helper (a separate
+binary: the app links no browser engine) opens `https://discord.com/login` in
+the system webview via `wry`/`tao`: WebView2 on Windows, WebKitGTK 4.1 on
+Linux. Options considered:
+
+| Option | Verdict |
+|---|---|
+| (a) our own page with the hCaptcha widget (Discord's sitekey + rqdata) in a webview | Rejected: hCaptcha only runs on the sitekey's allowed domains; a `file://`, custom-scheme or `127.0.0.1` page fails its hostname check, and making it pass would mean faking the origin. |
+| (c) the same page in the system browser on a loopback callback | Rejected for the same reason (localhost is not Discord's domain). |
+| (b) Discord's own login page in a webview | **Chosen**: the user sees exactly Discord's pages; captcha, 2FA, passkeys and its QR code all work as in a browser, with no Ferrocord code in the loop. |
+
+* Profile: incognito, inside a fresh `0700` temp directory
+  (`FERROCORD_LOGIN_DATA_DIR`); the app wipes it after the helper exits (with
+  retries: WebView2 child processes hold files briefly).
+* Navigation: top-level HTTPS only; pop-ups refused. The browser's own
+  User-Agent is untouched.
+* Token: a document-start script, active only in the top-level
+  `https://discord.com` document, keeps a reference to the page's
+  `localStorage` and posts the `token` the page stores after the user logged
+  in, once, over wry IPC. The helper re-checks the sender URL and the token
+  shape, prints it on its stdout pipe and exits. The script only reads.
+* App side: the token is validated with `GET /users/@me` and stored only in
+  the keyring, like a QR login.
+* Wire format (stdout lines): `{"type":"ready"}`, `{"type":"token","token"}`,
+  `{"type":"closed"}`, `{"type":"error","code":"no-webview"|"failed","message"}`.
+* Missing engine: Linux loader errors (`libwebkit2gtk-4.1.so.0`, exit 127)
+  and WebView2 creation errors become "needs WebKitGTK 4.1 / WebView2" with
+  package names; QR login keeps working.
+
+Verified in CI: parsing, headers, retry headers, the state machine and the
+helper protocol (with fake helpers), and that only `ferrocord-login` links
+WebKitGTK. Needs a real account: Discord's page, its captcha and the token
+hand-over.
 
 ## 5. Read states, unread and mentions (`app/state.rs`)
 

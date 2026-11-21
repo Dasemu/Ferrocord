@@ -44,7 +44,8 @@ use state::{ChatState, Ctx, Effect};
 use window::{Geometry, Prefs, WindowState};
 
 use crate::auth::secrets::{self, KeyringStore, MemoryStore, Secret, SecretStore};
-use crate::auth::{AuthEvent, AuthState, QrState, normalize_token};
+use crate::auth::web_login::{self, WebLoginEvent, WebLoginFailure};
+use crate::auth::{AuthEvent, AuthState, QrState, WebLoginReason, WebLoginState, normalize_token};
 use crate::config::{Config, ScreenshotScreen};
 use crate::error::Redacted;
 use crate::media::clip::Clip;
@@ -98,6 +99,9 @@ pub struct App {
     pub token_input: String,
     pub qr: Option<QrState>,
     qr_generation: u64,
+    /// "Log in with Discord's page" (helper window) state.
+    pub web_login: Option<WebLoginState>,
+    web_login_generation: u64,
     gateway_generation: u64,
     pub connection: ConnectionState,
     pub chat: ChatState,
@@ -226,6 +230,8 @@ impl App {
             token_input: String::new(),
             qr: None,
             qr_generation: 0,
+            web_login: None,
+            web_login_generation: 0,
             gateway_generation: 0,
             connection: ConnectionState::Disconnected,
             chat: ChatState::default(),
@@ -446,6 +452,23 @@ impl App {
             Some(ScreenshotScreen::Login) => {
                 self.auth = AuthState::LoggedOut { error: None };
                 self.qr = Some(qr_ready("https://discord.com/ra/mock-fingerprint-not-real"));
+            }
+            Some(ScreenshotScreen::LoginCaptcha) => {
+                self.auth = AuthState::LoggedOut { error: None };
+                self.qr = Some(QrState::CaptchaRequired);
+                self.web_login = Some(WebLoginState::Open(WebLoginReason::Captcha));
+            }
+            Some(ScreenshotScreen::LoginWeb) => {
+                self.auth = AuthState::LoggedOut { error: None };
+                self.qr = Some(qr_ready("https://discord.com/ra/mock-fingerprint-not-real"));
+                self.web_login = Some(WebLoginState::Open(WebLoginReason::Chosen));
+            }
+            Some(ScreenshotScreen::LoginWebFailed) => {
+                self.auth = AuthState::LoggedOut { error: None };
+                self.qr = Some(QrState::CaptchaRequired);
+                self.web_login = Some(WebLoginState::Failed(
+                    WebLoginFailure::NoWebEngine.user_message(),
+                ));
             }
             Some(ScreenshotScreen::Multiline) => {
                 self.auth = AuthState::LoggedIn {
@@ -813,6 +836,17 @@ impl App {
             Ui::RetryQr => {
                 self.qr_generation += 1;
                 self.qr = Some(QrState::Connecting);
+                Task::none()
+            }
+            Ui::OpenWebLogin => {
+                self.open_web_login(WebLoginReason::Chosen);
+                Task::none()
+            }
+            Ui::CancelWebLogin => {
+                // Dropping the subscription kills the helper and wipes its
+                // profile directory.
+                self.web_login_generation += 1;
+                self.web_login = None;
                 Task::none()
             }
             Ui::SelectHome => {
@@ -1235,6 +1269,7 @@ impl App {
         self.chat = ChatState::default();
         self.view = View::Home(None);
         self.qr = None;
+        self.web_login = None;
         if self.cfg.mock {
             return Task::none();
         }
@@ -1476,6 +1511,7 @@ impl App {
                     let first_login = matches!(self.auth, AuthState::Validating);
                     self.auth = self.auth.apply(AuthEvent::Validated(user));
                     self.qr = None;
+                    self.web_login = None;
                     if first_login && self.gateway_generation == 0
                         || self.connection == ConnectionState::Disconnected
                     {
@@ -1513,6 +1549,7 @@ impl App {
                 Task::none()
             }
             Done::Qr(ev) => self.on_qr(ev),
+            Done::WebLogin(ev) => self.on_web_login(ev),
             Done::CachedHistory { channel, messages } => {
                 if !messages.is_empty() {
                     let full = messages.len() >= state::MESSAGE_WINDOW;
@@ -1722,10 +1759,58 @@ impl App {
                 self.qr_generation += 1;
                 self.qr = Some(QrState::Connecting);
             }
+            RaEvent::CaptchaRequired(_) => {
+                // The ticket is bound to this QR session and Discord only
+                // shows its captcha on its own pages: continue there.
+                self.qr = Some(QrState::CaptchaRequired);
+                self.open_web_login(WebLoginReason::Captcha);
+            }
             RaEvent::Expired => self.qr = Some(QrState::Failed("The QR code expired.".into())),
             RaEvent::Error(e) => self.qr = Some(QrState::Failed(e)),
         }
         Task::none()
+    }
+
+    /// Opens Discord's login page in the helper window (no-op while open).
+    fn open_web_login(&mut self, reason: WebLoginReason) {
+        if self
+            .web_login
+            .as_ref()
+            .is_some_and(WebLoginState::is_active)
+            || !matches!(self.auth, AuthState::LoggedOut { .. })
+        {
+            return;
+        }
+        self.web_login_generation += 1;
+        self.web_login = Some(if self.cfg.mock {
+            // Mock mode never starts a browser engine.
+            WebLoginState::Open(reason)
+        } else {
+            WebLoginState::Opening(reason)
+        });
+    }
+
+    fn on_web_login(&mut self, ev: WebLoginEvent) -> Task<Message> {
+        let Some(state) = &self.web_login else {
+            return Task::none();
+        };
+        let next = state.apply(&ev);
+        self.web_login = next;
+        match ev {
+            WebLoginEvent::Token(t) if matches!(self.auth, AuthState::LoggedOut { .. }) => {
+                tracing::info!("logged in on Discord's page");
+                self.qr = None;
+                self.auth = self.auth.apply(AuthEvent::Submitted);
+                self.validate_token(t)
+            }
+            WebLoginEvent::Closed if self.qr == Some(QrState::CaptchaRequired) => {
+                // Back to a fresh QR code; the button stays available.
+                self.qr_generation += 1;
+                self.qr = Some(QrState::Connecting);
+                Task::none()
+            }
+            _ => Task::none(),
+        }
     }
 
     /// Fetches avatars / icons / attachment previews that are visible now.
@@ -2001,6 +2086,24 @@ impl App {
                 .map(|e| Message::Done(Done::Qr(e))),
             );
         }
+        if !self.cfg.mock
+            && self
+                .web_login
+                .as_ref()
+                .is_some_and(WebLoginState::is_active)
+            && matches!(self.auth, AuthState::LoggedOut { .. })
+        {
+            subs.push(
+                Subscription::run_with(
+                    Keyed {
+                        id: self.web_login_generation,
+                        value: WebLoginSub,
+                    },
+                    |_| web_login::spawn(web_login::helper_path(), Vec::new()),
+                )
+                .map(|e| Message::Done(Done::WebLogin(e))),
+            );
+        }
         if !self.chat.typing.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Ui(Ui::Tick)));
         }
@@ -2060,6 +2163,9 @@ fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message>
 
 /// Subscription identity: only the generation counter is hashed, so the
 /// secret never feeds a hash and a new generation restarts the stream.
+/// Subscription key marker for the login helper.
+struct WebLoginSub;
+
 struct Keyed<T> {
     id: u64,
     value: T,
