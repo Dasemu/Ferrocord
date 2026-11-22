@@ -14,11 +14,11 @@
 
 use std::io::{BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::video::Failure;
+use super::video::{Failure, helper_command};
 use super::video_proto::{self as proto, Msg};
 
 /// Flag that selects the frames mode of the helper.
@@ -174,7 +174,7 @@ pub type Frames = Vec<(u32, u32, Vec<u8>, Duration)>;
 /// Blocking: call it from `spawn_blocking`. The process is killed after
 /// [`DECODE_TIMEOUT`].
 pub fn decode_with(helper: &Path, file: &Path, spec: FrameSpec) -> Result<Frames, Failure> {
-    let mut child = Command::new(helper)
+    let mut child = helper_command(helper)
         .args(spec.to_args())
         .arg(file)
         .stdin(Stdio::null())

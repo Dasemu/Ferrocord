@@ -133,7 +133,7 @@ jobs:
         run: |
           $name = "ferrocord-v$env:VERSION-windows-x86_64"
           New-Item -ItemType Directory -Force "dist/$name/licenses" | Out-Null
-          Copy-Item target/release/ferrocord.exe, target/release/ferrocord-login.exe, README.md, LICENSE "dist/$name/"
+          Copy-Item target/release/ferrocord.exe, target/release/ferrocord-login.exe, target/release/ferrocord-player.exe, README.md, LICENSE "dist/$name/"
           Copy-Item assets/fonts/OFL.txt "dist/$name/licenses/Inter-OFL.txt"
           Copy-Item assets/icons/LICENSE "dist/$name/licenses/Lucide-ISC.txt"
           Copy-Item THIRD_PARTY.md "dist/$name/licenses/THIRD_PARTY.md"

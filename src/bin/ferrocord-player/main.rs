@@ -21,35 +21,20 @@
 //! Failures name the step that failed (open, container, codec, decode) so
 //! the viewer can say what happened.
 
-#[cfg(unix)]
 mod audio;
-#[cfg(unix)]
 mod codec;
-#[cfg(unix)]
 mod mp4;
-#[cfg(unix)]
 mod source;
-#[cfg(unix)]
 mod webm;
-#[cfg(unix)]
 mod yuv;
 
-#[cfg(unix)]
 fn main() {
     player::run();
 }
 
-#[cfg(not(unix))]
-fn main() {
-    eprintln!("ferrocord-player: only supported on Unix");
-    std::process::exit(2);
-}
-
-#[cfg(unix)]
 mod player {
     use std::collections::VecDeque;
     use std::io::{self, BufRead, BufWriter, Write};
-    use std::os::fd::AsFd;
     use std::path::Path;
     use std::sync::mpsc::{self, RecvTimeoutError};
     use std::time::{Duration, Instant};
@@ -95,11 +80,7 @@ mod player {
             _ => usage(),
         };
         // stdout as a plain file: no line buffering for binary frames.
-        let out_file = match io::stdout()
-            .as_fd()
-            .try_clone_to_owned()
-            .map(std::fs::File::from)
-        {
+        let out_file = match stdout_file() {
             Ok(f) => f,
             Err(_) => std::process::exit(2),
         };
@@ -117,6 +98,27 @@ mod player {
         };
         send(&mut out, &failure);
         std::process::exit(1);
+    }
+
+    /// A duplicate of the stdout handle as a plain file.
+    #[cfg(unix)]
+    fn stdout_file() -> io::Result<std::fs::File> {
+        use std::os::fd::AsFd;
+        io::stdout()
+            .as_fd()
+            .try_clone_to_owned()
+            .map(std::fs::File::from)
+    }
+
+    /// A duplicate of the stdout handle as a plain file (a pipe from the
+    /// app: binary, no console translation).
+    #[cfg(windows)]
+    fn stdout_file() -> io::Result<std::fs::File> {
+        use std::os::windows::io::AsHandle;
+        io::stdout()
+            .as_handle()
+            .try_clone_to_owned()
+            .map(std::fs::File::from)
     }
 
     fn usage() -> ! {

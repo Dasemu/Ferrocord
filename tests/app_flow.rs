@@ -255,6 +255,11 @@ fn edit_rules() {
     ui(&mut a, Ui::SubmitEdit);
     assert!(a.editing.is_some());
     assert!(a.toast.is_some());
+    // The toast hides itself: only the timer of the latest toast counts.
+    ui(&mut a, Ui::ToastExpired(0));
+    assert!(a.toast.is_some());
+    ui(&mut a, Ui::ToastExpired(1));
+    assert!(a.toast.is_none());
     // Emptying the message offers to delete it instead.
     ui(&mut a, Ui::EditChanged("  ".into()));
     ui(&mut a, Ui::SubmitEdit);
