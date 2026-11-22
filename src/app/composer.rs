@@ -108,6 +108,22 @@ pub fn key_binding(kp: KeyPress, empty: bool, submit: Ui, up: Option<Ui>) -> Opt
 /// Pane share the box may grow to before it scrolls.
 pub const MAX_HEIGHT_FRACTION: f32 = 0.5;
 
+/// Height of one line of composer text (the official client's 22 px).
+pub const LINE_HEIGHT: f32 = 22.0;
+/// Space above and below the text: one line plus this padding gives the
+/// official 44 px box.
+pub const PADDING_Y: f32 = 11.0;
+
+/// Limits for the text area *inside* the padding. iced's `text_editor`
+/// applies `min_height`/`max_height` to the text and then adds the padding,
+/// so a total height passed here would grow the box by the padding again
+/// (the old `min_height(46)` with 11 px padding made a 68 px box with the
+/// placeholder stuck at the top).
+pub fn text_height_limits(window_height: f32) -> (f32, f32) {
+    let max_total = (window_height * MAX_HEIGHT_FRACTION).max(120.0);
+    (LINE_HEIGHT, (max_total - 2.0 * PADDING_Y).max(LINE_HEIGHT))
+}
+
 /// Drafts of the channels that are not open.
 #[derive(Debug, Default)]
 pub struct Drafts(HashMap<ChannelId, String>);

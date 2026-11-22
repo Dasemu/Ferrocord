@@ -1561,3 +1561,36 @@ fn clicking_the_current_server_still_leaves_discover() {
     assert!(a.discover.is_none());
     assert!(matches!(a.view, View::Guild { guild, .. } if guild == mock::GUILD_RUST));
 }
+
+#[test]
+fn gif_picker_home_favorites_and_star() {
+    use ferrocord::app::gifs::GifPage;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::SelectChannel(mock::CH_GENERAL)));
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let p = a.gif_picker.as_ref().unwrap();
+    // Opens on the Favorites / Trending GIFs tiles, like the official picker.
+    assert_eq!(p.page, GifPage::Home);
+    assert_eq!(p.results.len(), 8);
+    // Every mock GIF has its still ready (made once, outside `view`).
+    for g in &p.results {
+        assert!(a.gif_thumb(&g.url).is_some(), "{}", g.url);
+    }
+    let saved: Vec<String> = a.gif_favorites.items().into_iter().map(|g| g.url).collect();
+    assert_eq!(saved, [mock::gif_page_url(3), mock::gif_page_url(6)]);
+
+    let _ = a.update(Message::Ui(Ui::GifPage(GifPage::Favorites)));
+    assert_eq!(a.gif_picker.as_ref().unwrap().page, GifPage::Favorites);
+
+    // Star a trending GIF: saved first; star it again: gone.
+    let first = a.gif_picker.as_ref().unwrap().results[0].clone();
+    let _ = a.update(Message::Ui(Ui::ToggleGifFavorite(Box::new(first.clone()))));
+    assert_eq!(a.gif_favorites.items()[0].url, first.url);
+    let _ = a.update(Message::Ui(Ui::ToggleGifFavorite(Box::new(first.clone()))));
+    assert!(!a.gif_favorites.contains(&first.url));
+    assert_eq!(a.gif_favorites.items().len(), 2);
+    // The thumb handle is the same across views (no per-frame re-upload).
+    let id = a.gif_thumb(&first.url).unwrap().id();
+    let _ = ferrocord::ui::view_window(&a, iced::window::Id::unique());
+    assert_eq!(a.gif_thumb(&first.url).unwrap().id(), id);
+}

@@ -74,6 +74,12 @@ pub enum ScreenshotScreen {
     ProfileDm,
     /// Multi-line composer and multi-line / emoji messages in a DM.
     Multiline,
+    /// GIF picker home (Favorites / Trending GIFs tiles).
+    Gifs,
+    /// GIF picker: trending GIFs with their save stars.
+    GifTrending,
+    /// GIF picker: the saved GIFs.
+    GifFavorites,
 }
 
 impl ScreenshotScreen {
@@ -136,6 +142,9 @@ impl ScreenshotScreen {
             "profile" | "popout" => Some(Self::Profile),
             "profile-dm" => Some(Self::ProfileDm),
             "multiline" | "emoji" => Some(Self::Multiline),
+            "gifs" | "gif-picker" => Some(Self::Gifs),
+            "gif-trending" => Some(Self::GifTrending),
+            "gif-favorites" => Some(Self::GifFavorites),
             _ => None,
         }
     }

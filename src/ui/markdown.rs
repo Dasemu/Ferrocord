@@ -239,7 +239,7 @@ fn push_text<'a>(
             .underline(st.underline)
             .strikethrough(st.strike);
         if is_emoji {
-            sp = sp.font(super::emoji_font::EMOJI_FONT);
+            sp = sp.font(super::emoji_font::emoji_font());
         }
         if st.spoiler_hidden {
             sp = sp

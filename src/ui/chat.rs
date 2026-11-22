@@ -752,10 +752,11 @@ fn edit_box<'a>(app: &'a App, e: &'a crate::app::actions::Editing) -> El<'a> {
         .key_binding(|kp| composer::key_binding(kp, false, Ui::SubmitEdit, None).map(bind))
         .size(16)
         .font(INTER)
-        .padding(Padding::from([10, 12]))
-        .max_height(
-            (crate::app::input::window_size().height * composer::MAX_HEIGHT_FRACTION).max(120.0),
-        )
+        .line_height(iced::widget::text::LineHeight::Absolute(
+            composer::LINE_HEIGHT.into(),
+        ))
+        .padding(Padding::from([composer::PADDING_Y, 12.0]))
+        .max_height(composer::text_height_limits(crate::app::input::window_size().height).1)
         .style(theme::editor(p, p.composer_bg));
     let link = |label: &'static str, msg: Ui| -> El<'a> {
         button(text(label).size(12).color(p.link))
@@ -952,6 +953,22 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
 }
 
 fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
+    let mut col = column![].padding(Padding::from([0, 16]));
+    if let Some(r) = reply_bar(app, c) {
+        col = col.push(r);
+    }
+    if !app.draft.is_empty() {
+        col = col.push(draft_strip(app));
+    }
+    for u in app.uploads.iter().filter(|u| u.channel == c.id) {
+        col = col.push(upload_strip(app, u));
+    }
+    col = col.push(composer_bar(app, c));
+    column![col, typing(app, c)].into()
+}
+
+/// The message box row: attach button, text, GIF / sticker / emoji buttons.
+fn composer_bar<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     let p = app.theme.palette;
     let placeholder = match c.kind {
         ChannelKind::Dm | ChannelKind::GroupDm => format!("Message @{}", channel_title(app, c)),
@@ -970,7 +987,7 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
     // Enter sends, Shift+Enter breaks the line; the box grows with its text
     // up to half of the window and then scrolls.
     let empty = app.composer.is_empty();
-    let max_h = crate::app::input::window_size().height * composer::MAX_HEIGHT_FRACTION;
+    let (min_h, max_h) = composer::text_height_limits(crate::app::input::window_size().height);
     let input = text_editor(app.composer.content())
         .id(composer_id())
         .placeholder(placeholder)
@@ -979,18 +996,27 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
             composer::key_binding(kp, empty, Ui::Send, Some(Ui::EditLast)).map(bind)
         })
         .size(16)
+        .line_height(iced::widget::text::LineHeight::Absolute(
+            composer::LINE_HEIGHT.into(),
+        ))
         .font(INTER)
-        .padding(Padding::from([11, 0]))
-        .min_height(46)
-        .max_height(max_h.max(120.0))
+        .padding(Padding::from([composer::PADDING_Y, 0.0]))
+        .min_height(min_h)
+        .max_height(max_h)
         .style(theme::editor(p, p.composer_bg));
-    // Tools stay level with the last line of a tall box.
-    let tools_end = |e: El<'a>| -> El<'a> { container(e).padding(Padding::ZERO.bottom(11)).into() };
-    let bar = container(
+    // Tools are centred on the first line and stay level with the last
+    // line of a tall box.
+    let tools_end = |e: El<'a>| -> El<'a> {
+        container(e)
+            .padding(
+                Padding::ZERO.bottom(composer::PADDING_Y + (composer::LINE_HEIGHT - 24.0) / 2.0),
+            )
+            .into()
+    };
+    container(
         row![
             tools_end(tool(Icon::CirclePlus, Some(Ui::PickFiles))),
             input,
-            tools_end(tool(Icon::Gift, None)),
             tools_end(tool(Icon::Gif, Some(Ui::OpenGifPicker))),
             tools_end(tool(Icon::Sticker, Some(Ui::OpenStickerPicker))),
             tools_end(tool(
@@ -1002,20 +1028,8 @@ fn composer<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
         .align_y(Alignment::End),
     )
     .padding(Padding::from([0, 16]))
-    .style(theme::rounded_bg(p.composer_bg, 8.0));
-
-    let mut col = column![].padding(Padding::from([0, 16]));
-    if let Some(r) = reply_bar(app, c) {
-        col = col.push(r);
-    }
-    if !app.draft.is_empty() {
-        col = col.push(draft_strip(app));
-    }
-    for u in app.uploads.iter().filter(|u| u.channel == c.id) {
-        col = col.push(upload_strip(app, u));
-    }
-    col = col.push(bar);
-    column![col, typing(app, c)].into()
+    .style(theme::rounded_bg(p.composer_bg, 8.0))
+    .into()
 }
 
 /// "Replying to Name   @ ON  x" bar attached to the top of the composer.
@@ -1228,4 +1242,72 @@ fn typing<'a>(app: &'a App, c: &'a Channel) -> El<'a> {
         .padding(Padding::from([0, 16]).left(24))
         .align_y(Alignment::Center)
         .into()
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use iced::advanced::layout::Limits;
+    use iced::advanced::renderer::Headless;
+    use iced::advanced::widget::Tree;
+    use iced::{Pixels, Size};
+
+    fn height_of(mut el: El<'_>) -> f32 {
+        let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(
+            INTER,
+            Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .expect("tiny-skia renderer");
+        let mut tree = Tree::new(el.as_widget());
+        el.as_widget_mut()
+            .layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, Size::new(800.0, 5000.0)),
+            )
+            .size()
+            .height
+    }
+
+    fn app_and_channel() -> (App, Channel) {
+        let app = App::boot(crate::config::Config::for_tests()).0;
+        let c = app
+            .chat
+            .channels
+            .get(&crate::mock::CH_GENERAL)
+            .cloned()
+            .expect("mock channel");
+        (app, c)
+    }
+
+    #[test]
+    fn empty_composer_is_one_official_line_tall() {
+        let (app, c) = app_and_channel();
+        assert!(app.composer.is_empty());
+        // 22 px line + 11 px above and below, like the official client;
+        // it used to be 68 px (min height + padding counted twice).
+        let h = height_of(composer_bar(&app, &c));
+        assert!((h - 44.0).abs() < 0.5, "composer height {h}");
+    }
+
+    #[test]
+    fn composer_grows_one_line_at_a_time() {
+        let (mut app, c) = app_and_channel();
+        app.composer.set_text("one\ntwo");
+        let two = height_of(composer_bar(&app, &c));
+        assert!((two - 66.0).abs() < 0.5, "two lines: {two}");
+        app.composer.set_text("one\ntwo\nthree");
+        let three = height_of(composer_bar(&app, &c));
+        assert!((three - 88.0).abs() < 0.5, "three lines: {three}");
+    }
+
+    #[test]
+    fn composer_limits_exclude_the_padding() {
+        let (min, max) = composer::text_height_limits(800.0);
+        assert_eq!(min, composer::LINE_HEIGHT);
+        assert_eq!(max + 2.0 * composer::PADDING_Y, 400.0);
+        // Tiny windows still get one line.
+        assert!(composer::text_height_limits(10.0).1 >= composer::LINE_HEIGHT);
+    }
 }
