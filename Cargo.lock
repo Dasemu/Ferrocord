@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "aes-gcm",
  "arboard",
