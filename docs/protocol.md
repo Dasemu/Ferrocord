@@ -283,10 +283,9 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 | User panel | 52 px, `#232428` |
 | Accent | `#5865f2`, links `#00a8fc` |
 
-No style uses `container::Style::shadow`: tiny-skia draws a quad's shadow
-unclipped by the damage region, so on partial redraws (scrolling, hover; the
-norm on Windows) it piles up over unrepainted areas until they turn black.
-Header "shadows" are a gradient on the bar itself; popups rely on their border.
+Shadows are safe with ferroiced (tiny-skia clips them to the damage region), but
+no style uses `container::Style::shadow`: header "shadows" are a gradient on the
+bar itself and popups rely on their border, as in the official client.
 
 Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
