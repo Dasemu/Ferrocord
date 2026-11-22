@@ -133,6 +133,13 @@ pub struct App {
     pub ctx_menu: Option<context::CtxMenu>,
     pub emoji_picker: Option<OpenPicker>,
     pub gif_picker: Option<gifs::GifPicker>,
+    /// Decoded GIF picker stills, keyed by the GIF's page URL (own small
+    /// LRU so they never push avatars and messages out).
+    pub gif_thumbs: images::ImageCache,
+    /// Saved GIFs (frecency settings).
+    pub gif_favorites: gifs::Favorites,
+    /// Serialises favourite saves (each is a read-modify-write).
+    gif_favorites_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub sticker_picker: Option<stickers::StickerPicker>,
     pub draft: Vec<upload::DraftAttachment>,
     pub uploads: Vec<upload::ActiveUpload>,
@@ -261,6 +268,9 @@ impl App {
             ctx_menu: None,
             emoji_picker: None,
             gif_picker: None,
+            gif_thumbs: images::ImageCache::new(gifs::THUMB_BUDGET),
+            gif_favorites: gifs::Favorites::default(),
+            gif_favorites_lock: Default::default(),
             sticker_picker: None,
             draft: Vec::new(),
             uploads: Vec::new(),
@@ -382,12 +392,15 @@ impl App {
         }
         for (i, (w, h)) in mock::MOCK_GIF_SIZES.iter().enumerate() {
             let (w, h, px) = mock::mock_image(*w, *h);
-            self.images.insert(
-                format!("mock://gif/{}", i + 1),
-                iced::widget::image::Handle::from_rgba(w, h, px),
-                (w * h * 4) as usize,
-            );
+            let handle = iced::widget::image::Handle::from_rgba(w, h, px);
+            let size = (w * h * 4) as usize;
+            // The gifv embed still, and the picker tile of the same GIF.
+            self.images
+                .insert(format!("mock://gif/{}", i + 1), handle.clone(), size);
+            self.gif_thumbs
+                .insert(mock::gif_page_url(i + 1), handle, size);
         }
+        self.gif_favorites.list = Some(mock::gif_favorites());
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
             "mock://image/1".into(),
@@ -665,6 +678,19 @@ impl App {
         }
         if screen == Some(ScreenshotScreen::ProfileDm) {
             let _ = self.request_images();
+        }
+        let gif_page = match screen {
+            Some(ScreenshotScreen::Gifs) => Some(gifs::GifPage::Home),
+            Some(ScreenshotScreen::GifTrending) => Some(gifs::GifPage::Trending),
+            Some(ScreenshotScreen::GifFavorites) => Some(gifs::GifPage::Favorites),
+            _ => None,
+        };
+        if let Some(page) = gif_page {
+            // Opened from the composer's GIF button.
+            let (mut p, generation) = gifs::GifPicker::open(iced::Point::new(915.0, 752.0));
+            p.finish(generation, Ok(mock::gifs("")));
+            p.show(page);
+            self.gif_picker = Some(p);
         }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
@@ -1731,7 +1757,28 @@ impl App {
                 if let Some(p) = self.gif_picker.as_mut() {
                     p.finish(generation, result);
                 }
-                self.request_images()
+                self.request_gif_thumbs()
+            }
+            Done::GifThumb { key, image } => {
+                match image {
+                    Some((w, h, px)) => {
+                        let size = px.len();
+                        let handle = iced::widget::image::Handle::from_rgba(w, h, px);
+                        self.gif_thumbs.insert(key, handle, size);
+                    }
+                    None => self.gif_thumbs.mark_failed(&key),
+                }
+                Task::none()
+            }
+            Done::GifFavorites {
+                generation,
+                result,
+                rollback,
+            } => {
+                if let Some(e) = self.gif_favorites.finish(generation, result, rollback) {
+                    self.toast = Some(format!("Could not save your favorite GIFs: {e}"));
+                }
+                self.request_gif_thumbs()
             }
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
@@ -1772,17 +1819,27 @@ impl App {
                 Task::none()
             }
             Done::Video { session, progress } => self.on_video(session, progress),
-            Done::Image { key, bytes } => match bytes {
-                Some(b) => {
-                    let t = self.decode_media_anim(&key, &b);
-                    self.images.insert_bytes(key, b);
+            Done::Image { key, bytes } => {
+                let t = match bytes {
+                    Some(b) => {
+                        let t = self.decode_media_anim(&key, &b);
+                        self.images.insert_bytes(key, b);
+                        t
+                    }
+                    None => {
+                        self.images.mark_failed(&key);
+                        Task::none()
+                    }
+                };
+                // A batch is capped (`request_images`): once it is done, an
+                // open emoji picker asks for the next one, so a server with
+                // hundreds of emoji fills in instead of stopping at the cap.
+                if self.emoji_picker.is_some() && self.images.pending_len() == 0 {
+                    Task::batch([t, self.request_images()])
+                } else {
                     t
                 }
-                None => {
-                    self.images.mark_failed(&key);
-                    Task::none()
-                }
-            },
+            }
         }
     }
 
@@ -1961,9 +2018,6 @@ impl App {
                 }
             }
         }
-        if let Some(p) = &self.gif_picker {
-            urls.extend(p.results.iter().map(|g| g.preview.clone()));
-        }
         if self.sticker_picker.is_some() {
             for g in &self.chat.guilds {
                 urls.extend(
@@ -2048,6 +2102,11 @@ impl App {
 
     pub fn image(&self, key: &str) -> Option<&iced::widget::image::Handle> {
         self.images.get(key)
+    }
+
+    /// The picker still of the GIF with this page URL.
+    pub fn gif_thumb(&self, url: &str) -> Option<&iced::widget::image::Handle> {
+        self.gif_thumbs.get(url)
     }
 
     pub fn avatar_key(&self, user: &User) -> Option<String> {

@@ -29,6 +29,62 @@ pub const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_MEDIA_PIXELS: u64 = 4096 * 4096;
 
 /// Reads image dimensions from the header and rejects decompression bombs.
+/// Reads a media response body, refusing errors and bodies larger than
+/// [`MAX_MEDIA_BYTES`].
+async fn read_capped(mut resp: reqwest::Response, what: &str) -> Result<Vec<u8>> {
+    if !resp.status().is_success() {
+        return Err(Error::Http {
+            status: resp.status().as_u16(),
+            message: what.into(),
+        });
+    }
+    if resp
+        .content_length()
+        .is_some_and(|l| l > MAX_MEDIA_BYTES as u64)
+    {
+        return Err(Error::Protocol("media too large".into()));
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if out.len() + chunk.len() > MAX_MEDIA_BYTES {
+            return Err(Error::Protocol("media too large".into()));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+/// One entry of `GET /gifs/trending-gifs` / `GET /gifs/search`:
+/// `{id, title, url, src, gif_src, width, height, preview}`. `src` is the
+/// file in the requested `media_format` (MP4), `gif_src` the GIF and
+/// `preview` a still. Entries without a page URL or any image are dropped.
+pub fn parse_gif(v: &Value) -> Option<Gif> {
+    let s = |k: &str| v[k].as_str().unwrap_or_default().to_owned();
+    let dim = |k: &str| {
+        v[k].as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(1)
+            .max(1)
+    };
+    let url = s("url");
+    let (preview, gif_src) = (s("preview"), s("gif_src"));
+    if url.is_empty() || (preview.is_empty() && gif_src.is_empty()) {
+        return None;
+    }
+    Some(Gif {
+        url,
+        src: s("src"),
+        preview: if preview.is_empty() {
+            gif_src.clone()
+        } else {
+            preview
+        },
+        gif_src,
+        width: dim("width"),
+        height: dim("height"),
+    })
+}
+
 pub fn check_image_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
@@ -46,6 +102,9 @@ pub fn check_image_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
 #[derive(Clone)]
 pub struct RestClient {
     http: reqwest::Client,
+    /// Plain client for third-party media the API pointed at (GIF picker
+    /// files): no Discord headers, no cookies, like a browser `<img>`.
+    media_http: reqwest::Client,
     base: Arc<str>,
     cdn: Arc<str>,
     token: Option<Secret>,
@@ -102,8 +161,14 @@ impl RestClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
             .build()?;
+        let media_http = reqwest::Client::builder()
+            .user_agent(user_agent())
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
         Ok(Self {
             http,
+            media_http,
             base: base.trim_end_matches('/').into(),
             cdn: cdn.trim_end_matches('/').into(),
             token,
@@ -242,19 +307,6 @@ impl RestClient {
     /// GIFs for the picker: trending when `query` is blank, else a search.
     /// `GET /gifs/trending-gifs` / `GET /gifs/search` (Tenor via Discord).
     pub async fn gifs(&self, query: &str) -> Result<Vec<Gif>> {
-        #[derive(serde::Deserialize)]
-        struct WireGif {
-            #[serde(default)]
-            url: String,
-            #[serde(default)]
-            gif_src: String,
-            #[serde(default)]
-            preview: String,
-            #[serde(default)]
-            width: u32,
-            #[serde(default)]
-            height: u32,
-        }
         let q = query.trim();
         let path = if q.is_empty() {
             "/gifs/trending-gifs?media_format=mp4&provider=tenor&locale=en-US".to_owned()
@@ -264,24 +316,8 @@ impl RestClient {
                 percent_encode(q)
             )
         };
-        let wire: Vec<WireGif> = self.get(&path).await?;
-        Ok(wire
-            .into_iter()
-            .filter(|g| !g.url.is_empty())
-            .filter_map(|g| {
-                let preview = if g.preview.is_empty() {
-                    g.gif_src
-                } else {
-                    g.preview
-                };
-                (!preview.is_empty()).then_some(Gif {
-                    url: g.url,
-                    preview,
-                    width: g.width.max(1),
-                    height: g.height.max(1),
-                })
-            })
-            .collect())
+        let wire: Vec<Value> = self.get(&path).await?;
+        Ok(wire.iter().filter_map(parse_gif).collect())
     }
 
     /// `GET /users/@me` — validates the token.
@@ -625,33 +661,46 @@ impl RestClient {
             ) || (host.starts_with("images-ext-") && host.ends_with(".discordapp.net")))
     }
 
+    /// Downloads a GIF picker file (preview or GIF) at a URL Discord's GIF
+    /// API returned. The official client loads these straight from the
+    /// provider's CDN, whatever its host (Tenor moved between
+    /// `media.tenor.com`, `media1.tenor.com`, `c.tenor.com`), so any HTTPS
+    /// host is allowed here, but only through the plain media client: no
+    /// token, no Discord headers or cookies, and the usual size cap.
+    pub async fn fetch_picker_media(&self, url: &str) -> Result<Vec<u8>> {
+        if self.is_allowed_media_url(url) {
+            return self.fetch_bytes(url).await;
+        }
+        let ok =
+            url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
+        if !ok {
+            return Err(Error::Protocol("media host not allowed".into()));
+        }
+        let resp = self.media_http.get(url).send().await?;
+        read_capped(resp, "gif download failed").await
+    }
+
     /// Downloads a CDN asset (avatar, icon, attachment preview), refusing
     /// non-Discord hosts and anything larger than [`MAX_MEDIA_BYTES`].
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
         if !self.is_allowed_media_url(url) {
             return Err(Error::Protocol("media host not allowed".into()));
         }
-        let mut resp = self.http.get(url).send().await?;
-        if !resp.status().is_success() {
-            return Err(Error::Http {
-                status: resp.status().as_u16(),
-                message: "asset download failed".into(),
-            });
-        }
-        if resp
-            .content_length()
-            .is_some_and(|l| l > MAX_MEDIA_BYTES as u64)
-        {
-            return Err(Error::Protocol("media too large".into()));
-        }
-        let mut out = Vec::new();
-        while let Some(chunk) = resp.chunk().await? {
-            if out.len() + chunk.len() > MAX_MEDIA_BYTES {
-                return Err(Error::Protocol("media too large".into()));
-            }
-            out.extend_from_slice(&chunk);
-        }
-        Ok(out)
+        let host_is_discord = url::Url::parse(url)
+            .ok()
+            .and_then(|u| {
+                u.host_str()
+                    .map(|h| h.ends_with("discordapp.com") || h.ends_with("discordapp.net"))
+            })
+            .unwrap_or(false);
+        // Third-party hosts (Tenor, Spotify art) get the plain client.
+        let client = if host_is_discord || url.starts_with(self.cdn.as_ref()) {
+            &self.http
+        } else {
+            &self.media_http
+        };
+        let resp = client.get(url).send().await?;
+        read_capped(resp, "asset download failed").await
     }
 
     /// Streams a CDN file into `file` (a video, too big to hold in memory),

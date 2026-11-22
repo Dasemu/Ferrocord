@@ -120,6 +120,7 @@ const GIF_PICKER_W: f32 = 424.0;
 const GIF_PICKER_H: f32 = 440.0;
 
 fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
+    use crate::app::gifs::GifPage;
     let p = app.theme.palette;
     let search = text_input("Search Tenor", &gp.query)
         .id(iced::widget::Id::new("gif-search"))
@@ -128,20 +129,151 @@ fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
         .font(INTER)
         .padding(Padding::from([8, 10]))
         .style(theme::input(p, p.bg_app));
-    let title = if gp.query.trim().is_empty() {
-        "Trending GIFs"
-    } else {
-        "Search results"
+    let page = if gp.searching() { None } else { Some(gp.page) };
+    // A page of the home screen has a back arrow, like the official picker.
+    let header: El<'a> = match page {
+        Some(GifPage::Favorites | GifPage::Trending) => row![
+            button(icon(Icon::ArrowLeft, 20.0, p.text_secondary))
+                .padding(6)
+                .on_press(ui(Ui::GifPage(GifPage::Home)))
+                .style(theme::icon_button(p)),
+            search,
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into(),
+        _ => search.into(),
+    };
+    let title = match page {
+        None => Some("Search results"),
+        Some(GifPage::Home) => None,
+        Some(GifPage::Favorites) => Some("Favorites"),
+        Some(GifPage::Trending) => Some("Trending GIFs"),
     };
 
-    // Two columns, each GIF going to the shorter one (masonry).
     const GAP: f32 = 6.0;
     let tile_w = (GIF_PICKER_W - 16.0 - GAP) / 2.0;
+    let scroll = |content: El<'a>| -> El<'a> {
+        super::smooth_scroll::smooth(
+            scrollable(container(content).padding(Padding::from([0, 8])))
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill),
+        )
+        .into()
+    };
+    let favorites = app.gif_favorites.items();
+    let body: El<'a> = match page {
+        Some(GifPage::Home) => {
+            let fav_bg = favorites.first().and_then(|g| app.gif_thumb(&g.url));
+            let trend_bg = gp.results.first().and_then(|g| app.gif_thumb(&g.url));
+            scroll(
+                row![
+                    gif_home_tile(
+                        app,
+                        tile_w,
+                        fav_bg,
+                        Icon::Star,
+                        "Favorites",
+                        GifPage::Favorites
+                    ),
+                    gif_home_tile(
+                        app,
+                        tile_w,
+                        trend_bg,
+                        Icon::Gif,
+                        "Trending GIFs",
+                        GifPage::Trending
+                    ),
+                ]
+                .spacing(GAP)
+                .into(),
+            )
+        }
+        Some(GifPage::Favorites) if favorites.is_empty() => notice(
+            p,
+            if app.gif_favorites.list.is_none() {
+                "Loading…"
+            } else {
+                "Click the star on a GIF to save it here."
+            },
+        ),
+        Some(GifPage::Favorites) => scroll(gif_grid(app, &favorites, tile_w, GAP)),
+        _ if gp.loading && gp.results.is_empty() => notice(p, "Loading…"),
+        _ if gp.error.is_some() => notice(p, gp.error.as_deref().unwrap_or_default()),
+        _ if gp.results.is_empty() => notice(p, "No GIFs found"),
+        _ => scroll(gif_grid(app, &gp.results, tile_w, GAP)),
+    };
+    let title: El<'a> = match title {
+        Some(t) => container(
+            text(t.to_uppercase())
+                .size(12)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_muted),
+        )
+        .padding(Padding::from([0, 12]).bottom(4))
+        .into(),
+        None => Space::new().into(),
+    };
+    container(column![container(header).padding(8), title, body].spacing(4))
+        .width(GIF_PICKER_W)
+        .height(GIF_PICKER_H)
+        .style(theme::popup(p))
+        .into()
+}
+
+/// A home-screen tile: the newest GIF of the page as a dimmed background
+/// with the page name on top.
+fn gif_home_tile<'a>(
+    app: &'a App,
+    w: f32,
+    bg: Option<&'a iced::widget::image::Handle>,
+    glyph: Icon,
+    label: &'static str,
+    page: crate::app::gifs::GifPage,
+) -> El<'a> {
+    let p = app.theme.palette;
+    const H: f32 = 110.0;
+    let back: El<'a> = match bg {
+        Some(h) => image(h.clone())
+            .width(w)
+            .height(H)
+            .content_fit(iced::ContentFit::Cover)
+            .into(),
+        None => Space::new().width(w).height(H).into(),
+    };
+    let face = container(
+        row![
+            icon(glyph, 18.0, theme::video_fg()),
+            text(label)
+                .size(16)
+                .font(INTER_SEMIBOLD)
+                .color(theme::video_fg()),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
+    .center_x(w)
+    .center_y(H)
+    .style(theme::rounded_bg(theme::gif_tile_scrim(), 4.0));
+    button(iced::widget::stack![back, face])
+        .padding(0)
+        .on_press(ui(Ui::GifPage(page)))
+        .style(theme::icon_button(p))
+        .into()
+}
+
+/// Two columns of GIFs, each going to the shorter one (masonry), each with
+/// a star that saves or unsaves it.
+fn gif_grid<'a>(app: &'a App, gifs: &[Gif], tile_w: f32, gap: f32) -> El<'a> {
+    let p = app.theme.palette;
     let mut cols: [Vec<El<'a>>; 2] = [Vec::new(), Vec::new()];
     let mut heights = [0.0f32; 2];
-    for g in &gp.results {
-        let h = (tile_w * g.height as f32 / g.width as f32).clamp(60.0, 320.0);
-        let face: El<'a> = match app.image(&g.preview) {
+    for g in gifs {
+        let h = (tile_w * g.height as f32 / g.width.max(1) as f32).clamp(60.0, 320.0);
+        let face: El<'a> = match app.gif_thumb(&g.url) {
             Some(handle) => image(handle.clone())
                 .width(tile_w)
                 .height(h)
@@ -157,58 +289,40 @@ fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
             .padding(0)
             .on_press(ui(Ui::PickGif(g.url.clone())))
             .style(theme::icon_button(p));
+        let saved = app.gif_favorites.contains(&g.url);
+        let star = button(icon(
+            if saved { Icon::StarFilled } else { Icon::Star },
+            18.0,
+            if saved {
+                theme::gif_star_saved(p)
+            } else {
+                theme::video_fg()
+            },
+        ))
+        .padding(5)
+        .on_press(ui(Ui::ToggleGifFavorite(Box::new(g.clone()))))
+        .style(theme::gif_star(p));
+        let cell = iced::widget::stack![
+            tile,
+            container(star)
+                .width(tile_w)
+                .align_x(iced::alignment::Horizontal::Right)
+                .padding(4),
+        ];
         let i = usize::from(heights[1] < heights[0]);
-        heights[i] += h + GAP;
-        cols[i].push(tile.into());
+        heights[i] += h + gap;
+        cols[i].push(cell.into());
     }
     let [left, right] = cols;
-    let body: El<'a> = if gp.loading && gp.results.is_empty() {
-        notice(p, "Loading…")
-    } else if let Some(e) = &gp.error {
-        notice(p, e)
-    } else if gp.results.is_empty() {
-        notice(p, "No GIFs found")
-    } else {
-        super::smooth_scroll::smooth(
-            scrollable(
-                container(
-                    row![
-                        iced::widget::Column::with_children(left)
-                            .spacing(GAP)
-                            .width(tile_w),
-                        iced::widget::Column::with_children(right)
-                            .spacing(GAP)
-                            .width(tile_w),
-                    ]
-                    .spacing(GAP),
-                )
-                .padding(Padding::from([0, 8])),
-            )
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().width(4).scroller_width(4),
-            ))
-            .style(theme::thin_scrollbar(p, false))
-            .height(Length::Fill),
-        )
-        .into()
-    };
-    container(
-        column![
-            container(search).padding(8),
-            container(
-                text(title.to_uppercase())
-                    .size(12)
-                    .font(INTER_SEMIBOLD)
-                    .color(p.text_muted)
-            )
-            .padding(Padding::from([0, 12]).bottom(4)),
-            body,
-        ]
-        .spacing(4),
-    )
-    .width(GIF_PICKER_W)
-    .height(GIF_PICKER_H)
-    .style(theme::popup(p))
+    row![
+        iced::widget::Column::with_children(left)
+            .spacing(gap)
+            .width(tile_w),
+        iced::widget::Column::with_children(right)
+            .spacing(gap)
+            .width(tile_w),
+    ]
+    .spacing(gap)
     .into()
 }
 

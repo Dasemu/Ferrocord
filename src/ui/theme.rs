@@ -255,8 +255,9 @@ pub const INTER_ITALIC: Font = Font {
 };
 pub const MONO: Font = Font::MONOSPACE;
 
-/// Noto Color Emoji (SIL OFL 1.1), loaded only when the system has no copy
-/// of the family (`emoji_font::needs_bundled_emoji_font`).
+/// Noto Color Emoji (SIL OFL 1.1), renamed "Ferrocord Color Emoji" so no
+/// system face can shadow it; loaded unless the system has a drawable copy
+/// (`emoji_font::pick_emoji_font`).
 pub const NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../assets/fonts/NotoColorEmoji.ttf");
 
 /// Embedded font files (SIL OFL 1.1).
@@ -774,6 +775,35 @@ pub fn video_slider(p: Palette) -> impl Fn(&Theme, slider::Status) -> slider::St
             },
         }
     }
+}
+
+/// The save star over a GIF picker tile: a dark round chip.
+pub fn gif_star(_p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(rgba(
+                0x000000,
+                if hovered { 0.8 } else { 0.55 },
+            ))),
+            text_color: video_fg(),
+            border: Border {
+                radius: Metrics::DEFAULT.radius_small.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// Star colour of a saved GIF (Discord's gold).
+pub fn gif_star_saved(p: Palette) -> Color {
+    p.mention_bar
+}
+
+/// The dim layer under a GIF picker home tile's label.
+pub fn gif_tile_scrim() -> Color {
+    rgba(0x000000, 0.5)
 }
 
 #[cfg(test)]

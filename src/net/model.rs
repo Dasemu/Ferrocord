@@ -618,6 +618,11 @@ pub struct Gif {
     pub url: String,
     /// Image shown in the picker (static preview, else the GIF itself).
     pub preview: String,
+    /// The GIF file (fallback thumbnail when the preview fails).
+    pub gif_src: String,
+    /// The file in the requested media format (MP4): what a favourite
+    /// stores, like the official client.
+    pub src: String,
     pub width: u32,
     pub height: u32,
 }
