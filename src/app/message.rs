@@ -117,6 +117,10 @@ pub enum Ui {
     /// Sends the GIF with this Tenor URL to the open channel.
     PickGif(String),
     CloseGifPicker,
+    /// Opens a page of the GIF picker's home screen (or goes back to it).
+    GifPage(super::gifs::GifPage),
+    /// Saves or unsaves this GIF (the star on a picker tile).
+    ToggleGifFavorite(Box<crate::net::model::Gif>),
     /// Composer sticker button.
     OpenStickerPicker,
     StickerQuery(String),
@@ -327,6 +331,19 @@ pub enum Done {
     Gifs {
         generation: u64,
         result: Result<Vec<crate::net::model::Gif>, String>,
+    },
+    /// A GIF picker still, decoded and downscaled (`None`: every source
+    /// failed).
+    GifThumb {
+        key: String,
+        image: Option<(u32, u32, Vec<u8>)>,
+    },
+    /// The saved GIFs after a load or a save; `rollback` restores the list
+    /// from before an optimistic change that failed.
+    GifFavorites {
+        generation: u64,
+        result: Result<Vec<crate::net::frecency::FavoriteGif>, String>,
+        rollback: Option<Vec<crate::net::frecency::FavoriteGif>>,
     },
     /// Delay after a jump so the new rows are laid out before scrolling.
     ScrollToMessage(MessageId),

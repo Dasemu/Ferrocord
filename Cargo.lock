@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "aes-gcm",
  "arboard",
@@ -2001,6 +2001,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser",
  "unicode-segmentation",
  "url",
  "vp8-decoder",

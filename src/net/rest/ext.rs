@@ -188,3 +188,54 @@ impl RestClient {
         .map(|_| ())
     }
 }
+
+impl RestClient {
+    /// `GET /users/@me/settings-proto/2`: the frecency user settings
+    /// (favourite GIFs, sticker/emoji frecency) as raw protobuf bytes.
+    pub async fn frecency_settings(&self) -> Result<Vec<u8>> {
+        let v = self
+            .request(Method::GET, "/users/@me/settings-proto/2", None)
+            .await?;
+        decode_settings(&v)
+    }
+
+    /// `PATCH /users/@me/settings-proto/2 {settings: base64}` with the
+    /// whole message; returns the settings the server stored.
+    pub async fn set_frecency_settings(&self, settings: &[u8]) -> Result<Vec<u8>> {
+        use base64::Engine;
+        let body = json!({
+            "settings": base64::engine::general_purpose::STANDARD.encode(settings),
+        });
+        let v = self
+            .request(Method::PATCH, "/users/@me/settings-proto/2", Some(body))
+            .await?;
+        decode_settings(&v)
+    }
+
+    /// Saves or unsaves a GIF the way the official client does: reads the
+    /// current settings, changes only that favourite and writes the whole
+    /// message back (unknown fields kept). Returns the new favourites.
+    pub async fn change_favorite_gif(
+        &self,
+        change: &crate::net::frecency::FavoriteChange,
+    ) -> Result<Vec<crate::net::frecency::FavoriteGif>> {
+        use crate::net::frecency;
+        let bad = |_| Error::Protocol("unreadable settings".into());
+        let current = self.frecency_settings().await?;
+        let next = frecency::apply_favorite(&current, change).map_err(bad)?;
+        let stored = self.set_frecency_settings(&next).await?;
+        // An empty answer means "stored as sent".
+        let stored = if stored.is_empty() { next } else { stored };
+        frecency::favorite_gifs(&stored).map_err(bad)
+    }
+}
+
+/// `{"settings": "<base64>"}` to bytes; a missing or empty value is an
+/// empty message (a new account has no frecency settings yet).
+fn decode_settings(v: &Value) -> Result<Vec<u8>> {
+    use base64::Engine;
+    let s = v["settings"].as_str().unwrap_or("");
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|_| Error::Protocol("unreadable settings".into()))
+}

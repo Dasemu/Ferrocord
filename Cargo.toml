@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.13.0"
+version = "0.13.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -69,6 +69,8 @@ qrcode = { version = "0.14", default-features = false }
 # Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
 unicode-segmentation = "1"
 emojis = "0.9"
+# Reads font tables to tell a drawable (CBDT) system emoji font from a COLRv1 one (already in the tree via fontdb).
+ttf-parser = "0.25"
 # System UI language for X-Discord-Locale / IDENTIFY (already in the tree via iced).
 sys-locale = "0.3"
 # IANA time zone for X-Discord-Timezone (already in the tree via chrono).

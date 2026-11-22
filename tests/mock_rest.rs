@@ -604,6 +604,8 @@ async fn gifs_trending_and_search() {
     let found = rest.gifs("happy cat").await.unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].preview, "https://media.tenor.com/2.gif");
+    assert_eq!(found[0].gif_src, "https://media.tenor.com/2.gif");
+    assert_eq!(found[0].src, "https://media.tenor.com/2.mp4");
     let rec = server.recorded();
     assert!(rec[0].path.starts_with("/gifs/trending-gifs?"));
     assert!(
@@ -739,4 +741,35 @@ async fn fingerprint_comes_from_experiments_and_rejects_garbage() {
     assert_eq!(rest.fingerprint().await, None);
     assert_eq!(rest.fingerprint().await, None);
     assert_eq!(rest.fingerprint().await, None);
+}
+
+#[test]
+fn gif_entries_keep_every_rendition_whatever_the_host() {
+    use ferrocord::net::rest::parse_gif;
+    // Tenor serves from several hosts; the picker uses what the API says.
+    let g = parse_gif(&json!({"url": "https://tenor.com/view/x-1",
+        "src": "https://media1.tenor.com/m/abcdefghijkAAAPo/x.mp4",
+        "gif_src": "https://media1.tenor.com/m/abcdefghijkAAAAC/x.gif",
+        "preview": "https://media1.tenor.com/m/abcdefghijkAAAAe/x.png",
+        "width": 498, "height": 0}))
+    .unwrap();
+    assert_eq!(
+        g.preview,
+        "https://media1.tenor.com/m/abcdefghijkAAAAe/x.png"
+    );
+    assert_eq!(g.height, 1);
+    assert!(parse_gif(&json!({"url": "https://tenor.com/view/x", "src": "a.mp4"})).is_none());
+    assert!(parse_gif(&json!("garbage")).is_none());
+}
+
+#[tokio::test]
+async fn picker_media_needs_https() {
+    let rest = RestClient::new("http://127.0.0.1:1", "http://cdn", None).unwrap();
+    for bad in [
+        "http://media1.tenor.com/m/a/x.png",
+        "file:///etc/passwd",
+        "not a url",
+    ] {
+        assert!(rest.fetch_picker_media(bad).await.is_err(), "{bad}");
+    }
 }

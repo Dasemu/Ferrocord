@@ -1146,6 +1146,29 @@ pub const MOCK_GIF_SIZES: [(u32, u32); 8] = [
     (160, 160),
 ];
 
+/// Page URL of mock GIF `n` (what gets sent; keys its picker still).
+pub fn gif_page_url(n: usize) -> String {
+    format!("https://tenor.example/view/mock-{n}")
+}
+
+/// Saved GIFs of the mock account: mock GIFs 3 and 6, newest first.
+pub fn gif_favorites() -> Vec<crate::net::frecency::FavoriteGif> {
+    [(3usize, 2u32), (6, 1)]
+        .into_iter()
+        .map(|(n, order)| {
+            let (w, h) = MOCK_GIF_SIZES[n - 1];
+            crate::net::frecency::FavoriteGif {
+                url: gif_page_url(n),
+                src: format!("mock://gif/{n}.mp4"),
+                format: crate::net::frecency::GifFormat::Video,
+                width: w,
+                height: h,
+                order,
+            }
+        })
+        .collect()
+}
+
 /// Mock GIF picker results: eight "trending" GIFs, four for any search.
 pub fn gifs(query: &str) -> Vec<Gif> {
     let n = if query.trim().is_empty() { 8 } else { 4 };
@@ -1154,8 +1177,10 @@ pub fn gifs(query: &str) -> Vec<Gif> {
         .take(n)
         .enumerate()
         .map(|(i, (w, h))| Gif {
-            url: format!("https://tenor.example/view/mock-{}", i + 1),
+            url: gif_page_url(i + 1),
             preview: format!("mock://gif/{}", i + 1),
+            gif_src: format!("mock://gif/{}", i + 1),
+            src: format!("mock://gif/{}.mp4", i + 1),
             width: *w,
             height: *h,
         })

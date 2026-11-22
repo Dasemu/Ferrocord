@@ -18,7 +18,6 @@ pub enum Icon {
     EyeOff,
     File,
     Gif,
-    Gift,
     Hash,
     Headphones,
     Image,
@@ -71,9 +70,11 @@ pub enum Icon {
     Minimize,
     RotateCcw,
     ExternalLink,
+    Star,
+    StarFilled,
 }
 
-const ALL: [(Icon, &[u8]); 63] = [
+const ALL: [(Icon, &[u8]); 64] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -105,7 +106,6 @@ const ALL: [(Icon, &[u8]); 63] = [
     ),
     (Icon::File, include_bytes!("../../assets/icons/file.svg")),
     (Icon::Gif, include_bytes!("../../assets/icons/gif.svg")),
-    (Icon::Gift, include_bytes!("../../assets/icons/gift.svg")),
     (Icon::Hash, include_bytes!("../../assets/icons/hash.svg")),
     (
         Icon::Headphones,
@@ -262,6 +262,11 @@ const ALL: [(Icon, &[u8]); 63] = [
     (
         Icon::ExternalLink,
         include_bytes!("../../assets/icons/external-link.svg"),
+    ),
+    (Icon::Star, include_bytes!("../../assets/icons/star.svg")),
+    (
+        Icon::StarFilled,
+        include_bytes!("../../assets/icons/star-filled.svg"),
     ),
 ];
 

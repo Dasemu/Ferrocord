@@ -122,6 +122,11 @@ impl ImageCache {
         }
     }
 
+    /// Downloads in flight.
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     pub fn bytes(&self) -> usize {
         self.bytes
     }

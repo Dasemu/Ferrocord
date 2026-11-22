@@ -255,8 +255,16 @@ impl App {
                 Task::batch([
                     focus(iced::widget::Id::new("gif-search")),
                     self.fetch_gifs(generation, String::new()),
+                    self.load_gif_favorites(),
                 ])
             }
+            Ui::GifPage(page) => {
+                if let Some(p) = self.gif_picker.as_mut() {
+                    p.show(page);
+                }
+                self.request_gif_thumbs()
+            }
+            Ui::ToggleGifFavorite(gif) => self.toggle_gif_favorite(&gif),
             Ui::GifQuery(q) => match self.gif_picker.as_mut() {
                 Some(p) => delayed(
                     Done::GifSearchDue(p.set_query(q)),
@@ -708,6 +716,120 @@ impl App {
                 result: r.map_err(|e| e.user_message()),
             })
         })
+    }
+
+    /// Loads the saved GIFs (`GET /users/@me/settings-proto/2`) once per
+    /// session, when the picker first opens; saves keep the list current.
+    fn load_gif_favorites(&mut self) -> Task<Message> {
+        if self.gif_favorites.list.is_some() || self.cfg.mock {
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        let generation = self.gif_favorites.generation;
+        Task::perform(
+            async move {
+                let raw = rest
+                    .frecency_settings()
+                    .await
+                    .map_err(|e| e.user_message())?;
+                crate::net::frecency::favorite_gifs(&raw)
+                    .map_err(|_| "unreadable settings".to_owned())
+            },
+            move |result| {
+                Message::Done(Done::GifFavorites {
+                    generation,
+                    result,
+                    rollback: None,
+                })
+            },
+        )
+    }
+
+    /// The star on a GIF: saved at once, written with a read-modify-write
+    /// of the frecency settings, rolled back if that fails.
+    fn toggle_gif_favorite(&mut self, gif: &crate::net::model::Gif) -> Task<Message> {
+        let (change, generation, before) = self.gif_favorites.toggle(gif);
+        if self.cfg.mock {
+            let list = self.gif_favorites.list.clone().unwrap_or_default();
+            self.gif_favorites.finish(generation, Ok(list), None);
+            return Task::none();
+        }
+        let rest = self.rest.clone();
+        let lock = self.gif_favorites_lock.clone();
+        Task::perform(
+            async move {
+                // One save at a time, so two quick stars never overwrite
+                // each other's read.
+                let _guard = lock.lock().await;
+                rest.change_favorite_gif(&change)
+                    .await
+                    .map_err(|e| e.user_message())
+            },
+            move |result| {
+                Message::Done(Done::GifFavorites {
+                    generation,
+                    result,
+                    rollback: Some(before),
+                })
+            },
+        )
+    }
+
+    /// Fetches the stills of the GIFs the picker can show: its results and
+    /// the saved GIFs. Each is decoded and downscaled off the UI thread.
+    pub(super) fn request_gif_thumbs(&mut self) -> Task<Message> {
+        if self.cfg.mock {
+            return Task::none();
+        }
+        let Some(p) = &self.gif_picker else {
+            return Task::none();
+        };
+        let mut gifs: Vec<crate::net::model::Gif> = Vec::new();
+        let favorites = self.gif_favorites.items();
+        match (p.searching(), p.page) {
+            (false, super::gifs::GifPage::Home) => {
+                // The tile backgrounds.
+                gifs.extend(favorites.into_iter().take(1));
+                gifs.extend(p.results.iter().take(1).cloned());
+            }
+            (false, super::gifs::GifPage::Favorites) => gifs = favorites,
+            _ => gifs.extend(p.results.iter().cloned()),
+        }
+        let tasks: Vec<Task<Message>> = gifs
+            .into_iter()
+            .take(60)
+            .filter(|g| self.gif_thumbs.want(&g.url))
+            .map(|g| {
+                let rest = self.rest.clone();
+                let sources = super::gifs::thumb_sources(&g);
+                Task::perform(
+                    async move {
+                        for src in sources {
+                            match rest.fetch_picker_media(&src).await {
+                                Ok(bytes) => {
+                                    let still = tokio::task::spawn_blocking(move || {
+                                        super::gifs::thumbnail(&bytes)
+                                    })
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                    if still.is_some() {
+                                        return (g.url, still);
+                                    }
+                                    tracing::warn!(host = %media_host(&src), "GIF still did not decode");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(host = %media_host(&src), error = %e, "GIF still download failed");
+                                }
+                            }
+                        }
+                        (g.url, None)
+                    },
+                    |(key, image)| Message::Done(Done::GifThumb { key, image }),
+                )
+            })
+            .collect();
+        Task::batch(tasks)
     }
 
     // -- stickers -------------------------------------------------------------------
@@ -1352,4 +1474,12 @@ pub(super) fn mock_search(
         .take(SEARCH_PAGE as usize)
         .collect();
     SearchPage { total, messages }
+}
+
+/// The host of a media URL, for logs (never the path: it can name the GIF).
+fn media_host(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "?".into())
 }

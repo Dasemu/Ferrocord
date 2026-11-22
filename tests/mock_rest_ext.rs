@@ -283,3 +283,92 @@ async fn discovery_feed_search_categories_and_join() {
     assert_eq!(rec[3].method, "PUT");
     assert_eq!(body(&rec[3]), json!({"session_id": "s"}));
 }
+
+#[tokio::test]
+async fn favorite_gifs_read_modify_write_keeps_other_settings() {
+    use base64::Engine;
+    use ferrocord::net::frecency::{self, FavoriteChange, FavoriteGif, GifFormat};
+    use std::sync::Mutex;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let fav = |url: &str| FavoriteGif {
+        url: url.into(),
+        src: format!("https://media.tenor.com/{url}.mp4"),
+        format: GifFormat::Video,
+        width: 220,
+        height: 120,
+        order: 0,
+    };
+    // versions { client_version: 7 }, one favourite, then a field this
+    // client does not know (99 = 1).
+    let mut initial = vec![0x0a, 0x02, 0x08, 0x07];
+    initial.extend(frecency::apply_favorite(&[], &FavoriteChange::Add(fav("old"))).unwrap());
+    initial.extend([0x98, 0x06, 0x01]);
+    let stored = Arc::new(Mutex::new(initial.clone()));
+    let s = stored.clone();
+    let server = http(Arc::new(move |req, _| {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("GET", "/users/@me/settings-proto/2") => {
+                let cur = s.lock().unwrap().clone();
+                Response::json(200, json!({ "settings": b64.encode(cur) }))
+            }
+            ("PATCH", "/users/@me/settings-proto/2") => {
+                let v: Value = serde_json::from_str(&req.body).unwrap();
+                let bytes = b64.decode(v["settings"].as_str().unwrap()).unwrap();
+                *s.lock().unwrap() = bytes.clone();
+                Response::json(200, json!({ "settings": b64.encode(bytes) }))
+            }
+            _ => Response::json(404, json!({"message": "Unknown"})),
+        }
+    }))
+    .await;
+    let rest = client(&server.base());
+
+    let raw = rest.frecency_settings().await.unwrap();
+    assert_eq!(frecency::favorite_gifs(&raw).unwrap()[0].url, "old");
+
+    let after = rest
+        .change_favorite_gif(&FavoriteChange::Add(fav("new")))
+        .await
+        .unwrap();
+    assert_eq!(
+        after.iter().map(|g| g.url.as_str()).collect::<Vec<_>>(),
+        ["new", "old"]
+    );
+    let now = stored.lock().unwrap().clone();
+    // Versions first and the unknown field last, byte for byte.
+    assert_eq!(&now[..4], &initial[..4]);
+    assert_eq!(&now[now.len() - 3..], &[0x98, 0x06, 0x01]);
+
+    let after = rest
+        .change_favorite_gif(&FavoriteChange::Remove("old".into()))
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].url, "new");
+    assert_eq!(after[0].src, "https://media.tenor.com/new.mp4");
+
+    let rec = server.recorded();
+    let calls: Vec<_> = rec.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(calls, ["GET", "GET", "PATCH", "GET", "PATCH"]);
+    // The official client's auth header goes with every call.
+    assert!(rec.iter().all(|r| {
+        r.headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+    }));
+}
+
+#[tokio::test]
+async fn empty_frecency_settings_are_an_empty_list() {
+    let server = http(Arc::new(|req, _| match req.path.as_str() {
+        "/users/@me/settings-proto/2" => Response::json(200, json!({ "settings": "" })),
+        _ => Response::json(404, json!({"message": "Unknown"})),
+    }))
+    .await;
+    let raw = client(&server.base()).frecency_settings().await.unwrap();
+    assert!(
+        ferrocord::net::frecency::favorite_gifs(&raw)
+            .unwrap()
+            .is_empty()
+    );
+}

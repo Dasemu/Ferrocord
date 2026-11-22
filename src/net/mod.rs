@@ -4,6 +4,7 @@
 pub mod captcha;
 pub mod cosmetics;
 pub mod extras;
+pub mod frecency;
 pub mod gateway;
 pub mod identity;
 pub mod model;
