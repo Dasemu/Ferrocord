@@ -2001,6 +2001,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser",
  "unicode-segmentation",
  "url",
  "vp8-decoder",
