@@ -65,12 +65,17 @@ pub enum Ui {
     /// A link whose visible text differs from its target: ask first.
     ConfirmLink(String),
     CancelLink,
+    /// Shows an image or GIF full-window.
+    OpenLightbox(super::lightbox::Lightbox),
+    CloseLightbox,
     /// The "X" on a message's embeds: sets `SUPPRESS_EMBEDS` on the message.
     SuppressEmbeds(MessageId),
     Logout,
     WindowFocus(bool),
     WindowOpened,
     Tick,
+    /// The toast set at this generation has been shown long enough.
+    ToastExpired(u64),
     // -- replies, jumps
     StartReply(MessageId),
     CancelReply,

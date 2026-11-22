@@ -15,6 +15,7 @@ pub mod gifs;
 pub mod images;
 pub mod input;
 pub mod jump;
+pub mod lightbox;
 pub mod markdown;
 pub mod media_anim;
 pub mod members;
@@ -65,6 +66,8 @@ use crate::ui::theme::FerroTheme;
 const TYPING_INTERVAL_MS: u64 = 8_000;
 /// Messages fetched per history page.
 const PAGE: u8 = 50;
+/// How long an error toast stays in the top banner.
+pub const TOAST_TTL: Duration = Duration::from_secs(5);
 
 /// Parsed markdown keyed by (message id, content hash).
 type MarkdownCache = HashMap<(MessageId, u64), std::rc::Rc<Vec<markdown::Block>>>;
@@ -153,8 +156,13 @@ pub struct App {
     /// Message flashed after a jump.
     pub highlight: Option<MessageId>,
     pub toast: Option<String>,
+    /// Bumped whenever `toast` changes, so that only the latest toast's
+    /// timer clears it.
+    toast_generation: u64,
     /// Masked link waiting for confirmation ("Leaving Ferrocord").
     pub pending_link: Option<String>,
+    /// Image shown full-window (a click on a chat image or GIF).
+    pub lightbox: Option<lightbox::Lightbox>,
     boot_at: Instant,
     first_frame_logged: bool,
     fonts_ready: bool,
@@ -270,7 +278,9 @@ impl App {
             session_id: String::new(),
             highlight: None,
             toast: None,
+            toast_generation: 0,
             pending_link: None,
+            lightbox: None,
             boot_at,
             first_frame_logged: false,
             fonts_ready: false,
@@ -785,12 +795,17 @@ impl App {
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
+        let toast_before = self.toast.clone();
         let task = match msg {
             Message::Ui(u) => self.update_ui(u),
             Message::Net(ev) => self.on_net(ev),
             Message::Done(d) => self.on_done(d),
             Message::Tray(ev) => self.on_tray(ev),
             Message::Voice(ev) => self.on_voice_event(ev),
+        };
+        let task = match self.toast_timer(toast_before) {
+            Some(t) => Task::batch([task, t]),
+            None => task,
         };
         self.sync_tray();
         let task = if self.video.is_some() {
@@ -810,6 +825,23 @@ impl App {
             );
         }
         task
+    }
+
+    /// Starts the hide timer when the toast changed (or was set again)
+    /// during this update. Every toast hides itself after [`TOAST_TTL`].
+    fn toast_timer(&mut self, before: Option<String>) -> Option<Task<Message>> {
+        if self.toast == before {
+            return None;
+        }
+        self.toast_generation += 1;
+        self.toast.as_ref()?;
+        let generation = self.toast_generation;
+        // `async` keeps the sleep lazy: it is created on the runtime, not
+        // here (tests drive `update` without one).
+        Some(Task::perform(
+            async { tokio::time::sleep(TOAST_TTL).await },
+            move |()| Message::Ui(Ui::ToastExpired(generation)),
+        ))
     }
 
     // -- UI -------------------------------------------------------------------
@@ -944,6 +976,14 @@ impl App {
                 self.pending_link = None;
                 Task::none()
             }
+            Ui::OpenLightbox(lb) => {
+                self.lightbox = Some(lb);
+                self.request_images()
+            }
+            Ui::CloseLightbox => {
+                self.lightbox = None;
+                Task::none()
+            }
             Ui::OpenUrl(url) => {
                 self.pending_link = None;
                 if !(url.starts_with("https://") || url.starts_with("http://")) || self.cfg.mock {
@@ -977,6 +1017,12 @@ impl App {
             | Ui::ToggleAutostart => self.update_background(u),
             Ui::Tick => {
                 self.chat.prune_typing(now_ms());
+                Task::none()
+            }
+            Ui::ToastExpired(generation) => {
+                if generation == self.toast_generation {
+                    self.toast = None;
+                }
                 Task::none()
             }
             Ui::OpenProfile { .. }
@@ -1820,7 +1866,14 @@ impl App {
             return profiles;
         }
         let anims = self.request_anims();
-        let mut urls: Vec<String> = self.cosmetic_urls();
+        // The full-window viewer's larger copy goes first: it was asked for.
+        let mut urls: Vec<String> = self
+            .lightbox
+            .as_ref()
+            .and_then(|l| l.full.clone())
+            .into_iter()
+            .collect();
+        urls.extend(self.cosmetic_urls());
         for g in &self.chat.guilds {
             if let Some(u) = self.rest.guild_icon_url(g, 96) {
                 urls.push(u);

@@ -283,10 +283,9 @@ Measurements of the official dark theme reproduced in `ui/theme.rs`:
 | User panel | 52 px, `#232428` |
 | Accent | `#5865f2`, links `#00a8fc` |
 
-No style uses `container::Style::shadow`: tiny-skia draws a quad's shadow
-unclipped by the damage region, so on partial redraws (scrolling, hover; the
-norm on Windows) it piles up over unrepainted areas until they turn black.
-Header "shadows" are a gradient on the bar itself; popups rely on their border.
+Shadows are safe with ferroiced (tiny-skia clips them to the damage region), but
+no style uses `container::Style::shadow`: header "shadows" are a gradient on the
+bar itself and popups rely on their border, as in the official client.
 
 Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
@@ -319,7 +318,7 @@ pure parsing/payloads live in `net/extras.rs`, calls in `net/rest/ext.rs`.
 | Inbox | `GET /users/@me/mentions?limit=25&roles=true&everyone=true[&before=][&guild_id=]` (Mentions tab, "This Server" filter, load more). |
 | Help | opens `https://support.discord.com/` in the browser. |
 | Search | `GET /guilds/{id}/messages/search` / `/channels/{id}/messages/search`; `from:name` -> `author_id`, `has:image\|video\|sound\|file\|link\|embed\|sticker` -> `has`, `in:#channel` -> `channel_id` (servers only). Names resolve against known users/channels; an unknown one is an error shown in the panel. |
-| Create server | `POST /guilds {name, icon?, channels: [], system_channel_id: null}`; icon is a PNG/JPEG/GIF/WebP `data:` URI (4 MB cap, no cropping). No `guild_template_code` is sent (see PR: template codes are unverified). |
+| Create server | `POST /guilds {name, icon: uri|null, channels: [], system_channel_id: null, guild_template_code: "2TffvPucqHkN"}`; icon is a PNG/JPEG/GIF/WebP `data:` URI (4 MB cap, no cropping). The template code is Discord's "Blank Server" (what the official client's "Create My Own" sends); without it user accounts get HTTP 403. |
 | Join | `GET /invites/{code}?with_counts=true&with_expiration=true` (preview card) then `POST /invites/{code} {session_id}`. A 400 body with `captcha_key` becomes `Error::CaptchaRequired`: a clear message, one attempt, **no solving**. |
 | Discover | `GET /discovery/categories`, `GET /discoverable-guilds?offset&limit[&category_id]`, `GET /discovery/search?query&offset&limit[&category_id]`, join with `PUT /guilds/{id}/members/@me {session_id}`. "Details" is a card from the listing (no lurking). Endpoint shapes are tolerant (`guilds`/`hits`/array). |
 | Folders | READY `user_settings.guild_folders` (`id`, `name`, `color`, `guild_ids`; `id: null` = single server). Saved with `PATCH /users/@me/settings {guild_folders: [...]}` (the same legacy settings endpoint that stores the status). Ferrocord identifies with `capabilities: 0`, so the server keeps sending legacy JSON settings; the official client's `PATCH /users/@me/settings-proto/1` (base64 protobuf `GuildFolders`) would need the proto capability and an encoder, and is not implemented. `USER_SETTINGS_UPDATE` with `guild_folders` keeps other sessions in sync; a failed save rolls back. The list is cached in `meta("guild_folders")`. |
@@ -512,7 +511,8 @@ process ends, and the file is deleted. When a video plays to the end the
 helper is released at once (RAM returned); replay starts a new helper on the
 file already on disk.
 
-**Helper process.** `ferrocord-player <file>` (installed next to `ferrocord`)
+**Helper process.** `ferrocord-player <file>` (installed next to `ferrocord`;
+`ferrocord-player.exe` on Windows, spawned with `CREATE_NO_WINDOW`)
 demuxes and decodes; the app never links a codec. The container is chosen by
 the file's first bytes, not its name.
 

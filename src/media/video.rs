@@ -139,10 +139,29 @@ impl Sink for Player {
     }
 }
 
+/// File name of the helper executable (`ferrocord-player.exe` on Windows).
+pub fn helper_file_name() -> String {
+    format!("{HELPER_NAME}{}", std::env::consts::EXE_SUFFIX)
+}
+
 /// The helper inside `dir`, if it is there.
 pub fn helper_in(dir: &Path) -> Option<PathBuf> {
-    let p = dir.join(HELPER_NAME);
+    let p = dir.join(helper_file_name());
     p.is_file().then_some(p)
+}
+
+/// A command for `helper` that never opens a console window: the helper is
+/// a console program and the release app has none to share on Windows.
+pub fn helper_command(helper: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(helper);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// The helper executable: next to this binary, else on `PATH`.
@@ -159,9 +178,7 @@ pub fn helper_path() -> Option<PathBuf> {
         }
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(HELPER_NAME))
-        .find(|p| p.is_file())
+    std::env::split_paths(&path).find_map(|d| helper_in(&d))
 }
 
 /// A running helper. Dropping it stops playback and frees the decoder.
@@ -182,7 +199,7 @@ pub fn spawn_with(
     helper: &Path,
     file: &Path,
 ) -> Result<(Player, mpsc::UnboundedReceiver<Event>), Failure> {
-    let mut child = Command::new(helper)
+    let mut child = helper_command(helper)
         .arg(file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
