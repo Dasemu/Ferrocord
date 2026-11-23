@@ -255,6 +255,48 @@ pub fn parse_avcc(body: &[u8]) -> Option<Avcc> {
     Some(Avcc { len_size, params })
 }
 
+/// Parses an `hvcC` body (ISO 14496-15 8.3.3): the NAL length size and
+/// every parameter set (VPS, SPS, PPS, SEI arrays) in stored order. `None`
+/// when it is malformed.
+pub fn parse_hvcc(body: &[u8]) -> Option<Avcc> {
+    let mut r = Rd::new(body);
+    // version, profile (1 + 4 + 6), level, segmentation (2), parallelism,
+    // chroma format, luma / chroma depth, frame rate (2).
+    r.skip(21)?;
+    let len_size = usize::from(r.u8()? & 3) + 1;
+    let arrays = r.u8()?;
+    let mut params = Vec::new();
+    for _ in 0..arrays {
+        let Some(_kind) = r.u8() else { break };
+        let Some(n) = r.u16() else { break };
+        for _ in 0..n {
+            let Some(len) = r.u16() else { break };
+            let Some(b) = r.bytes(usize::from(len)) else {
+                break;
+            };
+            params.push(b.to_vec());
+        }
+    }
+    Some(Avcc { len_size, params })
+}
+
+/// The configuration OBUs (sequence header) of an `av1C` / Matroska
+/// `V_AV1` private data: everything after its 4-byte header.
+pub fn av1c_obus(body: &[u8]) -> Option<Vec<u8>> {
+    // marker (1) + version (7 bits) must be 0x81.
+    (body.first() == Some(&0x81)).then(|| body.get(4..).unwrap_or_default().to_vec())
+}
+
+/// Parameter sets as an Annex B stream (start code before each).
+pub fn annexb_params(params: &[Vec<u8>]) -> Vec<u8> {
+    let mut header = Vec::new();
+    for nal in params {
+        header.extend_from_slice(&[0, 0, 0, 1]);
+        header.extend_from_slice(nal);
+    }
+    header
+}
+
 /// The first sample description of a track.
 #[derive(Debug, Clone, Default)]
 struct Entry {
@@ -262,6 +304,8 @@ struct Entry {
     width: u16,
     height: u16,
     avcc: Option<Avcc>,
+    hvcc: Option<Avcc>,
+    av1c: Option<Vec<u8>>,
 }
 
 fn parse_stsd(body: &[u8]) -> Option<Entry> {
@@ -280,11 +324,15 @@ fn parse_stsd(body: &[u8]) -> Option<Entry> {
     r.skip(70 - 20)?;
     let children = r.rest();
     let avcc = child(children, b"avcC").and_then(parse_avcc);
+    let hvcc = child(children, b"hvcC").and_then(parse_hvcc);
+    let av1c = child(children, b"av1C").and_then(av1c_obus);
     Some(Entry {
         fourcc,
         width,
         height,
         avcc,
+        hvcc,
+        av1c,
     })
 }
 
@@ -787,8 +835,10 @@ fn codec_of(fourcc: &[u8; 4]) -> Result<Codec, TrackError> {
         b"avc1" | b"avc2" | b"avc3" | b"avc4" => Ok(Codec::H264),
         b"vp09" => Ok(Codec::Vp9),
         b"vp08" => Ok(Codec::Vp8),
-        b"hvc1" | b"hev1" | b"dvh1" | b"dvhe" => unsupported("H.265 (HEVC)"),
-        b"av01" => unsupported("AV1"),
+        // Dolby Vision in `dvh1` / `dvhe` is H.265 underneath (the
+        // official client decodes the base layer the same way).
+        b"hvc1" | b"hev1" | b"dvh1" | b"dvhe" => Ok(Codec::Hevc),
+        b"av01" => Ok(Codec::Av1),
         b"mp4v" => unsupported("MPEG-4 Part 2 video"),
         b"encv" => unsupported("encrypted (DRM) video"),
         b"apcn" | b"apch" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => unsupported("Apple ProRes"),
@@ -810,7 +860,7 @@ pub struct Mp4Video {
     reader: BufReader<File>,
     /// `(offset, size)` per sample, in decode order.
     samples: Vec<(u64, u32)>,
-    /// NAL length size for H.264 (0 for codecs that are not length-framed).
+    /// NAL length size for H.264 / H.265 (0 for codecs that are not length-framed).
     len_size: usize,
     /// Per sample, in decode order.
     times: Vec<SampleTime>,
@@ -851,19 +901,21 @@ impl Mp4Video {
         };
         let codec = codec_of(&entry.fourcc)?;
         let (header, len_size) = match codec {
-            Codec::H264 => {
-                let Some(avcc) = entry.avcc.as_ref() else {
-                    return Err(TrackError::Unsupported(
-                        "H.264 without its configuration".into(),
-                    ));
+            Codec::H264 | Codec::Hevc => {
+                let config = if codec == Codec::H264 {
+                    entry.avcc.as_ref()
+                } else {
+                    entry.hvcc.as_ref()
                 };
-                let mut header = Vec::new();
-                for nal in &avcc.params {
-                    header.extend_from_slice(&[0, 0, 0, 1]);
-                    header.extend_from_slice(nal);
-                }
-                (header, avcc.len_size)
+                let Some(config) = config else {
+                    return Err(TrackError::Unsupported(format!(
+                        "{} without its configuration",
+                        codec.name()
+                    )));
+                };
+                (annexb_params(&config.params), config.len_size)
             }
+            Codec::Av1 => (entry.av1c.clone().unwrap_or_default(), 0),
             Codec::Vp8 | Codec::Vp9 => (Vec::new(), 0),
         };
         let [a, b, c, d] = track.matrix;
@@ -894,7 +946,7 @@ impl Mp4Video {
         }))
     }
 
-    /// Sample `i` (0-based) appended to `out` (Annex B for H.264).
+    /// Sample `i` (0-based) appended to `out` (Annex B for H.264 / H.265).
     fn read(&mut self, i: usize, out: &mut Vec<u8>) -> Result<(), String> {
         let &(offset, size) = self.samples.get(i).ok_or("sample missing")?;
         let size = size as usize;
@@ -1058,16 +1110,57 @@ mod tests {
     }
 
     #[test]
+    fn hvcc_yields_every_parameter_set_and_the_length_size() {
+        let mut b = vec![1u8; 21];
+        b.push(0xF0 | 3); // lengthSizeMinusOne = 3
+        b.push(3); // arrays
+        for (kind, nal) in [(32u8, &[0x40u8, 1][..]), (33, &[0x42, 1, 2]), (34, &[0x44])] {
+            b.push(0x80 | kind);
+            b.extend_from_slice(&1u16.to_be_bytes());
+            b.extend_from_slice(&(nal.len() as u16).to_be_bytes());
+            b.extend_from_slice(nal);
+        }
+        let h = parse_hvcc(&b).unwrap();
+        assert_eq!(h.len_size, 4);
+        assert_eq!(h.params, vec![vec![0x40, 1], vec![0x42, 1, 2], vec![0x44]]);
+        assert_eq!(
+            annexb_params(&h.params),
+            [
+                0, 0, 0, 1, 0x40, 1, 0, 0, 0, 1, 0x42, 1, 2, 0, 0, 0, 1, 0x44
+            ]
+        );
+        // Truncated anywhere: never panics, keeps what is whole.
+        for n in 0..b.len() {
+            let _ = parse_hvcc(&b[..n]);
+        }
+        assert!(parse_hvcc(&b[..10]).is_none());
+    }
+
+    #[test]
+    fn av1c_keeps_the_configuration_obus() {
+        assert_eq!(
+            av1c_obus(&[0x81, 0, 0x0C, 0, 0x0A, 1, 2]),
+            Some(vec![0x0A, 1, 2])
+        );
+        assert_eq!(av1c_obus(&[0x81, 0, 0x0C, 0]), Some(vec![]));
+        assert_eq!(av1c_obus(&[0x81]), Some(vec![]));
+        assert_eq!(av1c_obus(&[0x01, 0, 0, 0]), None);
+        assert_eq!(av1c_obus(&[]), None);
+    }
+
+    #[test]
     fn codecs_are_named_from_the_sample_description() {
         assert_eq!(codec_of(b"avc1"), Ok(Codec::H264));
         assert_eq!(codec_of(b"avc3"), Ok(Codec::H264));
         assert_eq!(codec_of(b"vp09"), Ok(Codec::Vp9));
         for hevc in [b"hvc1", b"hev1", b"dvh1"] {
-            assert_eq!(
-                codec_of(hevc),
-                Err(TrackError::Unsupported("H.265 (HEVC)".into()))
-            );
+            assert_eq!(codec_of(hevc), Ok(Codec::Hevc));
         }
+        assert_eq!(codec_of(b"av01"), Ok(Codec::Av1));
+        assert_eq!(
+            codec_of(b"apch"),
+            Err(TrackError::Unsupported("Apple ProRes".into()))
+        );
         let Err(TrackError::Unsupported(s)) = codec_of(b"x/\n\0") else {
             panic!()
         };

@@ -43,7 +43,19 @@ jobs:
       - name: cargo clippy -- -D warnings
         run: cargo clippy --all-targets -- -D warnings
 
+      # The video helper's platform decoders: the system FFmpeg, opened with
+      # dlopen at run time. Install the newest libavcodec the distribution has
+      # so the tests exercise that path; a later step removes it again.
+      - name: Install libavcodec (platform decoder tests)
+        run: |
+          pkg=$(apt-cache search --names-only '^libavcodec[0-9]+$' | awk '{print $1}' | sort -V | tail -1)
+          echo "installing $pkg"
+          sudo apt-get install -y --no-install-recommends "$pkg"
+
       - name: cargo test
+        env:
+          # The platform decoder tests fail instead of skipping.
+          FERROCORD_EXPECT_PLATFORM: "1"
         run: cargo test --all-targets
 
       # The video helper must run on a machine with no codec packages: build it
@@ -55,6 +67,22 @@ jobs:
           cargo build --bin ferrocord-player --target-dir target/helper
           .github/scripts/check-helper-libs.sh target/helper/debug/ferrocord-player
           if ldd target/debug/ferrocord | grep -Eqi 'openh264|stdc\+\+|opus|vpx'; then echo "::error::ferrocord links a codec library"; exit 1; fi
+          if ldd target/helper/debug/ferrocord-player target/debug/ferrocord | grep -Eqi 'avcodec|avutil|avformat|swscale'; then echo "::error::a binary links FFmpeg (it must be opened at run time)"; exit 1; fi
+
+      # Without any FFmpeg the helper still starts, plays what its built-in
+      # decoders handle and names the package for the rest.
+      - name: Video helper without libavcodec
+        run: |
+          # Remove whichever packages own the library (libavcodec62,
+          # libavcodec-extra62, ...), then make sure no copy is left.
+          pkgs=$(dpkg -S 'libavcodec.so.*' 2>/dev/null | cut -d: -f1 | tr ',' '\n' | sort -u | xargs)
+          echo "removing: $pkgs"
+          sudo apt-get remove -y $pkgs
+          sudo ldconfig
+          if ldconfig -p | grep -q 'libavcodec\.so'; then ldconfig -p | grep libavcodec; echo "::error::libavcodec is still installed"; exit 1; fi
+          target/helper/debug/ferrocord-player --backends | tee backends.txt
+          grep -q '^platform none' backends.txt
+          cargo test --test video_player
 
       # Only the login helper may link the browser engine (WebKitGTK).
       - name: Only ferrocord-login links WebKitGTK
@@ -90,4 +118,18 @@ jobs:
       - name: cargo build
         run: cargo build --all-targets
       - name: cargo test
+        env:
+          # Media Foundation's H.264 and AAC decoders must be found and work.
+          FERROCORD_EXPECT_PLATFORM: "1"
         run: cargo test --all-targets
+      # mfplat.dll is loaded at run time: Windows N without the Media Feature
+      # Pack must still start the helper.
+      - name: ferrocord-player does not import Media Foundation
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $deps = & $dumpbin.FullName /dependents target\debug\ferrocord-player.exe | Out-String
+          Write-Output $deps
+          if ($deps -match '(?i)mfplat|mfreadwrite|mf\.dll') { Write-Error "ferrocord-player imports Media Foundation"; exit 1 }
+          target\debug\ferrocord-player.exe --backends

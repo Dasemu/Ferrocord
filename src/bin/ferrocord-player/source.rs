@@ -24,6 +24,10 @@ pub enum Codec {
     Vp8,
     /// VP9 (pure Rust).
     Vp9,
+    /// H.265 / HEVC: platform decoders only (system FFmpeg, Media Foundation).
+    Hevc,
+    /// AV1: platform decoders only.
+    Av1,
 }
 
 impl Codec {
@@ -33,6 +37,8 @@ impl Codec {
             Codec::H264 => "H.264",
             Codec::Vp8 => "VP8",
             Codec::Vp9 => "VP9",
+            Codec::Hevc => "H.265 (HEVC)",
+            Codec::Av1 => "AV1",
         }
     }
 }
@@ -48,7 +54,8 @@ pub struct VideoInfo {
     pub height: usize,
     /// Display rotation from the container.
     pub rotation: Rotation,
-    /// H.264 SPS + PPS as Annex B (fed again after every decoder reset).
+    /// Decoder configuration fed again after every decoder reset: H.264
+    /// SPS + PPS / H.265 VPS + SPS + PPS as Annex B, AV1 configuration OBUs.
     pub header: Vec<u8>,
     /// Container duration in ms (0 = unknown).
     pub duration_ms: u64,
@@ -70,7 +77,7 @@ pub struct Packet {
     pub pts_ms: i64,
     /// Decoding can start here.
     pub key: bool,
-    /// Bitstream (Annex B for H.264, raw frame for VP8 / VP9).
+    /// Bitstream (Annex B for H.264 / H.265, raw frame for VP8 / VP9 / AV1).
     pub data: Vec<u8>,
 }
 

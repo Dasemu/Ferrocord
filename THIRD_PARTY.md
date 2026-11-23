@@ -22,10 +22,20 @@ Video playback (the `ferrocord-player` helper only; the app links none of it):
 | `symphonia` (aac, isomp4) | MPL-2.0 | AAC decoder and MP4 audio demuxer (the video track is read by the helper's own MP4 reader). Symphonia is MPL-2.0: file-level copyleft, unmodified here. |
 | libopus, via `audiopus_sys` | BSD-3-Clause | Statically linked into the helper. |
 | `cpal` | Apache-2.0 | Sound output (links ALSA on Linux). |
+| `libloading` | ISC | Opens the system FFmpeg (Linux) and `mfplat.dll` (Windows) at run time. |
+| `windows` | MIT OR Apache-2.0 | Media Foundation COM bindings (Windows only). |
+
+Platform decoders are **not bundled**. When the system has them, the helper
+uses the system FFmpeg libraries on Linux (`libavcodec`/`libavutil`, LGPL or
+GPL depending on the distribution's build, loaded with `dlopen` at run time,
+never linked) and Media Foundation on Windows (an OS component; H.265 and AV1
+come from Microsoft Store extensions the user installs). Ferrocord ships no
+FFmpeg code, no H.265 or AV1 decoder and no licence-encumbered codec binary.
 
 Patents: H.264 and AAC are patent-encumbered formats. Decoding them in
 software is what every open-source player does; Ferrocord ships source and a
-binary built from it, with no separate licence. If this matters for your use,
+binary built from it, with no separate licence. H.265 and AV1 are decoded
+only by what the operating system provides (see above), as browsers do. If this matters for your use,
 the helper can be left out (`--no-default-features`) and the app then offers
 "Open externally" for videos.
 
