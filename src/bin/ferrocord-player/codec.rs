@@ -10,6 +10,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
+use super::h264::{self, Sps};
 use super::source::{Codec, Packet, VideoInfo};
 use super::yuv::{self, Matrix, Planes, Rotation};
 
@@ -38,6 +39,16 @@ pub trait VideoDecoder {
     fn flush(&mut self, out: &mut Pictures);
     /// Starts over, as for a fresh stream (after a seek).
     fn reset(&mut self) -> Result<(), String>;
+    /// The stream is in a format this decoder cannot handle at all (named
+    /// for the user), as far as the headers seen so far tell.
+    fn unsupported(&self) -> Option<String> {
+        None
+    }
+    /// Why a stream that went through the decoder gave no picture, when
+    /// the decoder can tell.
+    fn no_picture_reason(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The decoder for `info.codec`.
@@ -83,6 +94,16 @@ pub struct H264 {
     header: Vec<u8>,
     pending: PendingTimes,
     geo: Geometry,
+    /// The first parameter set OpenH264 cannot decode, from the container
+    /// header or in band.
+    refused: Option<String>,
+    /// An IDR picture went into the decoder since the last reset.
+    saw_idr: bool,
+}
+
+/// The first SPS in `annexb` that OpenH264 refuses, named.
+fn refused_sps(annexb: &[u8]) -> Option<String> {
+    h264::sps_units(annexb).find_map(|s: Sps| s.unsupported())
 }
 
 fn new_h264() -> Result<H264Decoder, String> {
@@ -122,15 +143,24 @@ impl H264 {
         let _ = decoder.decode(&header);
         Ok(Self {
             decoder,
+            refused: refused_sps(&header),
             header,
             pending: PendingTimes::default(),
             geo,
+            saw_idr: false,
         })
     }
 }
 
 impl VideoDecoder for H264 {
     fn decode(&mut self, p: &Packet, out: &mut Pictures) -> Result<(), String> {
+        if p.key {
+            if self.refused.is_none() {
+                // Parameter sets sent in band (`avc3`, raw streams).
+                self.refused = refused_sps(&p.data);
+            }
+            self.saw_idr = self.saw_idr || h264::has_idr(&p.data);
+        }
         self.pending.push(p.pts_ms);
         match self.decoder.decode(&p.data) {
             Ok(Some(pic)) => {
@@ -159,7 +189,24 @@ impl VideoDecoder for H264 {
         self.decoder = new_h264()?;
         let _ = self.decoder.decode(&self.header);
         self.pending.clear();
+        self.saw_idr = false;
         Ok(())
+    }
+
+    fn unsupported(&self) -> Option<String> {
+        self.refused.clone()
+    }
+
+    fn no_picture_reason(&self) -> Option<String> {
+        // OpenH264 (with concealment off, as the crate configures it, and
+        // also with its concealment on) shows nothing until an IDR picture:
+        // a stream whose keyframes are all recovery-point I-frames (an
+        // open-GOP clip cut without re-encoding) never shows a picture.
+        (!self.saw_idr).then(|| {
+            "the H.264 stream has no IDR keyframe to start from (it was probably cut \
+             without re-encoding)"
+                .into()
+        })
     }
 }
 

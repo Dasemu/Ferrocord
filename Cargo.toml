@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -15,11 +15,11 @@ default = ["video", "web-login"]
 # discord.com/login in the system webview (WebView2 / WebKitGTK 4.1) so
 # Discord can show its own captcha. Only the helper links the webview.
 web-login = ["dep:wry", "dep:tao"]
-# In-chat video playback: the `ferrocord-player` helper process decodes MP4
-# (H.264 + AAC) and WebM (VP8/VP9 + Opus) with statically linked / pure-Rust
+# In-chat video playback: the `ferrocord-player` helper process decodes MP4 /
+# QuickTime (H.264 or VP9 + AAC) and WebM / Matroska (VP8/VP9/H.264 + Opus) with statically linked / pure-Rust
 # decoders; no system codec libraries. The main binary links none of them.
 video = [
-    "dep:openh264", "dep:mp4", "dep:symphonia", "dep:matroska-demuxer",
+    "dep:openh264", "dep:symphonia", "dep:matroska-demuxer",
     "dep:rusty_vp9", "dep:vp8-decoder",
 ]
 
@@ -102,8 +102,6 @@ tao = { version = "0.37", optional = true }
 # links none of these: they sit behind the `video` feature the helper requires.
 # H.264 decoder: Cisco's BSD OpenH264, built from source and linked statically (Baseline/Main/High, B-frames).
 openh264 = { version = "0.9", optional = true }
-# Pure-Rust MP4 demuxer for the H.264 track (sample table, avcC, rotation).
-mp4 = { version = "0.14", optional = true }
 # Pure-Rust AAC decoder + MP4 audio demuxer.
 symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"], optional = true }
 # Pure-Rust WebM/Matroska demuxer (VP8/VP9 video and Opus audio tracks).
