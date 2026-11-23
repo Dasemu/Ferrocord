@@ -19,7 +19,7 @@ Video playback (the `ferrocord-player` helper only; the app links none of it):
 | `rusty_vp9` | Apache-2.0 | Pure-Rust VP9 decoder. |
 | `vp8-decoder` | (MIT OR Apache-2.0) AND BSD-3-Clause | Pure-Rust VP8 decoder (RFC 6386 reference code derived parts). |
 | `matroska-demuxer` | Zlib OR MIT OR Apache-2.0 | WebM / Matroska demuxer. |
-| `mp4`, `symphonia` (aac, isomp4) | MIT / MPL-2.0 | MP4 demuxer and AAC decoder. Symphonia is MPL-2.0: file-level copyleft, unmodified here. |
+| `symphonia` (aac, isomp4) | MPL-2.0 | AAC decoder and MP4 audio demuxer (the video track is read by the helper's own MP4 reader). Symphonia is MPL-2.0: file-level copyleft, unmodified here. |
 | libopus, via `audiopus_sys` | BSD-3-Clause | Statically linked into the helper. |
 | `cpal` | Apache-2.0 | Sound output (links ALSA on Linux). |
 
