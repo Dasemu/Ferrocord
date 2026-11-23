@@ -351,9 +351,11 @@ fn chunk_layout(stbl: &[u8]) -> Option<Vec<(u64, u32)>> {
                 .collect(),
             8 => data.iter().take(count).map(|&b| u32::from(b)).collect(),
             16 => data
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .take(count)
-                .map(|c| u32::from(u16::from_be_bytes([c[0], c[1]])))
+                .map(|c| u32::from(u16::from_be_bytes(*c)))
                 .collect(),
             _ => return None,
         }
