@@ -3038,7 +3038,7 @@ dependencies = [
 [[package]]
 name = "iced"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_core",
  "iced_debug",
@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -3071,7 +3071,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -3081,7 +3081,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "futures",
  "iced_core",
@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -3115,7 +3115,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -3124,7 +3124,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -3136,7 +3136,7 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "bytes",
  "iced_core",
@@ -3148,7 +3148,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -3165,7 +3165,7 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -3185,7 +3185,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.14.2"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_renderer",
  "log",
@@ -3198,7 +3198,7 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.14.1"
-source = "git+https://github.com/Kartudev/ferroiced?branch=main#3d7f8a1aebb3d5b3b44c4f309df867e1142881fb"
+source = "git+https://github.com/Kartudev/ferroiced?branch=main#3becf973141bdb4873ea2b9d8acab2bb603294ae"
 dependencies = [
  "iced_debug",
  "iced_program",
