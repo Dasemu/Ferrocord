@@ -1,6 +1,10 @@
 //! The video helper against real clips (generated with ffmpeg and
 //! committed: 128x72, 2 s, H.264 High with B-frames + AAC in MP4, and VP9 /
-//! VP8 + Opus in WebM), hostile files, and the app-side `Player` against
+//! VP8 + Opus in WebM; plus the layouts real recorders write: fragmented
+//! MP4, QuickTime `.mov`, `avc3` with in-band parameter sets, faststart
+//! Baseline, H.264 in Matroska; and a few frames each of formats the
+//! helper cannot decode, which must be named), hostile files, and the
+//! app-side `Player` against
 //! scripted fake helpers (shell scripts: Unix only). No network, no
 //! window: frames are just bytes.
 
@@ -129,6 +133,72 @@ async fn h264_high_with_aac_in_mp4_plays() {
     play_through(&clip("high_aac.mp4")).await;
 }
 
+/// A fragmented MP4 (`moof` fragments, empty `moov` sample table), as
+/// written by browsers, OBS and other recorders that must survive a crash.
+/// It used to fail with "no picture could be decoded from the H.264
+/// stream": the sample table the old demuxer read was empty.
+#[tokio::test]
+async fn fragmented_mp4_plays() {
+    play_through(&clip("h264_frag_aac.mp4")).await;
+}
+
+/// QuickTime `.mov` (iPhone, macOS): its sound description used to make the
+/// whole file "not a playable MP4 file".
+#[tokio::test]
+async fn quicktime_mov_plays() {
+    play_through(&clip("h264_aac.mov")).await;
+}
+
+#[tokio::test]
+async fn faststart_baseline_mp4_plays() {
+    play_through(&clip("h264_baseline_faststart.mp4")).await;
+}
+
+/// `avc3`: parameter sets in band, repeated before each keyframe.
+#[tokio::test]
+async fn avc3_with_in_band_parameter_sets_plays() {
+    play_through(&clip("h264_avc3.mp4")).await;
+}
+
+/// OBS's default container: H.264 in Matroska.
+#[tokio::test]
+async fn h264_in_matroska_plays() {
+    play_through(&clip("h264_opus.mkv")).await;
+}
+
+/// Formats OpenH264 cannot decode, and HEVC, are named instead of the old
+/// "no picture could be decoded from the H.264 stream".
+#[tokio::test]
+async fn undecodable_formats_are_named_honestly() {
+    for (name, expect) in [
+        ("hevc_main10.mov", "H.265 (HEVC)"),
+        ("h264_high10.mp4", "10-bit H.264"),
+        ("h264_444.mp4", "H.264 with 4:4:4 colour"),
+        ("h264_interlaced.mp4", "interlaced H.264"),
+    ] {
+        let (_player, mut rx) = spawn_with(Path::new(HELPER), &clip(name)).expect("spawn");
+        match next(&mut rx).await {
+            Some(Event::Failed(f @ Failure::MissingCodec(_))) => {
+                let m = f.user_message();
+                assert!(m.contains(expect), "{name}: {m}");
+                assert!(m.contains("Open externally"), "{name}: {m}");
+            }
+            other => panic!("{name}: expected a named codec, got {other:?}"),
+        }
+    }
+}
+
+/// An open-GOP clip cut without re-encoding: no IDR picture at all, which
+/// OpenH264 needs to start. The message says so.
+#[tokio::test]
+async fn a_stream_without_an_idr_keyframe_says_so() {
+    let (_player, mut rx) = spawn_with(Path::new(HELPER), &clip("h264_no_idr.mp4")).expect("spawn");
+    match next(&mut rx).await {
+        Some(Event::Failed(Failure::Broken(why))) => assert!(why.contains("IDR"), "{why}"),
+        other => panic!("expected a broken stream, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn vp9_with_opus_in_webm_plays() {
     play_through(&clip("vp9_opus.webm")).await;
@@ -154,7 +224,16 @@ const GIFV: FrameSpec = FrameSpec {
 
 #[test]
 fn frames_mode_decodes_every_supported_codec() {
-    for name in ["high_aac.mp4", "vp9_opus.webm", "vp8_opus.webm"] {
+    for name in [
+        "high_aac.mp4",
+        "vp9_opus.webm",
+        "vp8_opus.webm",
+        "h264_frag_aac.mp4",
+        "h264_aac.mov",
+        "h264_baseline_faststart.mp4",
+        "h264_avc3.mp4",
+        "h264_opus.mkv",
+    ] {
         let f = frames_of(name, GIFV);
         assert!(f.len() >= 10, "{name}: only {} frames", f.len());
         assert!(

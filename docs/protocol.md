@@ -519,13 +519,22 @@ the file's first bytes, not its name.
 
 | | Container | Video | Audio |
 |---|---|---|---|
-| MP4 / MOV (QuickTime) | `mp4` crate | H.264 Baseline/Main/High incl. B-frames (OpenH264, built from source, static) | AAC-LC (symphonia, pure Rust) |
-| WebM / MKV | `matroska-demuxer` | VP8 (`vp8-decoder`), VP9 profile 0/1 8-bit (`rusty_vp9`), both pure Rust | Opus mono/stereo (libopus, static) |
+| MP4 / MOV (QuickTime) | own ISO-BMFF reader (`ferrocord-player/mp4.rs`): progressive and fragmented (`moof`), `moov` first or last, QuickTime sample descriptions | H.264 8-bit 4:2:0 progressive, Baseline/Main/High incl. B-frames, `avc1`/`avc3` (OpenH264, built from source, static); VP9 (`vp09`) | AAC-LC (symphonia, pure Rust) |
+| WebM / MKV | `matroska-demuxer` | VP8 (`vp8-decoder`), VP9 profile 0/1 8-bit (`rusty_vp9`), both pure Rust; H.264 (`V_MPEG4/ISO/AVC`, OBS) | Opus mono/stereo (libopus, static) |
 
-Anything else (H.265/HEVC, AV1, ProRes, 10-bit VP9, Vorbis-only, ...) ends
-with `Failed { missing: true, text: "<codec>" }` and the player shows "uses
-<codec>, which the built-in player cannot decode" with **Open externally**
-(the only way an external player starts). A video track with unsupported audio
+Anything else ends with `Failed { missing: true, text: "<codec>" }` and the
+player shows "uses <codec>, which the built-in player cannot decode" with
+**Open externally** (the only way an external player starts): H.265/HEVC
+(iPhone default, `hvc1`/`hev1`/Dolby Vision), AV1, ProRes, 10-bit VP9,
+Vorbis-only, and the H.264 variants OpenH264 refuses at the SPS: more than 8
+bits per sample (High 10), 4:2:2 / 4:4:4 chroma, interlaced
+(`frame_mbs_only_flag = 0`). Those are read from the SPS (`h264.rs`, header
+or in band) so the message names them instead of "no picture could be
+decoded". OpenH264 also shows nothing until an IDR picture: a stream with
+none (an open-GOP clip cut without re-encoding) fails with a message saying
+so. Its error concealment does not help (the freeze methods hold the output
+until an IDR, the others drop the B-frames and show damaged P-frames), so it
+stays off. A video track with unsupported audio
 plays silently. Sound goes out through `cpal`; the audio the device consumed
 drives the clock (picture follows sound), the wall clock takes over without a
 device or when the device stalls. Rotation (`tkhd` matrix) is applied.
