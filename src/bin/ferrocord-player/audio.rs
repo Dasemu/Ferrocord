@@ -1,5 +1,6 @@
-//! Sound: AAC from MP4 (symphonia, pure Rust) and Opus from WebM (libopus,
-//! statically linked), played through `cpal`.
+//! Sound: AAC from MP4 (symphonia, pure Rust), Opus from WebM / Matroska
+//! (libopus, statically linked) and AAC from Matroska (a platform decoder),
+//! played through `cpal`.
 //!
 //! Audio is decoded a little ahead of the clock and queued. With a sound
 //! device the number of frames the device has consumed drives the playback
@@ -26,6 +27,8 @@ use super::webm;
 
 /// How far ahead of the clock audio is queued.
 pub const AHEAD_MS: i64 = 700;
+/// Most frames read forward when a Matroska seek has to be done by hand.
+const MAX_SKIP_FRAMES: usize = 2_000_000;
 /// Most queued audio kept (a stuck consumer must not grow the heap).
 const MAX_QUEUE_MS: u64 = 4_000;
 
@@ -53,7 +56,7 @@ pub fn open(
     use super::source::Container;
     match container {
         Container::Mp4 => Ok(AacMp4::open(path)?.map(|a| Box::new(a) as Box<dyn AudioSource>)),
-        Container::Webm => Ok(OpusWebm::open(path)?.map(|a| Box::new(a) as Box<dyn AudioSource>)),
+        Container::Webm => Ok(MkvAudio::open(path)?.map(|a| Box::new(a) as Box<dyn AudioSource>)),
     }
 }
 
@@ -220,27 +223,190 @@ pub fn parse_opus_head(b: &[u8]) -> Option<OpusHead> {
     (family == 0 && (1..=2).contains(&channels)).then_some(OpusHead { channels, pre_skip })
 }
 
-/// Opus audio of a WebM file.
-pub struct OpusWebm {
-    path: std::path::PathBuf,
-    mkv: MatroskaFile<std::io::BufReader<File>>,
-    decoder: opus::Decoder,
-    track: u64,
-    scale_ns: u64,
-    channels: u16,
-    pre_skip: usize,
-    skip: usize,
-    frame: Frame,
-    pcm: Vec<f32>,
-    until: i64,
-    done: bool,
+/// Decodes one compressed audio frame at a time (the container is read
+/// elsewhere): Opus through libopus, AAC through a platform decoder.
+pub trait FrameDecoder {
+    /// `(channels, sample rate)` of the decoded samples. Platform decoders
+    /// learn it from the first frame.
+    fn format(&self) -> (u16, u32);
+    /// Decodes `data`, appending interleaved samples to `out`.
+    fn decode(&mut self, data: &[u8], out: &mut Vec<f32>) -> Result<(), String>;
+    /// Starts over (after a seek).
+    fn reset(&mut self);
 }
 
 const OPUS_RATE: u32 = 48_000;
 /// 120 ms at 48 kHz: the longest Opus packet.
 const OPUS_MAX_FRAMES: usize = 5760;
 
-impl OpusWebm {
+/// Opus through the statically linked libopus.
+struct Opus {
+    decoder: opus::Decoder,
+    channels: u16,
+    pcm: Vec<f32>,
+}
+
+impl Opus {
+    fn new(channels: u16) -> Result<Self, String> {
+        let ch = if channels == 1 {
+            opus::Channels::Mono
+        } else {
+            opus::Channels::Stereo
+        };
+        Ok(Self {
+            decoder: opus::Decoder::new(OPUS_RATE, ch).map_err(|e| format!("Opus decoder: {e}"))?,
+            channels,
+            pcm: vec![0.0; OPUS_MAX_FRAMES * usize::from(channels)],
+        })
+    }
+}
+
+impl FrameDecoder for Opus {
+    fn format(&self) -> (u16, u32) {
+        (self.channels, OPUS_RATE)
+    }
+
+    fn decode(&mut self, data: &[u8], out: &mut Vec<f32>) -> Result<(), String> {
+        let n = self
+            .decoder
+            .decode_float(data, &mut self.pcm, false)
+            .map_err(|e| format!("Opus: {e}"))?
+            .min(OPUS_MAX_FRAMES);
+        out.extend_from_slice(&self.pcm[..n * usize::from(self.channels)]);
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        let _ = self.decoder.reset_state();
+    }
+}
+
+/// What an ADTS header needs from an AudioSpecificConfig: raw AAC frames
+/// with this header in front decode without any out-of-band configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Adts {
+    /// Audio object type of the core (1 Main, 2 LC, 3 SSR, 4 LTP).
+    object: u8,
+    /// Sampling frequency index of the core.
+    freq: u8,
+    /// Channel configuration (1-7).
+    config: u8,
+}
+
+/// Sampling frequencies by index (ISO 14496-3 1.6.3.4).
+const AAC_RATES: [u32; 13] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+    7_350,
+];
+
+impl Adts {
+    /// From an AudioSpecificConfig. HE-AAC (object type 5 / 29, explicit
+    /// SBR / PS signalling) maps to its AAC-LC core: the decoder finds the
+    /// extension in the frames (implicit signalling). `None` for layouts
+    /// ADTS cannot carry (explicit sample rates, program config elements).
+    pub fn from_asc(asc: &[u8]) -> Option<Adts> {
+        let bits = |from: usize, n: usize| -> Option<u32> {
+            (from..from + n).try_fold(0u32, |acc, i| {
+                let byte = *asc.get(i / 8)?;
+                Some((acc << 1) | u32::from((byte >> (7 - i % 8)) & 1))
+            })
+        };
+        let mut at = 0;
+        let object_type = |at: &mut usize| -> Option<u32> {
+            let t = bits(*at, 5)?;
+            *at += 5;
+            if t == 31 {
+                let e = bits(*at, 6)?;
+                *at += 6;
+                return Some(32 + e);
+            }
+            Some(t)
+        };
+        let mut object = object_type(&mut at)?;
+        let freq = bits(at, 4)?;
+        at += 4;
+        let config = bits(at, 4)?;
+        at += 4;
+        let mut core_freq = freq;
+        if object == 5 || object == 29 {
+            // Extension sampling frequency, then the core's object type.
+            let ext = bits(at, 4)?;
+            at += 4;
+            if ext == 15 {
+                return None;
+            }
+            object = object_type(&mut at)?;
+        }
+        if core_freq == 15 {
+            return None;
+        }
+        core_freq = core_freq.min(12);
+        if !(1..=4).contains(&object) || !(1..=7).contains(&config) {
+            return None;
+        }
+        Some(Adts {
+            object: object as u8,
+            freq: core_freq as u8,
+            config: config as u8,
+        })
+    }
+
+    /// Channels of the configuration.
+    pub fn channels(&self) -> u16 {
+        match self.config {
+            7 => 8,
+            c => u16::from(c),
+        }
+    }
+
+    /// Core sample rate (SBR doubles it; the decoder reports the real one).
+    pub fn rate(&self) -> u32 {
+        AAC_RATES
+            .get(usize::from(self.freq))
+            .copied()
+            .unwrap_or(48_000)
+    }
+
+    /// The 7-byte header (no CRC) for a raw frame of `payload` bytes.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn header(&self, payload: usize) -> Option<[u8; 7]> {
+        let len = payload.checked_add(7).filter(|&l| l < 1 << 13)?;
+        let profile = self.object - 1;
+        Some([
+            0xFF,
+            0xF1, // MPEG-4, layer 0, no CRC
+            (profile << 6) | (self.freq << 2) | (self.config >> 2),
+            ((self.config & 3) << 6) | ((len >> 11) as u8 & 3),
+            (len >> 3) as u8,
+            (((len & 7) as u8) << 5) | 0x1F,
+            0xFC, // buffer fullness 0x7FF (VBR), one raw block
+        ])
+    }
+}
+
+/// The audio track of a WebM / Matroska file: Opus (libopus) or AAC (a
+/// platform decoder: the system FFmpeg on Linux, Media Foundation on
+/// Windows).
+pub struct MkvAudio {
+    path: std::path::PathBuf,
+    mkv: MatroskaFile<std::io::BufReader<File>>,
+    decoder: Box<dyn FrameDecoder>,
+    track: u64,
+    scale_ns: u64,
+    /// Samples (per channel) to drop at the start (Opus pre-skip).
+    pre_skip: usize,
+    skip: usize,
+    frame: Frame,
+    pcm: Vec<f32>,
+    /// A chunk decoded at open to learn the format, not yet handed out.
+    primed: Option<(i64, Vec<f32>)>,
+    /// `frame` holds a frame read but not yet decoded (after a seek).
+    peeked: bool,
+    until: i64,
+    done: bool,
+}
+
+impl MkvAudio {
     fn open(path: &Path) -> Result<Option<Self>, String> {
         let mkv = webm::open_mkv(path).map_err(|_| "webm audio demux failed".to_string())?;
         let scale_ns = mkv.info().timestamp_scale().get();
@@ -251,99 +417,140 @@ impl OpusWebm {
         else {
             return Ok(None);
         };
-        if t.codec_id() != "A_OPUS" {
-            return Err(format!(
-                "{} is not supported",
-                webm::describe_codec(t.codec_id())
-            ));
-        }
-        let head = t
-            .codec_private()
-            .and_then(parse_opus_head)
-            .ok_or("unsupported Opus layout")?;
-        let track = t.track_number().get();
-        let ch = if head.channels == 1 {
-            opus::Channels::Mono
-        } else {
-            opus::Channels::Stereo
+        let (decoder, pre_skip): (Box<dyn FrameDecoder>, usize) = match t.codec_id() {
+            "A_OPUS" => {
+                let head = t
+                    .codec_private()
+                    .and_then(parse_opus_head)
+                    .ok_or("unsupported Opus layout")?;
+                (Box::new(Opus::new(head.channels)?), head.pre_skip as usize)
+            }
+            // OBS and phones record AAC into Matroska: `A_AAC` with the
+            // AudioSpecificConfig as private data.
+            "A_AAC" => {
+                let asc = t.codec_private().ok_or("AAC without its configuration")?;
+                let d = super::platform::aac(asc).map_err(|m| {
+                    let mut why = "AAC in Matroska needs a system AAC decoder".to_string();
+                    if let Some(h) = m.hint {
+                        why = format!("{why}. {h}");
+                    }
+                    why
+                })?;
+                (d, 0)
+            }
+            other => {
+                return Err(format!("{} is not supported", webm::describe_codec(other)));
+            }
         };
-        let decoder =
-            opus::Decoder::new(OPUS_RATE, ch).map_err(|e| format!("Opus decoder: {e}"))?;
-        Ok(Some(Self {
+        let track = t.track_number().get();
+        let mut a = Self {
             path: path.to_path_buf(),
             mkv,
             decoder,
             track,
             scale_ns,
-            channels: head.channels,
-            pre_skip: head.pre_skip as usize,
-            skip: head.pre_skip as usize,
+            pre_skip,
+            skip: pre_skip,
             frame: Frame::default(),
-            pcm: vec![0.0; OPUS_MAX_FRAMES * usize::from(head.channels)],
+            pcm: Vec::new(),
+            primed: None,
+            peeked: false,
             until: 0,
             done: false,
-        }))
+        };
+        // Platform decoders know the real format (HE-AAC doubles the rate)
+        // only after a frame: decode the first chunk now.
+        a.primed = a.decode_next();
+        if a.primed.is_none() {
+            return Err("no audio frame could be decoded".into());
+        }
+        Ok(Some(a))
     }
-}
 
-impl AudioSource for OpusWebm {
-    fn format(&self) -> (u16, u32) {
-        (self.channels, OPUS_RATE)
-    }
-
-    fn next_chunk(&mut self) -> Option<(i64, Vec<f32>)> {
-        let ch = usize::from(self.channels);
+    fn decode_next(&mut self) -> Option<(i64, Vec<f32>)> {
+        let (ch, _) = self.decoder.format();
+        let ch = usize::from(ch.max(1));
         for _ in 0..64 {
-            match self.mkv.next_frame(&mut self.frame) {
-                Ok(true) => {}
-                _ => {
-                    self.done = true;
-                    return None;
+            if !std::mem::take(&mut self.peeked) {
+                match self.mkv.next_frame(&mut self.frame) {
+                    Ok(true) => {}
+                    _ => {
+                        self.done = true;
+                        return None;
+                    }
                 }
             }
             if self.frame.track != self.track || self.frame.data.len() > webm::MAX_FRAME {
                 continue;
             }
             let start = webm::to_ms(self.frame.timestamp, self.scale_ns);
-            let Ok(n) = self
+            self.pcm.clear();
+            if self
                 .decoder
-                .decode_float(&self.frame.data, &mut self.pcm, false)
-            else {
+                .decode(&self.frame.data, &mut self.pcm)
+                .is_err()
+            {
                 continue;
-            };
-            let n = n.min(OPUS_MAX_FRAMES);
+            }
+            let (ch_now, rate) = self.decoder.format();
+            let ch = if ch_now == 0 { ch } else { usize::from(ch_now) };
+            let n = self.pcm.len() / ch;
             let drop = self.skip.min(n);
             self.skip -= drop;
             let samples = self.pcm[drop * ch..n * ch].to_vec();
             if samples.is_empty() {
                 continue;
             }
-            self.until = start + (n - drop) as i64 * 1000 / i64::from(OPUS_RATE);
+            self.until = start + (n - drop) as i64 * 1000 / i64::from(rate.max(1));
             return Some((start, samples));
         }
         None
     }
+}
+
+impl AudioSource for MkvAudio {
+    fn format(&self) -> (u16, u32) {
+        self.decoder.format()
+    }
+
+    fn next_chunk(&mut self) -> Option<(i64, Vec<f32>)> {
+        self.primed.take().or_else(|| self.decode_next())
+    }
 
     fn seek(&mut self, ms: u64) {
-        let ok = ms > 0
-            && self
-                .mkv
-                .seek(webm::from_ms(
-                    i64::try_from(ms).unwrap_or(i64::MAX),
-                    self.scale_ns,
-                ))
-                .is_ok();
-        if !ok && let Ok(m) = webm::open_mkv(&self.path) {
+        let target = webm::from_ms(i64::try_from(ms).unwrap_or(i64::MAX), self.scale_ns);
+        // matroska-demuxer's seek can report success and then the end of
+        // the stream (files without audio cues): check that a frame
+        // follows, else reopen and read forward to the target.
+        self.peeked = ms > 0
+            && self.mkv.seek(target).is_ok()
+            && matches!(self.mkv.next_frame(&mut self.frame), Ok(true));
+        if !self.peeked
+            && let Ok(m) = webm::open_mkv(&self.path)
+        {
             self.mkv = m;
+            if ms > 0 {
+                for _ in 0..MAX_SKIP_FRAMES {
+                    match self.mkv.next_frame(&mut self.frame) {
+                        Ok(true) if self.frame.timestamp < target => {}
+                        Ok(true) => {
+                            self.peeked = true;
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+            }
         }
-        let _ = self.decoder.reset_state();
+        self.decoder.reset();
+        self.primed = None;
         self.skip = if ms == 0 { self.pre_skip } else { 0 };
         self.until = ms as i64;
         self.done = false;
     }
 
     fn done(&self) -> bool {
-        self.done
+        self.done && self.primed.is_none()
     }
 
     fn decoded_until(&self) -> i64 {
@@ -588,6 +795,42 @@ mod tests {
         }
     }
 
+    /// OBS writes AAC into Matroska: it decodes through the platform AAC
+    /// decoder (system FFmpeg / Media Foundation). Skipped without one
+    /// unless CI says one must be there.
+    #[test]
+    fn aac_in_matroska_decodes_to_sound_with_a_platform_decoder() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/h264_aac.mkv");
+        let mut a = match MkvAudio::open(&path) {
+            Ok(Some(a)) => a,
+            Ok(None) => panic!("no audio track"),
+            Err(e) => {
+                assert!(
+                    std::env::var("FERROCORD_EXPECT_PLATFORM").as_deref() != Ok("1"),
+                    "no platform AAC decoder: {e}"
+                );
+                assert!(e.contains("AAC"), "{e}");
+                return;
+            }
+        };
+        assert_eq!(a.format(), (1, 48_000));
+        let (mut loud, mut total) = (0usize, 0usize);
+        let mut last = -1;
+        while let Some((t, samples)) = a.next_chunk() {
+            assert!(t >= last, "time went back: {t} < {last}");
+            last = t;
+            total += samples.len();
+            loud += samples.iter().filter(|s| s.abs() > 0.05).count();
+        }
+        assert!(total > 90_000, "{total} samples");
+        assert!(loud > total / 4, "silence");
+        // Seeking lands near the target, also after the end (where
+        // matroska-demuxer's own seek can land past the last frame).
+        a.seek(1000);
+        let (t, _) = a.next_chunk().expect("audio after the seek");
+        assert!((800..=1100).contains(&t), "{t}");
+    }
+
     #[test]
     fn aac_channels_come_from_the_audio_specific_config() {
         // AAC-LC 44.1 kHz mono / stereo (what ffmpeg writes in `esds`).
@@ -602,6 +845,32 @@ mod tests {
         assert_eq!(asc_channels(&[0x12, 0x00]), None);
         assert_eq!(asc_channels(&[0x12]), None);
         assert_eq!(asc_channels(&[]), None);
+    }
+
+    #[test]
+    fn adts_headers_come_from_the_audio_specific_config() {
+        // AAC-LC 44.1 kHz mono.
+        let a = Adts::from_asc(&[0x12, 0x08]).unwrap();
+        assert_eq!((a.channels(), a.rate()), (1, 44_100));
+        // What ffmpeg writes for a 100-byte frame of that stream.
+        assert_eq!(
+            a.header(100).unwrap(),
+            [0xFF, 0xF1, 0x50, 0x40, 0x0D, 0x7F, 0xFC]
+        );
+        assert_eq!(a.header(8192), None);
+        // 48 kHz stereo.
+        let a = Adts::from_asc(&[0x11, 0x90]).unwrap();
+        assert_eq!((a.channels(), a.rate()), (2, 48_000));
+        // HE-AAC v1 with explicit SBR (type 5): 24 kHz LC core, 48 kHz out.
+        // 00101 0110 0010 0011 00010 -> type 5, freq 6, 2 ch, ext 3, core 2.
+        let he = Adts::from_asc(&[0x2B, 0x11, 0x88]).unwrap();
+        assert_eq!(he.header(10).unwrap()[2] >> 6, 1, "LC profile");
+        assert_eq!((he.channels(), he.rate()), (2, 24_000));
+        // Layout in a program config element, explicit rate, garbage.
+        assert_eq!(Adts::from_asc(&[0x12, 0x00]), None);
+        assert_eq!(Adts::from_asc(&[0x17, 0x80, 0x00, 0x00, 0x10]), None);
+        assert_eq!(Adts::from_asc(&[]), None);
+        assert_eq!(Adts::from_asc(&[0xFF, 0xFF]), None);
     }
 
     #[test]
