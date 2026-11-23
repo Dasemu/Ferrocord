@@ -67,3 +67,7 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - `text_editor` `min_height`/`max_height` limit the text area, then the padding is added: pass `composer::text_height_limits`, never a total height (the 68 px composer bug).
 - Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Container `shadow` is safe with ferroiced (tiny-skia clips it to the damage region), but
   the house style keeps the gradient header and sets no shadow (`ui/theme.rs` guard test).
+- Video helper (`ferrocord-player`): MP4/MOV is read by our own `mp4.rs` (progressive + fragmented `moof`, QuickTime);
+  never go back to the `mp4` crate (its fragment offsets are wrong, it rejects QuickTime sound descriptions, panics on
+  hostile tables). OpenH264 only decodes 8-bit 4:2:0 progressive H.264 and needs an IDR to start: `h264.rs` reads the
+  SPS so High 10 / 4:2:2 / 4:4:4 / interlaced / HEVC get a named "cannot decode" message, never "no picture could be decoded".
