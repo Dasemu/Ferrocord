@@ -1,7 +1,17 @@
 //! Video decoders behind one interface: H.264 (OpenH264, built from source
-//! and linked statically), VP8 and VP9 (pure Rust). Every decoder returns
-//! pictures already converted to RGBA at the output size, tagged with their
-//! presentation time.
+//! and linked statically), VP8 and VP9 (pure Rust), and the platform
+//! decoders ([`super::platform`]: system FFmpeg on Linux, Media Foundation
+//! on Windows) for H.265, AV1 and the H.264 streams OpenH264 refuses. Every
+//! decoder returns pictures already converted to RGBA at the output size,
+//! tagged with their presentation time.
+//!
+//! **Choice.** The built-in decoder stays the default for what it handles
+//! well (8-bit 4:2:0 progressive H.264, VP8, VP9), so playback does not
+//! change where it already worked. The platform decoder takes H.265, AV1
+//! and H.264 whose SPS OpenH264 refuses (High 10, 4:2:2, 4:4:4,
+//! interlaced), and is the fallback when the built-in decoder gives up at
+//! run time ([`fallback`]: an SPS refused in band, no IDR picture, a stream
+//! of undecodable packets).
 //!
 //! This module has no dependency on the rest of the helper beyond the
 //! packet and YUV types, so another binary that needs to decode video (for
@@ -11,6 +21,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
 use super::h264::{self, Sps};
+use super::platform;
 use super::source::{Codec, Packet, VideoInfo};
 use super::yuv::{self, Matrix, Planes, Rotation};
 
@@ -49,15 +60,97 @@ pub trait VideoDecoder {
     fn no_picture_reason(&self) -> Option<String> {
         None
     }
+    /// A platform decoder (it has no fallback behind it).
+    fn is_platform(&self) -> bool {
+        false
+    }
 }
 
-/// The decoder for `info.codec`.
-pub fn new_decoder(info: &VideoInfo, geo: Geometry) -> Result<Box<dyn VideoDecoder>, String> {
-    Ok(match info.codec {
-        Codec::H264 => Box::new(H264::new(info.header.clone(), geo)?),
-        Codec::Vp8 => Box::new(Vp8::new(geo)),
-        Codec::Vp9 => Box::new(Vp9::new(geo)),
-    })
+/// What the built-in decoders say about `info` before decoding: the
+/// codec or H.264 variant they cannot handle, if any.
+pub fn native_refusal(info: &VideoInfo) -> Option<String> {
+    match info.codec {
+        Codec::H264 => refused_sps(&info.header),
+        Codec::Hevc | Codec::Av1 => Some(info.codec.name().to_string()),
+        Codec::Vp8 | Codec::Vp9 => None,
+    }
+}
+
+/// Why a stream cannot be played here, for the viewer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    /// A codec the player cannot decode (as opposed to a broken stream).
+    pub missing: bool,
+    /// The codec, then (after a newline) what to install, if anything.
+    pub text: String,
+}
+
+impl Refusal {
+    /// `what` cannot be decoded; `hint` says how to change that.
+    pub fn missing(what: &str, hint: Option<String>) -> Self {
+        Refusal {
+            missing: true,
+            text: missing_text(what, hint),
+        }
+    }
+}
+
+/// The text of a "cannot decode" failure: the codec, then on a second
+/// line what the user can install (the app shows both).
+pub fn missing_text(what: &str, hint: Option<String>) -> String {
+    match hint {
+        Some(h) => format!("{what}\n{h}"),
+        None => what.to_string(),
+    }
+}
+
+/// The decoder for `info.codec`: built-in where it handles the stream,
+/// the platform decoder for the rest.
+pub fn new_decoder(info: &VideoInfo, geo: Geometry) -> Result<Box<dyn VideoDecoder>, Refusal> {
+    let broken = |e: String| Refusal {
+        missing: false,
+        text: e,
+    };
+    match info.codec {
+        Codec::H264 => {
+            let refused = refused_sps(&info.header);
+            if refused.is_some() || platform::preferred() {
+                match platform::video(info, geo) {
+                    Ok(d) => return Ok(d),
+                    Err(m) => {
+                        if let Some(why) = refused {
+                            return Err(Refusal::missing(&why, m.hint));
+                        }
+                    }
+                }
+            }
+            Ok(Box::new(
+                H264::new(info.header.clone(), geo).map_err(broken)?,
+            ))
+        }
+        Codec::Hevc | Codec::Av1 => {
+            platform::video(info, geo).map_err(|m| Refusal::missing(info.codec.name(), m.hint))
+        }
+        Codec::Vp8 | Codec::Vp9 if platform::preferred() => match platform::video(info, geo) {
+            Ok(d) => Ok(d),
+            Err(_) => Ok(native_vp(info.codec, geo)),
+        },
+        Codec::Vp8 | Codec::Vp9 => Ok(native_vp(info.codec, geo)),
+    }
+}
+
+fn native_vp(codec: Codec, geo: Geometry) -> Box<dyn VideoDecoder> {
+    if codec == Codec::Vp8 {
+        Box::new(Vp8::new(geo))
+    } else {
+        Box::new(Vp9::new(geo))
+    }
+}
+
+/// The platform decoder for a stream the built-in decoder gave up on.
+/// `Err` carries what to install (if anything would help).
+pub fn fallback(info: &VideoInfo, geo: Geometry) -> Result<Box<dyn VideoDecoder>, Option<String>> {
+    platform::video(info, geo).map_err(|m| m.hint)
 }
 
 /// Presentation times of packets handed to a decoder whose pictures have

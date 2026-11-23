@@ -1,10 +1,13 @@
-//! Video decoder helper for Ferrocord, with no system codec dependency.
+//! Video decoder helper for Ferrocord, with no hard system codec dependency.
 //!
-//! `ferrocord-player <file>` plays one MP4 / QuickTime (H.264 or VP9 + AAC)
-//! or WebM / Matroska (VP8 / VP9 / H.264 and Opus) file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built
-//! from source and linked statically), VP8 and VP9 through pure-Rust
-//! decoders, AAC through symphonia (pure Rust), Opus through a statically
-//! linked libopus, sound through cpal. It writes RGBA frames and playback
+//! `ferrocord-player <file>` plays one MP4 / QuickTime or WebM / Matroska
+//! file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built from
+//! source and linked statically), VP8 and VP9 through pure-Rust decoders,
+//! AAC (MP4) through symphonia (pure Rust), Opus through a statically
+//! linked libopus, sound through cpal. H.265, AV1, the H.264 profiles
+//! OpenH264 refuses and AAC in Matroska go to the platform decoders
+//! ([`platform`]: the system FFmpeg opened at run time on Linux, Media
+//! Foundation on Windows) when the system has them. It writes RGBA frames and playback
 //! times to stdout and reads commands from stdin; the protocol is in
 //! `ferrocord::media::video_proto`. The app spawns one helper per playing
 //! video and ends it when the video closes, so a decoder never outlives its
@@ -19,6 +22,9 @@
 //! the demuxers in [`mp4`] / [`webm`], free of any playback logic, so a
 //! second binary can reuse them.
 //!
+//! `ferrocord-player --backends` prints which platform decoders this
+//! system has (one `codec decoder` line each, `-` for none).
+//!
 //! Failures name the step that failed (open, container, codec, decode) so
 //! the viewer can say what happened.
 
@@ -26,6 +32,7 @@ mod audio;
 mod codec;
 mod h264;
 mod mp4;
+mod platform;
 mod source;
 mod webm;
 mod yuv;
@@ -45,7 +52,7 @@ mod player {
     use ferrocord::media::video_proto::{self as proto, Cmd, Msg, PlayState};
 
     use super::audio::{self, AHEAD_MS, AudioSource, Output};
-    use super::codec::{self, Geometry, Pictures, VideoDecoder};
+    use super::codec::{self, Geometry, Pictures, Refusal, VideoDecoder};
     use super::source::{self, Container, Packet, PacketSource, TrackError, VideoInfo};
     use super::yuv::{self, Matrix};
     use super::{mp4, webm};
@@ -66,6 +73,9 @@ mod player {
     const STALL_AFTER: Duration = Duration::from_millis(900);
     /// Consecutive undecodable packets before giving up.
     const MAX_BAD: usize = 90;
+    /// Packets the built-in decoder may take without a picture (and with a
+    /// reason it cannot start) before the platform decoder takes over.
+    const MAX_BLIND: usize = 48;
 
     type Out = BufWriter<std::fs::File>;
 
@@ -77,6 +87,12 @@ mod player {
                     Some(spec) => (path.clone(), Some(spec)),
                     None => usage(),
                 }
+            }
+            [flag] if flag == "--backends" => {
+                for line in super::platform::report() {
+                    println!("{line}");
+                }
+                std::process::exit(0);
             }
             [path] if !path.starts_with("--") => (path.clone(), None),
             _ => usage(),
@@ -124,7 +140,10 @@ mod player {
     }
 
     fn usage() -> ! {
-        eprintln!("usage: ferrocord-player [--frames <w>x<h> <frames> <bytes>] <file>");
+        eprintln!(
+            "usage: ferrocord-player [--frames <w>x<h> <frames> <bytes>] <file>\n       \
+             ferrocord-player --backends"
+        );
         std::process::exit(2);
     }
 
@@ -209,12 +228,25 @@ mod player {
         }
     }
 
+    fn refused(r: Refusal) -> Msg {
+        Msg::Failed {
+            missing: r.missing,
+            text: r.text,
+        }
+    }
+
     /// The whole stream went through the decoder and no picture came out.
     fn no_picture(v: &Video) -> Msg {
-        if let Some(why) = v.decoder.unsupported() {
-            return unsupported(why);
+        if let Some(why) = v.decoder.unsupported().or_else(|| v.refusal.clone()) {
+            return unsupported(codec::missing_text(&why, v.hint.clone()));
         }
-        fail(v.decoder.no_picture_reason().unwrap_or_else(|| {
+        let reason = v.decoder.no_picture_reason().or_else(|| v.earlier.clone());
+        if let Some(why) = reason.as_ref().filter(|_| v.hint.is_some()) {
+            // The built-in decoder could not start and no platform decoder
+            // is installed: say what would play it.
+            return fail(codec::missing_text(why, v.hint.clone()));
+        }
+        fail(reason.unwrap_or_else(|| {
             format!(
                 "no picture could be decoded from the {} stream",
                 v.info.codec.name()
@@ -289,6 +321,21 @@ mod player {
         source: Box<dyn PacketSource>,
         decoder: Box<dyn VideoDecoder>,
         info: VideoInfo,
+        geo: Geometry,
+        /// The decoder is the built-in one and may still hand over to the
+        /// platform decoder.
+        can_switch: bool,
+        /// Why the built-in decoder could not play the stream, once the
+        /// platform decoder took over (named if that one fails too).
+        refusal: Option<String>,
+        /// What to install for a platform decoder, when none could take over.
+        hint: Option<String>,
+        /// Why the built-in decoder showed nothing, after a hand-over.
+        earlier: Option<String>,
+        /// Pictures decoded since the start / the last switch.
+        pictures: usize,
+        /// Packets fed since the start / the last switch.
+        fed: usize,
         packet: Packet,
         /// Decoded pictures not yet taken.
         queue: Pictures,
@@ -307,11 +354,17 @@ mod player {
         fn fill(&mut self) -> Result<(), Msg> {
             while self.ready.is_none() {
                 if let Some(t) = self.queue.pop_front() {
+                    self.pictures += 1;
                     self.ready = Some(t);
                     return Ok(());
                 }
                 if self.eos {
                     if self.flushed {
+                        // Nothing came out of the whole stream: the
+                        // platform decoder may still play it.
+                        if self.pictures == 0 && self.switch(None)? {
+                            continue;
+                        }
                         return Ok(());
                     }
                     self.flushed = true;
@@ -328,19 +381,35 @@ mod player {
                     }
                     Err(e) => return Err(fail(e)),
                 }
+                self.fed += 1;
                 let decoded = self.decoder.decode(&self.packet, &mut self.queue);
                 if self.queue.is_empty()
                     && let Some(why) = self.decoder.unsupported()
                 {
-                    // Nothing in this stream will ever decode: say why now
-                    // instead of reading the whole file first.
-                    return Err(unsupported(why));
+                    // Nothing in this stream will ever decode here: hand
+                    // over, or say why now instead of reading the whole
+                    // file first.
+                    if self.switch(Some(why.clone()))? {
+                        continue;
+                    }
+                    return Err(unsupported(codec::missing_text(&why, self.hint.clone())));
+                }
+                if self.pictures == 0
+                    && self.queue.is_empty()
+                    && self.fed >= MAX_BLIND
+                    && self.decoder.no_picture_reason().is_some()
+                    && self.switch(None)?
+                {
+                    continue;
                 }
                 match decoded {
                     Ok(()) => self.bad = 0,
                     Err(e) => {
                         self.bad += 1;
                         if self.bad >= MAX_BAD {
+                            if self.pictures == 0 && self.switch(None)? {
+                                continue;
+                            }
                             return Err(fail(format!(
                                 "decoding failed at {:.1} s: {e}",
                                 self.packet.pts_ms as f64 / 1000.0
@@ -350,6 +419,36 @@ mod player {
                 }
             }
             Ok(())
+        }
+
+        /// Hands the stream to the platform decoder and starts it over.
+        /// `Ok(false)` when there is none (or it already has the stream);
+        /// `why` is the built-in decoder's reason, if it named one.
+        fn switch(&mut self, why: Option<String>) -> Result<bool, Msg> {
+            if !self.can_switch {
+                return Ok(false);
+            }
+            self.can_switch = false;
+            match codec::fallback(&self.info, self.geo) {
+                Ok(d) => {
+                    self.earlier = self.decoder.no_picture_reason();
+                    self.decoder = d;
+                    self.refusal = why;
+                    self.source.seek(0).map_err(fail)?;
+                    self.queue.clear();
+                    self.ready = None;
+                    self.eos = false;
+                    self.flushed = false;
+                    self.bad = 0;
+                    self.pictures = 0;
+                    self.fed = 0;
+                    Ok(true)
+                }
+                Err(hint) => {
+                    self.hint = hint;
+                    Ok(false)
+                }
+            }
         }
 
         /// Restarts decoding from the keyframe before `ms`.
@@ -404,14 +503,27 @@ mod player {
             out_h,
             matrix: Matrix::for_height(info.height),
         };
-        let decoder = codec::new_decoder(&info, geo).map_err(fail)?;
+        let decoder = codec::new_decoder(&info, geo).map_err(refused)?;
         if let Some(why) = decoder.unsupported() {
             return Err(unsupported(why));
         }
+        // Only the built-in decoders hand over; a platform decoder that
+        // fails reports why the built-in one could not play the stream.
+        let can_switch = !decoder.is_platform();
+        let refusal = (!can_switch)
+            .then(|| codec::native_refusal(&info))
+            .flatten();
         Ok(Some(Video {
             source,
             decoder,
             info,
+            geo,
+            can_switch,
+            refusal,
+            earlier: None,
+            hint: None,
+            pictures: 0,
+            fed: 0,
             packet: Packet::default(),
             queue: VecDeque::new(),
             ready: None,
