@@ -517,24 +517,58 @@ file already on disk.
 demuxes and decodes; the app never links a codec. The container is chosen by
 the file's first bytes, not its name.
 
-| | Container | Video | Audio |
+| | Container | Video (built in) | Audio (built in) |
 |---|---|---|---|
 | MP4 / MOV (QuickTime) | own ISO-BMFF reader (`ferrocord-player/mp4.rs`): progressive and fragmented (`moof`), `moov` first or last, QuickTime sample descriptions | H.264 8-bit 4:2:0 progressive, Baseline/Main/High incl. B-frames, `avc1`/`avc3` (OpenH264, built from source, static); VP9 (`vp09`) | AAC-LC (symphonia, pure Rust) |
 | WebM / MKV | `matroska-demuxer` | VP8 (`vp8-decoder`), VP9 profile 0/1 8-bit (`rusty_vp9`), both pure Rust; H.264 (`V_MPEG4/ISO/AVC`, OBS) | Opus mono/stereo (libopus, static) |
 
-Anything else ends with `Failed { missing: true, text: "<codec>" }` and the
-player shows "uses <codec>, which the built-in player cannot decode" with
-**Open externally** (the only way an external player starts): H.265/HEVC
-(iPhone default, `hvc1`/`hev1`/Dolby Vision), AV1, ProRes, 10-bit VP9,
-Vorbis-only, and the H.264 variants OpenH264 refuses at the SPS: more than 8
-bits per sample (High 10), 4:2:2 / 4:4:4 chroma, interlaced
-(`frame_mbs_only_flag = 0`). Those are read from the SPS (`h264.rs`, header
-or in band) so the message names them instead of "no picture could be
-decoded". OpenH264 also shows nothing until an IDR picture: a stream with
-none (an open-GOP clip cut without re-encoding) fails with a message saying
-so. Its error concealment does not help (the freeze methods hold the output
-until an IDR, the others drop the B-frames and show damaged P-frames), so it
-stays off. A video track with unsupported audio
+**Platform decoders** (`ferrocord-player/platform/`). What the built-in
+decoders cannot handle goes to what the operating system provides, the way
+Chromium plays it; nothing is bundled or linked at build time:
+
+| | Linux: system FFmpeg (`platform/ffmpeg.rs`) | Windows: Media Foundation (`platform/mf.rs`) |
+|---|---|---|
+| Loaded | `dlopen` of `libavcodec.so.62` / `61` / `60` / `59` / `58` + the matching `libavutil` (FFmpeg 8 down to 4) | `mfplat.dll` loaded at run time (Windows N without the Media Feature Pack still starts the helper); sync software MFTs via `MFTEnumEx` |
+| H.265 / HEVC (`hvc1`, `hev1`, `dvh1`, `V_MPEGH/ISO/HEVC`), 8 and 10 bit | `hevc` (Fedora's `libavcodec-free` has none: the message says to install `ffmpeg-libs` from RPM Fusion) | "HEVC Video Extensions (from Device Manufacturer)" |
+| AV1 (`av01`, `V_AV1`) | `libdav1d`, else `libaom-av1` (FFmpeg's own `av1` is hardware-only) | "AV1 Video Extension" |
+| H.264 High 10 / 4:2:2 / 4:4:4 / interlaced, streams with no IDR | `h264` | Microsoft H.264 decoder (interlaced yes; High 10 / 4:4:4 no) |
+| AAC in Matroska (`A_AAC`) | `aac` (raw frames with ADTS headers built from the config) | Microsoft AAC decoder (config in `MF_MT_USER_DATA`) |
+| Output | `yuv4xxp`, `nv12`, 9-16 bit planar, `p010` → RGBA (`yuv::raw_to_rgba`) | NV12 / P010 / I420 / YV12 → RGBA |
+
+The FFI is the decode API whose signatures never changed (find decoder by
+name, alloc / open / send packet / receive frame / flush / free, AVOptions
+for `threads` = 4, `ch_layout` / `ac`, `ar`) plus the only struct fields
+that never moved (`AVPacket` up to `size`, `AVFrame` up to `format`); pixel
+and sample formats are compared by name, FFmpeg logging is silenced.
+
+**Choice.** OpenH264, VP8 and VP9 stay the default for what they handle, so
+nothing that played before changes. `codec::new_decoder` sends H.265, AV1
+and H.264 with a refused SPS (container header) straight to the platform
+decoder; at run time (`Video::switch`) the built-in decoder hands the
+stream over, restarting from the first packet, when it refuses an in-band
+SPS, shows no picture after 48 packets with a reason (no IDR) or by the end
+of the stream, or fails 90 packets in a row before any picture.
+`ferrocord-player --backends` prints what this system has
+(`platform ffmpeg libavcodec.so.61 61.19.101`, then `h264 h264`,
+`hevc -`, ...). `FERROCORD_PLATFORM_DECODERS=0` turns the platform decoders
+off, `FERROCORD_VIDEO_DECODER=platform` prefers them for everything
+(troubleshooting, tests).
+
+Anything no decoder takes ends with `Failed { missing: true, text }` where
+`text` is the codec and, on a second line, what to install: the player
+shows "uses <codec>, which the built-in player cannot decode. Install the
+FFmpeg libraries (package libavcodec61, ...) to play it here. Or choose
+**Open externally** ..." (the only way an external player starts). The
+install line names the distribution's package (Debian/Ubuntu
+`libavcodec61` / `libavcodec60`, Fedora `ffmpeg-libs` from RPM Fusion, Arch
+`ffmpeg`, openSUSE Packman), or on Windows the Microsoft Store extension.
+ProRes, MPEG-4 Part 2, encrypted video, 10-bit VP9 without a platform
+decoder and Vorbis-only files are named without one. The H.264 variants
+OpenH264 refuses (more than 8 bits per sample, 4:2:2 / 4:4:4, interlaced
+`frame_mbs_only_flag = 0`) are read from the SPS (`h264.rs`, header or in
+band) so the message names them instead of "no picture could be decoded".
+OpenH264 shows nothing until an IDR picture; its error concealment does not
+help, so it stays off and the platform decoder takes such streams. A video track with unsupported audio
 plays silently. Sound goes out through `cpal`; the audio the device consumed
 drives the clock (picture follows sound), the wall clock takes over without a
 device or when the device stalls. Rotation (`tkhd` matrix) is applied.

@@ -88,10 +88,16 @@ run `cargo build --release`.
   per-user volume, incoming call overlay with notification. Calls are
   end-to-end encrypted with Discord's DAVE protocol. Video calls (camera, Go
   Live) are not supported yet.
-- Videos play in the chat (MP4/MOV with H.264 and AAC, WebM with VP8/VP9 and
-  Opus): inline player with poster, play/pause, seek bar, volume and full
-  screen. Decoding runs in the `ferrocord-player` helper, which links no
-  system codec library; other formats offer "Open externally".
+- Videos play in the chat (MP4/MOV with H.264 and AAC, WebM/MKV with VP8/VP9/
+  H.264 and Opus built in; H.265/HEVC, AV1, H.264 High 10 / 4:2:2 / 4:4:4 /
+  interlaced and AAC in MKV through the system's decoders): inline player with
+  poster, play/pause, seek bar, volume and full screen. Decoding runs in the
+  `ferrocord-player` helper, which links no system codec library. For the
+  second group it uses what the system provides, like a browser: the FFmpeg
+  libraries on Linux (`libavcodec`, opened at run time if installed) and
+  Media Foundation on Windows (H.265 needs "HEVC Video Extensions from Device
+  Manufacturer", AV1 "AV1 Video Extension" from the Microsoft Store). Without
+  them the player says what to install, or offers "Open externally".
 
 ## Build and run
 

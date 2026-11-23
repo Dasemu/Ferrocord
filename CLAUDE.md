@@ -71,3 +71,9 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   never go back to the `mp4` crate (its fragment offsets are wrong, it rejects QuickTime sound descriptions, panics on
   hostile tables). OpenH264 only decodes 8-bit 4:2:0 progressive H.264 and needs an IDR to start: `h264.rs` reads the
   SPS so High 10 / 4:2:2 / 4:4:4 / interlaced / HEVC get a named "cannot decode" message, never "no picture could be decoded".
+- Platform decoders (`ferrocord-player/platform/`): H.265, AV1, the H.264 OpenH264 refuses and AAC in MKV go to the
+  system FFmpeg (Linux: `libloading` dlopen of `libavcodec.so.62..58`, never linked; tiny FFI, structs only through the
+  stable `AVPacket`/`AVFrame` prefix, formats by name) or Media Foundation MFTs (Windows: `mfplat.dll` loaded at run
+  time, never imported; CI checks with dumpbin). OpenH264/VP8/VP9 stay the default; the platform decoder takes over at
+  run time when they fail. `ferrocord-player --backends` lists what the system has; `FERROCORD_PLATFORM_DECODERS=0`
+  turns them off, `FERROCORD_VIDEO_DECODER=platform` prefers them. Never link `ffmpeg-sys` or bundle a decoder.
