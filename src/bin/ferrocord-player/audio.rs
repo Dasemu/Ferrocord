@@ -61,6 +61,32 @@ pub fn open(
 // AAC in MP4
 // ---------------------------------------------------------------------
 
+/// Channel count from an MPEG-4 AudioSpecificConfig (ISO 14496-3 1.6.2.1):
+/// object type (5 bits, or 5 + 6), frequency index (4 bits, or 4 + 24 for
+/// an explicit rate), channel configuration (4 bits). `None` for a layout
+/// given only by a program config element.
+pub fn asc_channels(asc: &[u8]) -> Option<u16> {
+    let bits = |from: usize, n: usize| -> Option<u32> {
+        (from..from + n).try_fold(0u32, |acc, i| {
+            let byte = *asc.get(i / 8)?;
+            Some((acc << 1) | u32::from((byte >> (7 - i % 8)) & 1))
+        })
+    };
+    let mut at = 5;
+    if bits(0, 5)? == 31 {
+        at += 6;
+    }
+    if bits(at, 4)? == 15 {
+        at += 24;
+    }
+    at += 4;
+    match bits(at, 4)? {
+        c @ 1..=6 => Some(c as u16),
+        7 => Some(8),
+        _ => None,
+    }
+}
+
 /// AAC audio of an MP4 file.
 pub struct AacMp4 {
     reader: IsoMp4Reader,
@@ -89,17 +115,14 @@ impl AacMp4 {
         let track = track.id;
         let decoder = AacDecoder::try_new(&params, &DecoderOptions::default())
             .map_err(|e| format!("AAC decoder: {e}"))?;
-        // The container may omit the layout; the decoder reads it from the
+        // The MP4 reader leaves the channels unset and the decoder's
+        // `codec_params` echoes what it was given: the count is in the
         // AudioSpecificConfig.
-        let known = decoder.codec_params();
-        let rate = known
-            .sample_rate
-            .or(params.sample_rate)
-            .ok_or("AAC without a sample rate")?;
-        let channels = known
+        let rate = params.sample_rate.ok_or("AAC without a sample rate")?;
+        let channels = params
             .channels
-            .or(params.channels)
             .map(|c| c.count() as u16)
+            .or_else(|| params.extra_data.as_deref().and_then(asc_channels))
             .filter(|&c| (1..=8).contains(&c))
             .ok_or("AAC without a channel layout")?;
         Ok(Some(Self {
@@ -540,6 +563,46 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MP4 / QuickTime AAC used to be dropped as "without a channel
+    /// layout" (the reader leaves the count unset): every clip played mute.
+    #[test]
+    fn aac_in_mp4_and_quicktime_decodes_to_sound() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video");
+        for name in ["high_aac.mp4", "h264_frag_aac.mp4", "h264_aac.mov"] {
+            let mut a = AacMp4::open(&dir.join(name))
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+                .unwrap_or_else(|| panic!("{name}: no audio track"));
+            let (channels, rate) = a.format();
+            assert_eq!(channels, 1, "{name}");
+            assert!([44_100, 48_000].contains(&rate), "{name}: {rate} Hz");
+            let mut loud = 0usize;
+            let mut total = 0usize;
+            while let Some((_, samples)) = a.next_chunk() {
+                total += samples.len();
+                loud += samples.iter().filter(|s| s.abs() > 0.05).count();
+            }
+            // 2 s of a sine tone.
+            assert!(total > 80_000, "{name}: {total} samples");
+            assert!(loud > total / 4, "{name}: silence");
+        }
+    }
+
+    #[test]
+    fn aac_channels_come_from_the_audio_specific_config() {
+        // AAC-LC 44.1 kHz mono / stereo (what ffmpeg writes in `esds`).
+        assert_eq!(asc_channels(&[0x12, 0x08]), Some(1));
+        assert_eq!(asc_channels(&[0x12, 0x10]), Some(2));
+        // 48 kHz 5.1, and channel configuration 7 = 7.1.
+        assert_eq!(asc_channels(&[0x11, 0xB0]), Some(6));
+        assert_eq!(asc_channels(&[0x11, 0xB8]), Some(8));
+        // Explicit 24-bit sample rate (index 15) shifts the field.
+        assert_eq!(asc_channels(&[0x17, 0x80, 0x00, 0x00, 0x10]), Some(2));
+        // Layout in a program config element, and truncated input.
+        assert_eq!(asc_channels(&[0x12, 0x00]), None);
+        assert_eq!(asc_channels(&[0x12]), None);
+        assert_eq!(asc_channels(&[]), None);
+    }
 
     #[test]
     fn opus_head_accepts_mono_and_stereo_only() {
