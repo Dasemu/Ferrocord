@@ -1,7 +1,7 @@
 //! Video decoder helper for Ferrocord, with no system codec dependency.
 //!
-//! `ferrocord-player <file>` plays one MP4 (H.264 + AAC) or WebM (VP8 / VP9
-//! and Opus) file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built
+//! `ferrocord-player <file>` plays one MP4 / QuickTime (H.264 or VP9 + AAC)
+//! or WebM / Matroska (VP8 / VP9 / H.264 and Opus) file: H.264 through OpenH264 (Cisco's BSD-licensed decoder, built
 //! from source and linked statically), VP8 and VP9 through pure-Rust
 //! decoders, AAC through symphonia (pure Rust), Opus through a statically
 //! linked libopus, sound through cpal. It writes RGBA frames and playback
@@ -15,14 +15,16 @@
 //! only, decoded as fast as possible, scaled to fit `w` x `h`, evenly
 //! spaced frames within the budget written as timed pictures, then exit.
 //!
-//! The codecs live in [`codec`] and the demuxers in [`mp4`] / [`webm`], free
-//! of any playback logic, so a second binary can reuse them.
+//! The codecs live in [`codec`] (with the H.264 SPS checks in [`h264`]) and
+//! the demuxers in [`mp4`] / [`webm`], free of any playback logic, so a
+//! second binary can reuse them.
 //!
 //! Failures name the step that failed (open, container, codec, decode) so
 //! the viewer can say what happened.
 
 mod audio;
 mod codec;
+mod h264;
 mod mp4;
 mod source;
 mod webm;
@@ -153,10 +155,7 @@ mod player {
         };
         v.fill()?;
         if v.ready.is_none() {
-            return Err(fail(format!(
-                "no picture could be decoded from the {} stream",
-                v.info.codec.name()
-            )));
+            return Err(no_picture(&v));
         }
         send(
             out,
@@ -200,6 +199,27 @@ mod player {
             missing: false,
             text: text.into(),
         }
+    }
+
+    /// The decoder cannot handle this stream (`what` names it).
+    fn unsupported(what: String) -> Msg {
+        Msg::Failed {
+            missing: true,
+            text: what,
+        }
+    }
+
+    /// The whole stream went through the decoder and no picture came out.
+    fn no_picture(v: &Video) -> Msg {
+        if let Some(why) = v.decoder.unsupported() {
+            return unsupported(why);
+        }
+        fail(v.decoder.no_picture_reason().unwrap_or_else(|| {
+            format!(
+                "no picture could be decoded from the {} stream",
+                v.info.codec.name()
+            )
+        }))
     }
 
     fn track_failure(e: TrackError) -> Msg {
@@ -308,7 +328,15 @@ mod player {
                     }
                     Err(e) => return Err(fail(e)),
                 }
-                match self.decoder.decode(&self.packet, &mut self.queue) {
+                let decoded = self.decoder.decode(&self.packet, &mut self.queue);
+                if self.queue.is_empty()
+                    && let Some(why) = self.decoder.unsupported()
+                {
+                    // Nothing in this stream will ever decode: say why now
+                    // instead of reading the whole file first.
+                    return Err(unsupported(why));
+                }
+                match decoded {
                     Ok(()) => self.bad = 0,
                     Err(e) => {
                         self.bad += 1;
@@ -377,6 +405,9 @@ mod player {
             matrix: Matrix::for_height(info.height),
         };
         let decoder = codec::new_decoder(&info, geo).map_err(fail)?;
+        if let Some(why) = decoder.unsupported() {
+            return Err(unsupported(why));
+        }
         Ok(Some(Video {
             source,
             decoder,
@@ -463,10 +494,7 @@ mod player {
                 Some(v) => {
                     v.fill()?;
                     if v.ready.is_none() {
-                        return Err(fail(format!(
-                            "no picture could be decoded from the {} stream",
-                            v.info.codec.name()
-                        )));
+                        return Err(no_picture(v));
                     }
                     (v.out_w as u32, v.out_h as u32)
                 }
