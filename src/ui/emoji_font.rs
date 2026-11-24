@@ -1,178 +1,97 @@
-//! Colour emoji: Unicode emoji are drawn with a colour emoji family in
-//! their own text spans (the default font has no colour glyphs and the
-//! fallback may be blank boxes or monochrome). Text is split by grapheme
-//! cluster so keycaps, flags, skin tones and ZWJ sequences are never cut
-//! apart.
+//! Colour emoji, drawn with Twemoji as the official client does.
 //!
-//! The font is bundled (`theme::NOTO_COLOR_EMOJI`, Noto Color Emoji, SIL
-//! OFL) under its own family name, "Ferrocord Color Emoji". It used to keep
-//! the "Noto Color Emoji" name, and then any system face of that family
-//! shadowed it (font lookup returns the first face of a family, and system
-//! fonts are loaded first). That broke colour emoji wherever the system copy
-//! cannot be drawn: the COLRv1 build of Noto Color Emoji (Fedora's
-//! `Noto-COLRv1.ttf`, the Google Fonts download that Windows users install)
-//! renders blank or monochrome with swash, which only draws bitmap (CBDT,
-//! sbix) colour glyphs. Now a system copy is used only when every system
-//! face of the family is a bitmap font; otherwise the bundled copy is
-//! loaded and used by its own name, so nothing can shadow it.
+//! Unicode emoji are drawn with the bundled Twemoji font
+//! (`theme::TWEMOJI`: jdecked/twemoji graphics, CC-BY 4.0, compiled to a
+//! COLRv0 font by Mozilla's twemoji-colr pipeline) in their own text spans.
+//! Text is split by grapheme cluster so keycaps, flags, skin tones and ZWJ
+//! sequences are never cut apart; the font's `ccmp` ligatures then turn each
+//! cluster into one colour glyph.
+//!
+//! Why COLRv0: swash (cosmic-text's rasteriser) draws COLRv0 layers in
+//! colour (`Source::ColorOutline`) and bitmap glyphs (CBDT/sbix), but not
+//! COLRv1. COLRv0 is vector, so emoji stay sharp at every size, and the
+//! whole font is ~2 MB (Noto Color Emoji's CBDT build is 10.8 MB).
+//!
+//! The font has its own family name, "Ferrocord Twemoji", so no system face
+//! can shadow it (font lookup returns the first face of a family, and system
+//! fonts load first). [`install`] loads it zero-copy into iced's font system
+//! at startup and puts it first in cosmic-text's common fallback list: text
+//! that cannot take spans (the composer's `text_editor`, text inputs) gets
+//! Twemoji for every emoji the text font lacks, not the system emoji font.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
+use iced::advanced::graphics::text::cosmic_text;
 use iced::widget::text::{Span, Wrapping};
 use iced::widget::{rich_text, span, text};
 use iced::{Color, Element, Font};
 
 use crate::app::Message;
 
-/// Family of the system font that can be used instead of the bundled one.
-pub const SYSTEM_FAMILY: &str = "Noto Color Emoji";
-/// Family name of the bundled copy (renamed so it is never shadowed).
-pub const BUNDLED_FAMILY: &str = "Ferrocord Color Emoji";
-
-static USE_SYSTEM: AtomicBool = AtomicBool::new(false);
-
-/// Which emoji font the app draws with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmojiFont {
-    /// A drawable system Noto Color Emoji (saves ~22 MB RSS).
-    System,
-    /// The bundled copy, loaded at startup.
-    Bundled,
-}
-
-/// Records the choice made at startup (`main`).
-pub fn set_emoji_font(choice: EmojiFont) {
-    USE_SYSTEM.store(choice == EmojiFont::System, Ordering::Relaxed);
-}
+/// Family name of the bundled Twemoji font.
+pub const FAMILY: &str = "Ferrocord Twemoji";
 
 /// The colour emoji font for spans.
 pub fn emoji_font() -> Font {
-    if USE_SYSTEM.load(Ordering::Relaxed) {
-        Font::with_name(SYSTEM_FAMILY)
-    } else {
-        Font::with_name(BUNDLED_FAMILY)
+    Font::with_name(FAMILY)
+}
+
+/// cosmic-text fallback: the platform lists, with Twemoji in front of the
+/// common fallbacks so it wins over the system emoji font.
+struct TwemojiFirst {
+    inner: cosmic_text::PlatformFallback,
+    common: Vec<&'static str>,
+}
+
+impl TwemojiFirst {
+    fn new() -> Self {
+        use cosmic_text::Fallback;
+        let inner = cosmic_text::PlatformFallback;
+        let mut common = vec![FAMILY];
+        common.extend(inner.common_fallback().iter().copied());
+        Self { inner, common }
     }
 }
 
-/// Directories where system fonts live (the places fontdb scans).
-fn font_dirs() -> Vec<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let mut v = vec![
-        PathBuf::from("/usr/share/fonts"),
-        PathBuf::from("/usr/local/share/fonts"),
-        PathBuf::from("/Library/Fonts"),
-    ];
-    if let Some(h) = std::env::var_os("HOME") {
-        v.push(PathBuf::from(&h).join(".fonts"));
-        v.push(PathBuf::from(&h).join(".local/share/fonts"));
-        v.push(PathBuf::from(&h).join("Library/Fonts"));
+impl cosmic_text::Fallback for TwemojiFirst {
+    fn common_fallback(&self) -> &[&'static str] {
+        &self.common
     }
-    if let Some(x) = std::env::var_os("XDG_DATA_HOME") {
-        v.push(PathBuf::from(x).join("fonts"));
-    }
-    if let Some(x) = std::env::var_os("XDG_DATA_DIRS") {
-        v.extend(std::env::split_paths(&x).map(|d| d.join("fonts")));
-    }
-    // Windows: the system fonts and the per-user installs.
-    if let Some(w) = std::env::var_os("WINDIR") {
-        v.push(PathBuf::from(w).join("Fonts"));
-    }
-    if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-        v.push(PathBuf::from(l).join("Microsoft/Windows/Fonts"));
-    }
-    v.sort();
-    v.dedup();
-    v
-}
 
-/// What a font file says about the emoji family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct FamilyScan {
-    /// Faces of [`SYSTEM_FAMILY`] with bitmap colour glyphs (drawable).
-    pub drawable: usize,
-    /// Faces of [`SYSTEM_FAMILY`] without them (COLRv1/SVG/outline: would
-    /// draw blank or monochrome).
-    pub undrawable: usize,
-}
-
-/// Classifies the faces of one font file (a TTC can hold several).
-pub fn scan_font_data(data: &[u8]) -> FamilyScan {
-    let mut out = FamilyScan::default();
-    let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
-    for i in 0..n {
-        let Ok(face) = ttf_parser::Face::parse(data, i) else {
-            continue;
-        };
-        let family = face
-            .names()
-            .into_iter()
-            .filter(|n| {
-                n.name_id == ttf_parser::name_id::FAMILY
-                    || n.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY
-            })
-            .filter_map(|n| n.to_string())
-            .any(|f| f.eq_ignore_ascii_case(SYSTEM_FAMILY));
-        if !family {
-            continue;
-        }
-        let t = face.tables();
-        if t.cbdt.is_some() || t.sbix.is_some() {
-            out.drawable += 1;
-        } else {
-            out.undrawable += 1;
-        }
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        self.inner.forbidden_fallback()
     }
-    out
-}
 
-/// Scans `dirs` (a few levels deep) for faces of the emoji family. Only
-/// files whose name mentions emoji or COLR are opened.
-pub fn scan_dirs(dirs: &[std::path::PathBuf]) -> FamilyScan {
-    fn walk(dir: &std::path::Path, depth: u8, acc: &mut FamilyScan) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-            let Ok(ty) = e.file_type() else { continue };
-            if ty.is_dir() {
-                if depth > 0 {
-                    walk(&e.path(), depth - 1, acc);
-                }
-            } else if (name.contains("emoji") || name.contains("colr"))
-                && [".ttf", ".otf", ".ttc"].iter().any(|x| name.ends_with(x))
-                && let Ok(data) = std::fs::read(e.path())
-            {
-                let s = scan_font_data(&data);
-                acc.drawable += s.drawable;
-                acc.undrawable += s.undrawable;
-            }
-        }
-    }
-    let mut acc = FamilyScan::default();
-    for d in dirs {
-        walk(d, 5, &mut acc);
-    }
-    acc
-}
-
-/// The system copy is used only if it exists and every face of the family
-/// is drawable; anything else loads the bundled copy.
-pub fn choose(scan: FamilyScan) -> EmojiFont {
-    if scan.drawable > 0 && scan.undrawable == 0 {
-        EmojiFont::System
-    } else {
-        EmojiFont::Bundled
+    fn script_fallback(&self, script: unicode_script::Script, locale: &str) -> &[&'static str] {
+        self.inner.script_fallback(script, locale)
     }
 }
 
-/// Picks the emoji font at startup. `FERROCORD_BUNDLED_EMOJI=1` forces the
-/// bundled copy.
-pub fn pick_emoji_font() -> EmojiFont {
-    if std::env::var("FERROCORD_BUNDLED_EMOJI").is_ok_and(|v| v == "1") {
-        return EmojiFont::Bundled;
-    }
-    choose(scan_dirs(&font_dirs()))
+/// Loads the bundled Twemoji into `fs` without copying it and makes it the
+/// first common fallback.
+pub fn install_into(fs: &mut cosmic_text::FontSystem) {
+    let empty = cosmic_text::FontSystem::new_with_locale_and_db(
+        String::new(),
+        cosmic_text::fontdb::Database::new(),
+    );
+    let (locale, mut db) = std::mem::replace(fs, empty).into_locale_and_db();
+    db.load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(
+        crate::ui::theme::TWEMOJI,
+    )));
+    *fs = cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
+        locale,
+        db,
+        TwemojiFirst::new(),
+    );
+}
+
+/// Installs Twemoji in iced's global font system. Call once in `main`,
+/// before the first frame.
+pub fn install() {
+    let mut fs = iced::advanced::graphics::text::font_system()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    install_into(fs.raw());
 }
 
 const VS16: char = '\u{FE0F}';
@@ -275,71 +194,146 @@ pub fn emoji_spans<'a, L: Clone>(
 mod tests {
     use super::*;
 
-    fn bundled() -> &'static [u8] {
-        crate::ui::theme::NOTO_COLOR_EMOJI
+    #[test]
+    fn spans_use_the_twemoji_family() {
+        assert_eq!(emoji_font(), Font::with_name(FAMILY));
+    }
+
+    use cosmic_text::{
+        Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
+    };
+
+    /// A font system with only Twemoji, built the way `install` builds it.
+    fn twemoji_only() -> FontSystem {
+        let mut fs = FontSystem::new_with_locale_and_db(
+            "en-US".into(),
+            cosmic_text::fontdb::Database::new(),
+        );
+        install_into(&mut fs);
+        fs
+    }
+
+    /// Shapes `s` with Twemoji and rasterises every glyph: returns, per
+    /// glyph, whether swash drew it in colour.
+    fn render(fs: &mut FontSystem, s: &str, family: Family<'_>) -> Vec<bool> {
+        let mut buf = Buffer::new(fs, Metrics::new(32.0, 40.0));
+        buf.set_text(fs, s, &Attrs::new().family(family), Shaping::Advanced, None);
+        buf.shape_until_scroll(fs, false);
+        let glyphs: Vec<_> = buf
+            .layout_runs()
+            .flat_map(|r| r.glyphs.iter().cloned())
+            .collect();
+        let mut cache = SwashCache::new();
+        glyphs
+            .iter()
+            .map(|g| {
+                let pg = g.physical((0.0, 0.0), 1.0);
+                cache
+                    .get_image_uncached(fs, pg.cache_key)
+                    .is_some_and(|img| img.content == SwashContent::Color && !img.data.is_empty())
+            })
+            .collect()
     }
 
     #[test]
-    fn bundled_font_has_its_own_family_and_colour_bitmaps() {
-        let face = ttf_parser::Face::parse(bundled(), 0).unwrap();
+    fn bundled_font_is_colrv0_under_its_own_family() {
+        let face = ttf_parser::Face::parse(crate::ui::theme::TWEMOJI, 0).unwrap();
         let families: Vec<String> = face
             .names()
             .into_iter()
             .filter(|n| n.name_id == ttf_parser::name_id::FAMILY)
             .filter_map(|n| n.to_string())
             .collect();
-        assert!(families.iter().all(|f| f == BUNDLED_FAMILY), "{families:?}");
-        assert!(face.tables().cbdt.is_some());
-        // It never counts as a system copy, so it can't be mistaken for one.
-        assert_eq!(scan_font_data(bundled()), FamilyScan::default());
+        assert!(!families.is_empty());
+        assert!(families.iter().all(|f| f == FAMILY), "{families:?}");
+        let t = face.tables();
+        assert!(t.colr.is_some());
+        // Kept small: the whole point over the 10.8 MB CBDT Noto.
+        assert!(crate::ui::theme::TWEMOJI.len() < 3 * 1024 * 1024);
     }
 
+    /// Every kind of cluster shapes to ONE glyph that swash draws in
+    /// colour: the segmentation and the font's ligatures agree.
     #[test]
-    fn only_drawable_system_copies_are_used() {
-        let ok = FamilyScan {
-            drawable: 1,
-            undrawable: 0,
-        };
-        let colrv1 = FamilyScan {
-            drawable: 0,
-            undrawable: 1,
-        };
-        let both = FamilyScan {
-            drawable: 1,
-            undrawable: 1,
-        };
-        assert_eq!(choose(ok), EmojiFont::System);
-        assert_eq!(choose(colrv1), EmojiFont::Bundled);
-        assert_eq!(choose(both), EmojiFont::Bundled);
-        assert_eq!(choose(FamilyScan::default()), EmojiFont::Bundled);
-    }
-
-    #[test]
-    fn scans_font_dirs() -> std::io::Result<()> {
-        let d = tempfile::tempdir()?;
-        let dirs = vec![d.path().to_path_buf()];
-        assert_eq!(scan_dirs(&dirs), FamilyScan::default());
-        let sub = d.path().join("truetype/noto");
-        std::fs::create_dir_all(&sub)?;
-        // Junk named like the font is ignored, never a panic.
-        std::fs::write(sub.join("NotoColorEmoji.ttf"), b"x")?;
-        std::fs::write(sub.join("Noto-COLRv1.ttf"), [0u8; 64])?;
-        assert_eq!(scan_dirs(&dirs), FamilyScan::default());
-        // The bundled file under another name is still not the system family.
-        std::fs::write(sub.join("emoji-copy.ttf"), bundled())?;
-        assert_eq!(scan_dirs(&dirs), FamilyScan::default());
-        assert_eq!(
-            scan_dirs(&[d.path().join("missing")]),
-            FamilyScan::default()
+    fn sequences_render_as_one_colour_glyph() {
+        let mut fs = twemoji_only();
+        let cases = [
+            ("grinning", "\u{1F600}"),
+            ("heart vs16", "\u{2764}\u{FE0F}"),
+            ("heart bare", "\u{2764}"),
+            ("keycap vs16", "1\u{FE0F}\u{20E3}"),
+            ("keycap bare", "#\u{20E3}"),
+            ("flag", "\u{1F1EA}\u{1F1F8}"),
+            (
+                "england",
+                "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+            ),
+            ("skin tone", "\u{1F44B}\u{1F3FF}"),
+            (
+                "family zwj",
+                "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}",
+            ),
+            ("rainbow flag", "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"),
+            (
+                "health worker, tone",
+                "\u{1F9D1}\u{1F3FD}\u{200D}\u{2695}\u{FE0F}",
+            ),
+            (
+                "handshake, two tones",
+                "\u{1FAF1}\u{1F3FB}\u{200D}\u{1FAF2}\u{1F3FF}",
+            ),
+            ("Unicode 15.1 phoenix", "\u{1F426}\u{200D}\u{1F525}"),
+            ("(c) vs16", "\u{A9}\u{FE0F}"),
+        ];
+        for (name, s) in cases {
+            // Segmentation keeps the whole cluster as one emoji run...
+            assert_eq!(emoji_runs(s), vec![(true, s.to_string())], "{name}");
+            // ...and the font turns it into one colour glyph.
+            let g = render(&mut fs, s, Family::Name(FAMILY));
+            assert_eq!(g, vec![true], "{name}: {g:?}");
+        }
+        // Two clusters in one run stay two glyphs.
+        let g = render(
+            &mut fs,
+            "\u{1F1EA}\u{1F1F8}\u{1F1EB}\u{1F1F7}",
+            Family::Name(FAMILY),
         );
-        assert_eq!(choose(scan_dirs(&dirs)), EmojiFont::Bundled);
-        Ok(())
+        assert_eq!(g, vec![true, true]);
     }
 
+    /// Text that cannot take spans (the composer) falls back to Twemoji,
+    /// even with the system fonts loaded (a system Noto Color Emoji, the
+    /// platform's first emoji fallback, would otherwise win).
     #[test]
-    fn spans_use_the_chosen_family() {
-        set_emoji_font(EmojiFont::Bundled);
-        assert_eq!(emoji_font(), Font::with_name(BUNDLED_FAMILY));
+    fn fallback_prefers_twemoji_over_system_fonts() {
+        use cosmic_text::Fallback;
+        assert_eq!(TwemojiFirst::new().common_fallback().first(), Some(&FAMILY));
+        let mut fs = FontSystem::new();
+        install_into(&mut fs);
+        let mut buf = Buffer::new(&mut fs, Metrics::new(32.0, 40.0));
+        buf.set_text(
+            &mut fs,
+            "hi \u{1F600} \u{1F44B}\u{1F3FD}",
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            None,
+        );
+        buf.shape_until_scroll(&mut fs, false);
+        let fonts: Vec<_> = buf
+            .layout_runs()
+            .flat_map(|r| r.glyphs.iter())
+            .filter(|g| g.start >= 3 && !buf.lines[0].text()[g.start..g.end].trim().is_empty())
+            .map(|g| g.font_id)
+            .collect();
+        assert_eq!(fonts.len(), 2, "{fonts:?}");
+        for id in fonts {
+            let face = fs.db().face(id).unwrap();
+            assert!(
+                face.families.iter().any(|(f, _)| f == FAMILY),
+                "{:?}",
+                face.families
+            );
+        }
     }
 
     fn kinds(s: &str) -> Vec<(bool, String)> {

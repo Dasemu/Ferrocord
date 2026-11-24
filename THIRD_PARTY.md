@@ -6,6 +6,7 @@ fonts or artwork are included.
 | Asset | Location | Licence | Licence text |
 |---|---|---|---|
 | Inter font (Regular, Medium, SemiBold, Bold), © The Inter Project Authors | `assets/fonts/` | SIL Open Font License 1.1 | [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt) |
+| Twemoji emoji font (COLRv0 build of jdecked/twemoji 17.0 by Mozilla's twemoji-colr pipeline via `@sableclient/twemoji-font` 1.1.1; converted to TTF, renamed "Ferrocord Twemoji", hinting removed), graphics © Twitter, Inc, jdecked and other contributors | `assets/fonts/Twemoji.ttf` | Graphics: CC-BY 4.0; font build code: Apache-2.0 | [`assets/fonts/Twemoji-LICENSE.txt`](assets/fonts/Twemoji-LICENSE.txt) |
 | Lucide icons (45 SVGs, unmodified except for the removed licence comment), © Lucide Icons and Contributors, parts derived from Feather (© Cole Bemis) | `assets/icons/` | ISC (Feather parts: MIT) | [`assets/icons/LICENSE`](assets/icons/LICENSE) |
 
 `assets/icons/reply-spine.svg` is an original drawing (MIT, like the project).
@@ -52,3 +53,7 @@ Apache-2.0), MessagePack via `rmp-serde` (MIT), manifests via `toml` (MIT OR
 Apache-2.0), `.ferroplug` packages via `zip` (MIT). Plugins themselves are
 third-party code that is not part of Ferrocord and not covered by its
 licence; each plugin's licence is its author's.
+
+Twemoji is the emoji art the official Discord client uses too; it is a
+CC-BY project of Twitter and jdecked, not a Discord asset. No system emoji
+font is used.

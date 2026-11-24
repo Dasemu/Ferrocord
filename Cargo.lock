@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "aes-gcm",
  "arboard",
@@ -2018,6 +2018,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ttf-parser",
+ "unicode-script",
  "unicode-segmentation",
  "url",
  "vp8-decoder",

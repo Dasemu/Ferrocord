@@ -193,9 +193,15 @@ pub fn read_clipboard_blocking(max_image: usize) -> Clipboard {
 
 /// Writes pasted image bytes to a private temporary file.
 pub fn save_pasted_image(bytes: &[u8]) -> std::io::Result<PathBuf> {
+    save_temp_file(bytes, "paste", "png")
+}
+
+/// Writes `bytes` to a new private temporary file
+/// `ferrocord-<kind>-<random>.<ext>` (deleted after its upload).
+pub fn save_temp_file(bytes: &[u8], kind: &str, ext: &str) -> std::io::Result<PathBuf> {
     use std::io::Write;
     let dir = std::env::temp_dir();
-    let name = format!("ferrocord-paste-{:08x}.png", fastrand::u32(..));
+    let name = format!("ferrocord-{kind}-{:08x}.{ext}", fastrand::u32(..));
     let path = dir.join(name);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);

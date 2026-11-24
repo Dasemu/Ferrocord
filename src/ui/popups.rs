@@ -16,7 +16,8 @@ use crate::app::{App, Message, Ui, emoji_url, input};
 use crate::net::model::*;
 
 const MENU_W: f32 = 220.0;
-const PICKER_W: f32 = 352.0;
+const PICKER_W: f32 = 408.0;
+const PICKER_SIDEBAR_W: f32 = 44.0;
 const PICKER_H: f32 = 400.0;
 const COLUMNS: usize = 9;
 
@@ -351,6 +352,7 @@ fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker)
         .and_then(|c| app.chat.channels.get(&c))
         .and_then(|c| c.guild_id);
     let sections = crate::app::stickers::sections(&app.chat.guilds, current, &sp.query);
+    let access = app.nitro_access();
     // Each cell: the sticker plus 4px of button padding on both sides.
     let cell = (STICKER_PICKER_W - 16.0 - 8.0) / STICKER_COLUMNS as f32 - 8.0;
     let mut list = column![].spacing(8).padding(Padding::from([0, 8]));
@@ -365,8 +367,25 @@ fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker)
         for chunk in stickers.chunks(STICKER_COLUMNS) {
             let mut line = row![].spacing(4);
             for s in chunk {
+                let face = super::chat::sticker(app, s, cell);
+                // Nitro-locked here: a lock badge, like the official picker.
+                let face: El<'a> = if access.sticker(g, s).locked() {
+                    iced::widget::stack![
+                        face,
+                        container(
+                            container(icon(Icon::Lock, 12.0, p.text_normal))
+                                .padding(4)
+                                .style(theme::popup(p))
+                        )
+                        .align_right(cell)
+                        .align_bottom(cell),
+                    ]
+                    .into()
+                } else {
+                    face
+                };
                 line = line.push(
-                    button(super::chat::sticker(app, s, cell))
+                    button(face)
                         .padding(4)
                         .on_press(ui(Ui::PickSticker(s.id)))
                         .style(theme::icon_button(p)),
@@ -397,7 +416,38 @@ fn sticker_picker<'a>(app: &'a App, sp: &'a crate::app::stickers::StickerPicker)
         )
         .into()
     };
-    container(column![container(search).padding(8), body].spacing(4))
+    // Last child, so opening it keeps the list's scroll state.
+    let footer: El<'a> = match sp
+        .locked
+        .and_then(|id| crate::app::stickers::find(&app.chat.guilds, id))
+    {
+        Some(s) => {
+            let (why, send): (&str, El<'a>) = if s.format == StickerFormat::Lottie {
+                (
+                    "Stickers from other servers need Nitro, and animated vector (Lottie) stickers cannot be sent as an image.",
+                    Space::new().into(),
+                )
+            } else {
+                (
+                    "Stickers from other servers need Nitro here. You can send it as an image instead.",
+                    button(text("Send as image").size(14).font(INTER_MEDIUM))
+                        .padding(Padding::from([6, 12]))
+                        .on_press(ui(Ui::SendLockedAsImage))
+                        .style(theme::primary_button(p))
+                        .into(),
+                )
+            };
+            lock_footer(
+                app,
+                super::chat::sticker(app, s, 40.0),
+                s.name.clone(),
+                why,
+                send,
+            )
+        }
+        None => Space::new().into(),
+    };
+    container(column![container(search).padding(8), body, footer].spacing(4))
         .width(STICKER_PICKER_W)
         .height(STICKER_PICKER_H)
         .style(theme::popup(p))
@@ -596,11 +646,7 @@ fn status_menu(app: &App) -> El<'_> {
 fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
     let p = app.theme.palette;
     let pk = &open.picker;
-    let guild = app
-        .open_channel()
-        .and_then(|c| app.chat.channels.get(&c))
-        .and_then(|c| c.guild_id)
-        .and_then(|g| app.chat.guild(g));
+    let access = app.nitro_access();
 
     let search = text_input("Find the perfect emoji", &pk.query)
         .id(iced::widget::Id::new("emoji-search"))
@@ -610,11 +656,11 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         .padding(Padding::from([8, 10]))
         .style(theme::input(p, p.bg_app));
 
-    // Section tabs.
-    let mut tabs = row![].spacing(2);
+    // Sidebar, like the official picker: the servers with emoji (the open
+    // one first), then the Unicode categories.
     let tab = |label: El<'a>, section: Section| -> El<'a> {
         let active = pk.section == section && pk.query.is_empty();
-        button(container(label).center(28))
+        button(container(label).center(32))
             .padding(0)
             .on_press(ui(Ui::EmojiSection(section)))
             .style(move |t, s| {
@@ -626,9 +672,16 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
             })
             .into()
     };
-    if let Some(g) = guild.filter(|g| g.emojis.iter().any(|e| e.available)) {
-        tabs = tabs.push(tab(
-            text(
+    let servers = emoji::server_sections(&app.chat.guilds, &access);
+    let mut side = column![].spacing(2).align_x(Alignment::Center);
+    for g in &servers {
+        let face: El<'a> = match app.guild_icon(g) {
+            Some(h) => image(h.clone())
+                .width(24)
+                .height(24)
+                .border_radius(12.0)
+                .into(),
+            None => text(
                 g.acronym()
                     .chars()
                     .next()
@@ -639,8 +692,11 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
             .font(INTER_SEMIBOLD)
             .color(p.text_secondary)
             .into(),
-            Section::Server(g.id),
-        ));
+        };
+        side = side.push(tab(face, Section::Server(g.id)));
+    }
+    if !servers.is_empty() {
+        side = side.push(container(Space::new().width(20).height(1)).style(theme::bg(p.border)));
     }
     const FACES: [&str; 9] = [
         "\u{1F600}",
@@ -654,22 +710,32 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         "\u{1F3C1}",
     ];
     for (i, face) in FACES.iter().enumerate() {
-        tabs = tabs.push(tab(
-            emoji_text(*face, 16.0, p.text_normal, INTER, false),
+        side = side.push(tab(
+            emoji_text(*face, 18.0, p.text_normal, INTER, false),
             Section::Unicode(i),
         ));
     }
+    let sidebar = container(super::smooth_scroll::smooth(
+        scrollable(container(side).padding(Padding::from([0, 4])))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(0).scroller_width(0),
+            ))
+            .height(Length::Fill),
+    ))
+    .width(PICKER_SIDEBAR_W)
+    .height(Length::Fill)
+    .style(theme::bg(p.bg_app));
 
     // Grid.
     let mut cells: Vec<El<'a>> = Vec::new();
-    let custom: Vec<&CustomEmoji> = match (&pk.section, guild) {
-        (_, Some(g)) if !pk.query.is_empty() => emoji::custom_matching(g, &pk.query),
-        (Section::Server(_), Some(g)) => emoji::custom_matching(g, ""),
-        _ => vec![],
-    };
-    for ce in custom {
+    for (_, ce, usable) in emoji::shown_custom(pk, &app.chat.guilds, &access) {
         let face: El<'a> = match app.image(&emoji_url(&app.cfg.cdn_url, ce.id)) {
-            Some(h) => image(h.clone()).width(28).height(28).into(),
+            // Locked emoji are greyed out, as in the official picker.
+            Some(h) => image(h.clone())
+                .width(28)
+                .height(28)
+                .opacity(if usable.locked() { 0.35_f32 } else { 1.0_f32 })
+                .into(),
             None => text(":").size(14).color(p.text_muted).into(),
         };
         cells.push(emoji_button(p, face, Emoji::custom(ce)));
@@ -715,38 +781,124 @@ fn emoji_picker<'a>(app: &'a App, open: &'a OpenPicker) -> El<'a> {
         "Search results".to_owned()
     } else {
         match pk.section {
-            Section::Server(_) => guild.map(|g| g.name.clone()).unwrap_or_default(),
+            Section::Server(id) => app
+                .chat
+                .guild(id)
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
             Section::Unicode(i) => CATEGORIES
                 .get(i)
                 .map(|c| c.1.to_owned())
                 .unwrap_or_default(),
         }
     };
+    let main = column![
+        container(
+            text(title.to_uppercase())
+                .size(12)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_muted)
+        )
+        .padding(Padding::from([4, 8]).bottom(4)),
+        super::smooth_scroll::smooth(
+            scrollable(container(grid).padding(Padding::from([0, 4])))
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(theme::thin_scrollbar(p, false))
+                .height(Length::Fill)
+        ),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    // The Nitro lock footer stays the last child, so opening it never
+    // rebuilds the scrollables above (`ui::view` tree-shape rule).
+    let footer: El<'a> = match &pk.locked {
+        Some(e) => emoji_lock_footer(app, e, pk.target),
+        None => Space::new().into(),
+    };
     container(
         column![
             container(search).padding(8),
-            container(tabs).padding(Padding::from([0, 8])),
-            container(
-                text(title.to_uppercase())
-                    .size(12)
-                    .font(INTER_SEMIBOLD)
-                    .color(p.text_muted)
-            )
-            .padding(Padding::from([8, 12]).bottom(4)),
-            super::smooth_scroll::smooth(
-                scrollable(container(grid).padding(Padding::from([0, 8])))
-                    .direction(scrollable::Direction::Vertical(
-                        scrollable::Scrollbar::new().width(4).scroller_width(4),
-                    ))
-                    .style(theme::thin_scrollbar(p, false))
-                    .height(Length::Fill)
-            ),
+            row![sidebar, main].spacing(4).height(Length::Fill),
+            footer,
         ]
         .spacing(4),
     )
     .width(PICKER_W)
     .height(PICKER_H)
     .style(theme::popup(p))
+    .into()
+}
+
+/// Footer shown when a Nitro-locked emoji was picked: why, and (from the
+/// composer) the explicit "Send as image".
+fn emoji_lock_footer<'a>(app: &'a App, e: &Emoji, target: PickerTarget) -> El<'a> {
+    let p = app.theme.palette;
+    let face: El<'a> = match e
+        .id
+        .and_then(|id| app.image(&emoji_url(&app.cfg.cdn_url, id)))
+    {
+        Some(h) => image(h.clone()).width(32).height(32).into(),
+        None => icon(Icon::Lock, 20.0, p.text_muted),
+    };
+    let here = app.nitro_access().here;
+    let same_server =
+        e.id.and_then(|id| emoji::find_custom(&app.chat.guilds, id))
+            .is_some_and(|(g, _)| Some(g.id) == here);
+    let why = match (target, e.animated && same_server) {
+        (PickerTarget::Reaction { .. }, _) => "Reacting with this emoji here needs Nitro.",
+        (PickerTarget::Composer, true) => {
+            "Animated emoji need Nitro. You can send it as an image instead."
+        }
+        (PickerTarget::Composer, false) => {
+            "Emoji from other servers need Nitro here. You can send it as an image instead."
+        }
+    };
+    let send: El<'a> = if target == PickerTarget::Composer {
+        button(text("Send as image").size(14).font(INTER_MEDIUM))
+            .padding(Padding::from([6, 12]))
+            .on_press(ui(Ui::SendLockedAsImage))
+            .style(theme::primary_button(p))
+            .into()
+    } else {
+        Space::new().into()
+    };
+    lock_footer(app, face, format!(":{}:", e.name), why, send)
+}
+
+fn lock_footer<'a>(app: &'a App, face: El<'a>, name: String, why: &'a str, send: El<'a>) -> El<'a> {
+    let p = app.theme.palette;
+    container(
+        row![
+            container(face).center(40),
+            column![
+                row![
+                    icon(Icon::Lock, 12.0, p.text_muted),
+                    text(name)
+                        .size(14)
+                        .font(INTER_SEMIBOLD)
+                        .color(p.header_text),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center),
+                text(why).size(12).color(p.text_secondary),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            send,
+            button(icon(Icon::X, 14.0, p.text_muted))
+                .padding(4)
+                .on_press(ui(Ui::DismissLocked))
+                .style(theme::icon_button(p)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding(8)
+    .width(Length::Fill)
+    .style(theme::bg(p.bg_app))
     .into()
 }
 

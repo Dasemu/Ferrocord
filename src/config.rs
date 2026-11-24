@@ -86,6 +86,10 @@ pub enum ScreenshotScreen {
     PluginPrompt,
     /// Plugin decorations (badges, a note line, a highlight) on messages.
     PluginDecorations,
+    /// Emoji picker on another server's emoji, with the Nitro lock footer.
+    EmojiLocked,
+    /// Sticker picker with a Nitro-locked sticker picked.
+    StickersLocked,
 }
 
 impl ScreenshotScreen {
@@ -154,6 +158,8 @@ impl ScreenshotScreen {
             "plugins" => Some(Self::Plugins),
             "plugin-prompt" => Some(Self::PluginPrompt),
             "plugin-decorations" => Some(Self::PluginDecorations),
+            "emoji-locked" => Some(Self::EmojiLocked),
+            "stickers-locked" => Some(Self::StickersLocked),
             _ => None,
         }
     }

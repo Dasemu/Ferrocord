@@ -80,14 +80,7 @@ fn main() -> iced::Result {
     .theme(move |_: &App, _window: iced::window::Id| theme.clone())
     .default_font(ferrocord::ui::theme::INTER)
     .antialiasing(true);
-    // Colour emoji: a drawable system Noto Color Emoji, else the bundled
-    // copy under its own family name (see `ui::emoji_font`).
-    use ferrocord::ui::emoji_font::{self, EmojiFont};
-    let choice = emoji_font::pick_emoji_font();
-    emoji_font::set_emoji_font(choice);
-    tracing::info!(font = ?choice, "colour emoji font");
-    match choice {
-        EmojiFont::Bundled => app.font(ferrocord::ui::theme::NOTO_COLOR_EMOJI).run(),
-        EmojiFont::System => app.run(),
-    }
+    // Colour emoji: the bundled Twemoji (see `ui::emoji_font`).
+    ferrocord::ui::emoji_font::install();
+    app.run()
 }
