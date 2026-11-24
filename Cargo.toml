@@ -180,14 +180,6 @@ panic = "unwind"
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
-# The plugin interpreter: fuel budgets are sized for optimised code, and an
-# unoptimised interpreter makes a plugin hook 30-50x slower in debug builds.
-[profile.dev.package.wasmi]
-opt-level = 3
-[profile.dev.package.wasmi_core]
-opt-level = 3
-[profile.dev.package.wasmi_ir]
-opt-level = 3
 
 # iced comes from ferroiced (https://github.com/Kartudev/ferroiced): iced 0.14.1
 # plus a tiny-skia fast path for opaque images (video frames, GIFs). Crate

@@ -142,7 +142,7 @@ Plugins page. Nothing a plugin does can crash or freeze the app.
 |---|---|
 | `plugin.wasm` | 8 MiB; `.ferroplug` 16 MiB; `plugin.toml` 64 KiB |
 | Linear memory | 16 MiB (one memory, `memory.grow` beyond fails) |
-| Fuel (≈ wasm instructions) | load 200 M · event / setting 50 M · transform 20 M · command / action / HTTP answer 100 M |
+| Fuel (≈ wasm instructions) | load 50 M · event / setting 50 M · transform 20 M · command / action / HTTP answer 100 M |
 | Transform chain | 150 ms wall clock in the plugin thread; the app sends the original text after 300 ms |
 | Host calls per hook | 256; input ≤ 256 KiB, result ≤ 256 KiB |
 | Event queue | 256 events; channel switches and history coalesce; the oldest is dropped when full |

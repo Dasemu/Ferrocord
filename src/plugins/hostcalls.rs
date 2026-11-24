@@ -169,6 +169,9 @@ pub struct Env {
     pub pending: Vec<u8>,
     pub kv: Rc<RefCell<Kv>>,
     pub limits: StoreLimits,
+    /// The instance's linear memory, set once it is instantiated (host
+    /// calls look it up by name only before that, from a start function).
+    pub memory: Option<wasmi::Memory>,
     pub now_ms: fn() -> u64,
     next_request: u64,
     /// Grants that already sent their message.
@@ -193,6 +196,7 @@ impl Env {
             pending: Vec::new(),
             kv,
             limits,
+            memory: None,
             now_ms,
             next_request: 1,
             spent: VecDeque::new(),

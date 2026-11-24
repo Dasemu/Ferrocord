@@ -197,7 +197,13 @@ fn infinite_loops_run_out_of_fuel() {
     let t = Instant::now();
     let r = i.call(hook::EVENT, &[], CallKind::Passive, runtime::EVENT_FUEL);
     assert_eq!(r, Err(Fault::OutOfFuel));
-    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+    // ~0.05 s optimised; an unoptimised debug build interprets ~100x slower.
+    let limit = if cfg!(debug_assertions) { 60 } else { 5 };
+    assert!(
+        t.elapsed() < Duration::from_secs(limit),
+        "{:?}",
+        t.elapsed()
+    );
     // A loop at instantiation (start function) is bounded too.
     let src = r#"(module (memory (export "memory") 1)
         (func $s (loop $l (br $l))) (start $s))"#;

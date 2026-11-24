@@ -18,7 +18,7 @@ pub const MAX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
 /// Largest hook output (`fc_call` result) and host-call result.
 pub const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 /// Fuel for instantiation plus `on_load`.
-pub const LOAD_FUEL: u64 = 200_000_000;
+pub const LOAD_FUEL: u64 = 50_000_000;
 /// Fuel per observer event (~10-50 ms of interpretation at most).
 pub const EVENT_FUEL: u64 = 50_000_000;
 /// Fuel for the outgoing transform: the user is waiting for the send.
@@ -111,7 +111,7 @@ fn linker(engine: &Engine) -> Result<Linker<Env>, String> {
         IMPORT_MODULE,
         "host_call",
         |mut caller: Caller<'_, Env>, op: i32, ptr: i32, len: i32| -> i32 {
-            let Some(mem) = caller.get_export("memory").and_then(Extern::into_memory) else {
+            let Some(mem) = memory_of(&mut caller) else {
                 return err::BAD_INPUT;
             };
             let (data, env) = mem.data_and_store_mut(&mut caller);
@@ -140,7 +140,7 @@ fn linker(engine: &Engine) -> Result<Linker<Env>, String> {
         IMPORT_MODULE,
         "host_take",
         |mut caller: Caller<'_, Env>, ptr: i32, len: i32| -> i32 {
-            let Some(mem) = caller.get_export("memory").and_then(Extern::into_memory) else {
+            let Some(mem) = memory_of(&mut caller) else {
                 return err::BAD_INPUT;
             };
             let (data, env) = mem.data_and_store_mut(&mut caller);
@@ -155,6 +155,14 @@ fn linker(engine: &Engine) -> Result<Linker<Env>, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(l)
+}
+
+/// The caller's memory: cached in `Env` after instantiation.
+fn memory_of(caller: &mut Caller<'_, Env>) -> Option<Memory> {
+    if let Some(m) = caller.data().memory {
+        return Some(m);
+    }
+    caller.get_export("memory").and_then(Extern::into_memory)
 }
 
 fn range(len_total: usize, ptr: i32, len: i32) -> Option<std::ops::Range<usize>> {
@@ -201,6 +209,7 @@ impl Instance {
         let memory = inst
             .get_memory(&store, "memory")
             .ok_or_else(|| get("memory"))?;
+        store.data_mut().memory = Some(memory);
         let v = version.call(&mut store, ()).map_err(|e| fault(&e))?;
         if v != ABI_VERSION as i32 {
             return Err(Fault::Abi(format!(

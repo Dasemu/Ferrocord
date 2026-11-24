@@ -146,29 +146,11 @@ jobs:
       - name: Example plugins
         shell: bash
         run: examples/plugins/build.sh
-      # TEMP diagnostic: wasmi access violation on Windows, one config at a time.
-      - name: Plugin tests (diagnostic)
-        continue-on-error: true
-        shell: bash
-        env:
-          FERROCORD_EXPECT_PLUGINS: "1"
-        run: |
-          echo "== A: dev, wasmi opt-level 3 (Cargo.toml)"
-          cargo test --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::A exit $?"
-          echo "== B: dev, wasmi opt-level 0"
-          cargo test --config 'profile.dev.package.wasmi.opt-level=0' --config 'profile.dev.package.wasmi_core.opt-level=0' --config 'profile.dev.package.wasmi_ir.opt-level=0' --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::B exit $?"
-          echo "== C: dev, wasmi opt-level 3 without debug assertions"
-          cargo test --config 'profile.dev.package.wasmi.debug-assertions=false' --config 'profile.dev.package.wasmi_core.debug-assertions=false' --config 'profile.dev.package.wasmi_ir.debug-assertions=false' --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::C exit $?"
-          echo "== D: release"
-          cargo test --release --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::D exit $?"
       - name: cargo test
         env:
           # Media Foundation's H.264 and AAC decoders must be found and work.
           FERROCORD_EXPECT_PLATFORM: "1"
           FERROCORD_EXPECT_PLUGINS: "1"
-          # The sandbox tests run wasmi on libtest threads: give them the
-          # plugin thread's stack (see `PLUGIN_THREAD_STACK`).
-          RUST_MIN_STACK: "16777216"
         run: cargo test --all-targets
       # mfplat.dll is loaded at run time: Windows N without the Media Feature
       # Pack must still start the helper.
