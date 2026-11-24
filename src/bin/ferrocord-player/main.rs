@@ -38,6 +38,10 @@ mod webm;
 mod yuv;
 
 fn main() {
+    ferrocord::cli::handle_info_flags(
+        "ferrocord-player",
+        "ferrocord-player <file> | --frames <w>x<h> <frames> <bytes> <file> | --backends",
+    );
     player::run();
 }
 
@@ -142,7 +146,8 @@ mod player {
     fn usage() -> ! {
         eprintln!(
             "usage: ferrocord-player [--frames <w>x<h> <frames> <bytes>] <file>\n       \
-             ferrocord-player --backends"
+             ferrocord-player --backends\n       \
+             ferrocord-player --version | -V"
         );
         std::process::exit(2);
     }
