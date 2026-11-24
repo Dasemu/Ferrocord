@@ -1,0 +1,16 @@
+# Example plugins: a separate workspace, built for wasm32-unknown-unknown:
+#   cargo build --release --target wasm32-unknown-unknown
+# (or `./build.sh`, which also lays them out as installable plugin folders).
+[workspace]
+resolver = "3"
+members = ["text-replacer", "word-highlighter", "quote-message"]
+
+[workspace.dependencies]
+ferrocord-plugin-sdk = { path = "../../crates/ferrocord-plugin-sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

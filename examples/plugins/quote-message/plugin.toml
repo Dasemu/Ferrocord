@@ -1,0 +1,15 @@
+id = "quote-message"
+name = "Quote Message"
+version = "1.0.0"
+author = "Ferrocord contributors"
+description = "Adds \"Copy as Quote\" and \"Quote in Composer\" to the message menu."
+api_version = 1
+permissions = ["clipboard", "composer"]
+
+[[actions]]
+id = "copy-quote"
+label = "Copy as Quote"
+
+[[actions]]
+id = "quote-composer"
+label = "Quote in Composer"

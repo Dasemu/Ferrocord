@@ -9,15 +9,18 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
+- Plugins: `examples/plugins/build.sh` (needs `rustup target add wasm32-unknown-unknown`) builds the
+  example plugins that `tests/plugins_examples.rs` loads (skipped without them unless
+  `FERROCORD_EXPECT_PLUGINS=1`); `cargo test -p ferrocord-plugin-sdk` for the SDK.
 - Shared machine: `export CARGO_BUILD_JOBS=2`.
 
 ## Architecture
 See `docs/architecture.md` (shared Ferro* skeleton) and `docs/protocol.md`
-(gateway, REST, rate limits, QR login, UI reference), `docs/voice.md` (voice). Layout: `src/app`
+(gateway, REST, rate limits, QR login, UI reference), `docs/voice.md` (voice). Plugins: `docs/plugins.md`. Layout: `src/app`
 (state + pure reducers), `src/ui` (views + theme), `src/net` (gateway, REST,
 remote auth), `src/store` (SQLite cache), `src/auth` (login + keyring).
 
@@ -86,6 +89,12 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   time, never imported; CI checks with dumpbin). OpenH264/VP8/VP9 stay the default; the platform decoder takes over at
   run time when they fail. `ferrocord-player --backends` lists what the system has; `FERROCORD_PLATFORM_DECODERS=0`
   turns them off, `FERROCORD_VIDEO_DECODER=platform` prefers them. Never link `ffmpeg-sys` or bundle a decoder.
+- Plugins (`src/plugins/`, `app/plugins.rs`, `ui/plugins.rs`, SDK in `crates/ferrocord-plugin-sdk`): wasmi with
+  fuel + 16 MiB memory per plugin, one worker thread, MessagePack ABI v1 (structs as named maps; additive changes only).
+  Zero cost with none enabled: no engine, thread or subscription (`tests/plugins_zero_cost.rs`). Never give plugins raw
+  gateway/REST access, a token, files or timers; account actions (`send_message`, reactions) need a user-action grant.
+  wasmi needs its `auto-dispatch` feature (else debug builds overflow the stack on long wasm loops). Plugins never draw:
+  new extension points must stay declarative and host-rendered.
 - Animations never tick the app: draw them with `ui::anim_image` (self-playing, redraws only when its own
   next frame is due, on a shared 60 Hz grid, only while visible) with `App::anim_clock(phase)`; effect layers
   pass a `Timeline`. Size `anim::Class::limits` to the drawn size so typical assets keep every frame (frame

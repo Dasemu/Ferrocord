@@ -1,0 +1,24 @@
+id = "word-highlighter"
+name = "Word Highlighter"
+version = "1.0.0"
+author = "Ferrocord contributors"
+description = "Highlights messages that contain any of your words."
+api_version = 1
+permissions = ["read_messages", "decorations"]
+events = ["message_create", "message_update", "history"]
+
+[[settings]]
+key = "words"
+type = "string"
+label = "Words"
+description = "Comma-separated, case-insensitive."
+default = "ferrocord, rust"
+max_len = 300
+
+[[settings]]
+key = "style"
+type = "choice"
+label = "Style"
+description = "Tint the whole message, or only show a badge."
+choices = ["highlight", "badge"]
+default = "highlight"

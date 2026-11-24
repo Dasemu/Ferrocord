@@ -981,6 +981,52 @@ pub fn gif_tile_scrim() -> Color {
     rgba(0x000000, 0.5)
 }
 
+/// Row tint of a message a plugin highlighted (lighter than a mention).
+pub fn plugin_highlight(p: Palette) -> Color {
+    Color {
+        a: 0.10,
+        ..p.accent
+    }
+}
+
+/// Small pill a plugin attached to a message.
+pub fn plugin_badge(p: Palette, accent: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(if accent {
+            Color {
+                a: 0.25,
+                ..p.accent
+            }
+        } else {
+            p.bg_hover
+        })),
+        text_color: Some(if accent {
+            p.header_text
+        } else {
+            p.text_secondary
+        }),
+        border: Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: p.border,
+        },
+        ..Default::default()
+    }
+}
+
+/// Bordered card of one plugin on the Plugins page.
+pub fn plugin_card(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.bg_sidebar)),
+        border: Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: p.border,
+        },
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

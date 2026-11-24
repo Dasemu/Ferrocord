@@ -410,6 +410,9 @@ fn message<'a>(
             body = body.push(card);
         }
     }
+    if let Some(d) = super::plugins::decorations(app, m.id) {
+        body = body.push(d);
+    }
     // "Show emoji reactions on messages".
     if app.show_reactions() && !m.reactions.is_empty() {
         body = body.push(reactions_row(app, c, m));
@@ -518,6 +521,8 @@ fn message<'a>(
         Some(p.bubble_in)
     } else if menu_target {
         Some(p.bg_hover)
+    } else if app.plugins.decorations.highlighted(m.id.0) {
+        Some(theme::plugin_highlight(p))
     } else {
         None
     };

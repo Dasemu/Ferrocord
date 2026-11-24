@@ -82,6 +82,12 @@ pub enum ScreenshotScreen {
     GifTrending,
     /// GIF picker: the saved GIFs.
     GifFavorites,
+    /// Settings → Plugins with the example plugins installed.
+    Plugins,
+    /// The permission prompt shown before a plugin is enabled.
+    PluginPrompt,
+    /// Plugin decorations (badges, a note line, a highlight) on messages.
+    PluginDecorations,
     /// Emoji picker on another server's emoji, with the Nitro lock footer.
     EmojiLocked,
     /// Sticker picker with a Nitro-locked sticker picked.
@@ -155,6 +161,9 @@ impl ScreenshotScreen {
             "gifs" | "gif-picker" => Some(Self::Gifs),
             "gif-trending" => Some(Self::GifTrending),
             "gif-favorites" => Some(Self::GifFavorites),
+            "plugins" => Some(Self::Plugins),
+            "plugin-prompt" => Some(Self::PluginPrompt),
+            "plugin-decorations" => Some(Self::PluginDecorations),
             "emoji-locked" => Some(Self::EmojiLocked),
             "stickers-locked" => Some(Self::StickersLocked),
             _ => None,
@@ -225,6 +234,9 @@ pub struct Config {
     pub trace_startup: bool,
     pub data_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    /// `<config dir>/plugins` (`FERROCORD_PLUGINS_DIR` overrides it; in
+    /// mock mode only the override is used).
+    pub plugins_dir: Option<PathBuf>,
     /// Disposable caches (GIF picker media).
     pub cache_dir: Option<PathBuf>,
 }
@@ -297,6 +309,11 @@ impl Config {
             state_dir: dirs
                 .as_ref()
                 .map(|d| d.state_dir().unwrap_or(d.data_dir()).to_path_buf()),
+            plugins_dir: match env("FERROCORD_PLUGINS_DIR") {
+                Some(d) => Some(PathBuf::from(d)),
+                None if mock => None,
+                None => dirs.as_ref().map(|d| d.config_dir().join("plugins")),
+            },
             cache_dir: dirs.as_ref().map(|d| d.cache_dir().to_path_buf()),
         })
     }
@@ -318,6 +335,7 @@ impl Config {
             trace_startup: false,
             data_dir: None,
             state_dir: None,
+            plugins_dir: None,
             cache_dir: None,
         }
     }
@@ -328,6 +346,14 @@ impl Config {
             return None;
         }
         self.data_dir.as_ref().map(|d| d.join("cache.sqlite3"))
+    }
+
+    /// The plugins' key-value store, `None` (in memory) in mock mode.
+    pub fn plugin_store_path(&self) -> Option<PathBuf> {
+        if self.mock {
+            return None;
+        }
+        self.data_dir.as_ref().map(|d| d.join("plugins.sqlite3"))
     }
 
     pub fn log_path(&self) -> Option<PathBuf> {

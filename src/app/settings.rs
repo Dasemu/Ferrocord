@@ -53,10 +53,12 @@ pub enum Category {
     Keybinds,
     Language,
     Advanced,
+    /// Community plugins (`ui::plugins::page`).
+    Plugins,
 }
 
 impl Category {
-    pub const ALL: [Category; 12] = [
+    pub const ALL: [Category; 13] = [
         Self::MyAccount,
         Self::Profiles,
         Self::Privacy,
@@ -69,6 +71,7 @@ impl Category {
         Self::Keybinds,
         Self::Language,
         Self::Advanced,
+        Self::Plugins,
     ];
 
     pub fn label(self) -> &'static str {
@@ -85,6 +88,7 @@ impl Category {
             Self::Keybinds => "Keybinds",
             Self::Language => "Language",
             Self::Advanced => "Advanced",
+            Self::Plugins => "Plugins",
         }
     }
 
@@ -94,6 +98,7 @@ impl Category {
             Self::MyAccount => Some("USER SETTINGS"),
             Self::Status => Some("ACTIVITY SETTINGS"),
             Self::Appearance => Some("APP SETTINGS"),
+            Self::Plugins => Some("PLUGINS"),
             _ => None,
         }
     }
@@ -113,6 +118,7 @@ impl Category {
             Self::Keybinds => "keybinds",
             Self::Language => "language",
             Self::Advanced => "advanced",
+            Self::Plugins => "plugins",
         }
     }
 
@@ -956,7 +962,12 @@ impl App {
         }
         let custom = self.settings.synced.custom.clone();
         self.settings.forms.fill_custom(custom.as_ref());
-        Task::batch([self.load_user_settings(), self.load_own_profile()])
+        let plugins = if self.settings.category() == Category::Plugins {
+            self.on_plugin(super::plugins::PluginMsg::OpenPage)
+        } else {
+            Task::none()
+        };
+        Task::batch([self.load_user_settings(), self.load_own_profile(), plugins])
     }
 
     /// Leaves the screen: pending writes go now, the mic test stops.
@@ -977,6 +988,12 @@ impl App {
                         y: Some(0.0),
                     },
                 );
+                if c == Category::Plugins {
+                    // Rescan the plugins folder each time the page opens.
+                    self.settings.mic_test = None;
+                    let scan = self.on_plugin(super::plugins::PluginMsg::OpenPage);
+                    return Task::batch([top, scan]);
+                }
                 if c != Category::VoiceVideo {
                     self.settings.mic_test = None;
                     return top;

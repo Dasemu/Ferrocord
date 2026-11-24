@@ -518,7 +518,7 @@ fn popup_layer_from<'a>(app: &'a App, card: El<'a>, at: Point, close: Ui, top: f
 }
 
 fn menu_height(app: &App, m: MessageId) -> f32 {
-    let n = menu_items(app, m).len() as f32;
+    let n = (menu_items(app, m).len() + super::plugins::menu_entries(app, m).len()) as f32;
     n * 32.0 + 16.0
 }
 
@@ -617,6 +617,16 @@ fn context_menu(app: &App, m: MessageId) -> El<'_> {
             .width(Length::Fill)
             .on_press(ui(it.action))
             .style(theme::menu_item(p, it.danger)),
+        );
+    }
+    // Plugin actions (labels from their manifests), after the built-ins.
+    for (label, action) in super::plugins::menu_entries(app, m) {
+        col = col.push(
+            button(text(label).size(14).font(INTER_MEDIUM).width(Length::Fill))
+                .padding(Padding::from([6, 8]))
+                .width(Length::Fill)
+                .on_press(action)
+                .style(theme::menu_item(p, false)),
         );
     }
     container(col).width(MENU_W).style(theme::popup(p)).into()

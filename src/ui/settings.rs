@@ -180,6 +180,7 @@ fn page(app: &App) -> El<'_> {
         Category::Keybinds => keybinds(app),
         Category::Language => language(app),
         Category::Advanced => advanced(app),
+        Category::Plugins => super::plugins::page(app),
     }
 }
 
