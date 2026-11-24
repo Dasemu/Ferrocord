@@ -39,7 +39,7 @@ states or remote auth.
 | 0 | DISPATCH | ← | Tracks `s`; parsed by `types::parse_dispatch`. |
 | 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
 | 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`; same object as `X-Super-Properties`), presence. |
-| 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`); also saved with `PATCH /users/@me/settings`. |
+| 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`) plus the custom status as an activity (`{type: 4, name: "Custom Status", state, emoji}`); also saved in the settings proto (§14). IDENTIFY carries the same presence. |
 | 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, channels: {id: [[0,99]]}}`, sent while the member sidebar is open. |
 | 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
 | 7 | RECONNECT | ← | Close with 4000 and resume. |
@@ -140,7 +140,9 @@ client's retry. Ferrocord never solves a captcha and uses no solver service.
 | Jump | `GET .../messages?around={m}` / `?after={m}` |
 | Search | `GET /guilds/{g}/messages/search?content=&offset=` or `/channels/{c}/...` (202 + `retry_after` while indexing is retried, max 4 tries) |
 | Upload | `POST .../messages` `multipart/form-data`: `payload_json` + `files[n]`, streamed from disk with an explicit `Content-Length` |
-| Status | `PATCH /users/@me/settings {status}` |
+| Status | `PATCH /users/@me/settings-proto/1` (`status.status`, `status.custom_status`; §14) |
+| User settings | `GET`/`PATCH /users/@me/settings-proto/1` (§14) |
+| Profile edit | `PATCH /users/@me {global_name}`, `PATCH /users/@me/profile {pronouns, bio}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` with `X-Fingerprint` |
 | Fingerprint | `GET /experiments` (logged out) → `fingerprint` |
@@ -636,3 +638,94 @@ Design, DAVE and the video feasibility pass: `docs/voice.md`.
 
 Voice settings (devices, sensitivity, per-user volume, self mute/deafen)
 are stored in SQLite `meta("pref.voice")` as JSON and kept on logout.
+
+## 14. User Settings (`net/user_settings.rs`, `net/rest/settings.rs`, `app/settings.rs`, `ui/settings.rs`)
+
+The screen copies the official layout: a sidebar of categories (User
+Settings, Activity Settings, App Settings, Log Out at the bottom) and the
+page on the right; Esc or the round X closes it. Both scrollables have
+fixed ids, text fields are bound to `SettingsState::forms` (filled once when
+the screen opens) and no image handle is made in `view`.
+
+### Synced settings: the preloaded user settings proto
+
+`GET /users/@me/settings-proto/1` -> `{settings: base64}` =
+`PreloadedUserSettings` (discord-protos 1.2.429, checked against the PyPI
+package's `.proto`). Ferrocord identifies with `capabilities: 0`, so READY
+carries only the legacy JSON settings: the proto is read with one GET after
+READY and again whenever the settings screen opens (so changes made in
+another client show).
+
+| Setting | Field (top.field[.field]) | Type |
+|---|---|---|
+| Show spoiler content | 6.4 `render_spoilers` | StringValue `ON_CLICK` / `IF_MODERATOR` / `ALWAYS` |
+| Images when uploaded directly | 6.9 `inline_attachment_media` | BoolValue |
+| Images when posted as links | 6.10 `inline_embed_media` | BoolValue |
+| Play GIFs automatically | 6.11 `gif_auto_play` | BoolValue |
+| Show embeds / link previews | 6.12 `render_embeds` | BoolValue |
+| Show emoji reactions | 6.13 `render_reactions` | BoolValue |
+| Play animated emoji | 6.14 `animate_emoji` | BoolValue |
+| Animate stickers | 6.15 `animate_stickers` | UInt32Value 0 always, 1 on interaction, 2 never |
+| Compact message display | 6.17 `message_display_compact` | BoolValue |
+| Convert emoticons | 6.21 `convert_emoticons` | BoolValue |
+| DM spam filter | 6.27 `dm_spam_filter_v2` | enum 1 off, 2 non-friends, 3 all |
+| Allow DMs from server members (default) | 8.4 `default_guilds_restricted` (inverted) | bool |
+| Friend request sources | 8.11 `friend_source_flags` | UInt32Value bits 1<<1 mutual friends, 1<<2 mutual servers, 1<<3 everyone (needs both) |
+| Online status | 11.1 `status.status` | StringValue |
+| Custom status | 11.2 `custom_status {text=1, emoji_id=2 fixed64, emoji_name=3, expires_at_ms=4 fixed64, created_at_ms=5 fixed64}` | message |
+| Language | 12.1 `localization.locale` | StringValue |
+| Theme | 13.1 `appearance.theme` | enum 1 dark, 2 light, 3 darker (Ash), 4 midnight (Onyx) |
+| Developer Mode | 13.2 `developer_mode` | bool |
+| Time format | 13.9 `timestamp_hour_cycle` | enum 0 auto, 1 12-hour, 2 24-hour |
+
+A `*Value` wrapper that is absent means "not set" (the client default); an
+empty wrapper is the zero value. Writes follow Discord's PATCH rule: each
+top-level field sent *replaces* the stored one and omitted ones stay. So a
+save is GET, edit (`user_settings::apply`: every other byte, unknown fields
+included, kept), then `PATCH /users/@me/settings-proto/1 {settings: base64}`
+with only the touched top-level fields, each complete
+(`user_settings::top_level`). `out_of_date: true` counts as a failure.
+
+Changes apply at once and are queued; the queue is written after 1.5 s of
+quiet (one PATCH per batch, the endpoint is heavily rate limited) or when
+the screen closes. Saves are serialised. A failed save restores what the
+batch changed (unless a newer change of the same setting is queued) and
+shows a toast. The status menu and the tray use the same path; the gateway
+presence (op 3) changes immediately.
+
+### Profile
+
+Display name: `PATCH /users/@me {global_name}` (empty = `null`). Pronouns and
+About Me: `PATCH /users/@me/profile {pronouns, bio}`. Only changed fields
+are sent, from a Save Changes / Reset bar like the official one. The
+display name shows optimistically and is put back if Discord refuses (its
+400 message is shown).
+
+### Local settings
+
+`meta("pref.settings")` JSON (`LocalSettings`, clamped on load): chat font
+size (12-24 px; message text and author names), zoom (50-150 %; the
+daemon's `scale_factor`), saturation (palette desaturated in
+`Palette::saturated`), notification sound (freedesktop `sound-name:
+message-new-instant` or `suppress-sound`; Windows default toast audio or
+silent), unread badge (tray count), taskbar flash
+(`window::request_user_attention` on a mention while unfocused) and message
+content in notifications. The existing `pref.*` flags (minimize to tray,
+start minimized, mute notifications, reduce motion) stay where they were;
+`pref.autoplay_gifs` now mirrors the synced `gif_auto_play` until Discord
+answers. Voice & Video adds input/output volume (0-200 %, applied in the
+engine before voice activity / after mixing) and a microphone test
+(`net/voice/mic_test.rs`: opens the devices outside a call, drives the
+meter and plays the voice back).
+
+### Not implemented
+
+Email / phone / password / 2FA / username changes, account disable/delete
+(managed on discord.com); avatar, banner, profile theme and effects
+editing; explicit image filters (Ferrocord does not blur flagged media, so
+the switch would do nothing here); sticker suggestions (no suggestion UI);
+push to talk (no global shortcut); per-type notification switches beyond
+the ones above (reaction, friend and activity notifications are not
+produced); keybind editing; translating Ferrocord's own UI (English only;
+the Language page sets the account locale); `USER_SETTINGS_PROTO_UPDATE`
+is not handled (the screen re-reads the proto when it opens instead).

@@ -491,14 +491,7 @@ fn privacy(app: &App) -> El<'_> {
     let flags = s.u32(Synced::FriendSourceFlags);
     let friend = |bit: u32, label: &'static str, hint: &'static str| -> El<'_> {
         let on = flags & bit == bit;
-        let next = if on {
-            // Everyone needs the other two: turning one off drops it.
-            flags & !bit & !us::FRIENDS_NO_RELATION
-        } else if bit == us::FRIENDS_NO_RELATION {
-            us::FRIENDS_ALL
-        } else {
-            flags | bit
-        };
+        let next = st::toggle_friend_source(flags, bit);
         toggle(
             app,
             label,

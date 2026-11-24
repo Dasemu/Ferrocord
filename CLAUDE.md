@@ -9,7 +9,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`.
@@ -64,6 +64,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
 - Voice: static libopus (needs `cmake`), `cpal` (`libasound2-dev`); the voice subscription exists
   only in a call. DAVE is mandatory (close 4017); keep `davey` calls under `catch_unwind`.
 - Unicode emoji need the colour emoji span (`ui::emoji_font::emoji_text`/`emoji_runs`, family from `emoji_font()`); `text_editor` (composer) cannot take spans and falls back to the loaded font. The bundled TTF (OFL) is renamed "Ferrocord Color Emoji": a same-named system face (COLRv1 Noto, which swash draws blank/mono) would shadow it. A system Noto is used only if every face of it is CBDT/sbix (`pick_emoji_font`).
+- User Settings (`app/settings.rs`, `ui/settings.rs`, `docs/protocol.md` §14): account settings go through
+  `settings-proto/1` (`net/user_settings.rs`): PATCH only the touched top-level fields, each complete
+  (sent top-level fields REPLACE the stored ones), read-modify-write keeping unknown bytes, debounced and
+  rolled back on failure. Local ones live in `meta("pref.settings")`. Never add a switch the app does not honour.
 - `text_editor` `min_height`/`max_height` limit the text area, then the padding is added: pass `composer::text_height_limits`, never a total height (the 68 px composer bug).
 - Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Container `shadow` is safe with ferroiced (tiny-skia clips it to the damage region), but
   the house style keeps the gradient header and sets no shadow (`ui/theme.rs` guard test).
