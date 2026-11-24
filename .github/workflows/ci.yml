@@ -146,16 +146,21 @@ jobs:
       - name: Example plugins
         shell: bash
         run: examples/plugins/build.sh
-      # TEMP diagnostic: which plugin test dies on Windows, one at a time.
+      # TEMP diagnostic: wasmi access violation on Windows, one config at a time.
       - name: Plugin tests (diagnostic)
         continue-on-error: true
         shell: bash
         env:
           FERROCORD_EXPECT_PLUGINS: "1"
         run: |
-          cargo test --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::plugins_sandbox exit $?"
-          cargo test --test plugins_zero_cost -- --nocapture || echo "::warning::plugins_zero_cost exit $?"
-          cargo test --test plugins_examples -- --test-threads=1 --nocapture || echo "::warning::plugins_examples exit $?"
+          echo "== A: dev, wasmi opt-level 3 (Cargo.toml)"
+          cargo test --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::A exit $?"
+          echo "== B: dev, wasmi opt-level 0"
+          cargo test --config 'profile.dev.package.wasmi.opt-level=0' --config 'profile.dev.package.wasmi_core.opt-level=0' --config 'profile.dev.package.wasmi_ir.opt-level=0' --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::B exit $?"
+          echo "== C: dev, wasmi opt-level 3 without debug assertions"
+          cargo test --config 'profile.dev.package.wasmi.debug-assertions=false' --config 'profile.dev.package.wasmi_core.debug-assertions=false' --config 'profile.dev.package.wasmi_ir.debug-assertions=false' --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::C exit $?"
+          echo "== D: release"
+          cargo test --release --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::D exit $?"
       - name: cargo test
         env:
           # Media Foundation's H.264 and AAC decoders must be found and work.
