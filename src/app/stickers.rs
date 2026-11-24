@@ -10,6 +10,9 @@ pub struct StickerPicker {
     /// Where the composer button was clicked (the popup opens above it).
     pub at: Point,
     pub query: String,
+    /// A sticker picked that needs Nitro here: the picker shows the lock
+    /// footer ("Send as image", or why a Lottie one cannot be sent).
+    pub locked: Option<Snowflake>,
 }
 
 /// Servers with stickers matching `query` (case-insensitive substring of the
@@ -41,10 +44,14 @@ pub fn sections<'a>(
 
 /// Finds a sticker of any server by id.
 pub fn find(guilds: &[Guild], id: Snowflake) -> Option<&Sticker> {
+    find_with_guild(guilds, id).map(|(_, s)| s)
+}
+
+/// Finds a sticker of any server by id, with its server.
+pub fn find_with_guild(guilds: &[Guild], id: Snowflake) -> Option<(&Guild, &Sticker)> {
     guilds
         .iter()
-        .flat_map(|g| g.stickers.iter())
-        .find(|s| s.id == id)
+        .find_map(|g| g.stickers.iter().find(|s| s.id == id).map(|s| (g, s)))
 }
 
 #[cfg(test)]

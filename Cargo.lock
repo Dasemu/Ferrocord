@@ -2002,6 +2002,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ttf-parser",
+ "unicode-script",
  "unicode-segmentation",
  "url",
  "vp8-decoder",

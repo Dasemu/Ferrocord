@@ -77,6 +77,11 @@ run `cargo build --release`.
   image links shown as bare media, stickers.
 - GIF picker (Tenor, via Discord) and sticker picker in the composer; a
   participants/profile panel in DMs.
+- Unicode emoji drawn with Twemoji, like the official client. The emoji and
+  sticker pickers show every server's items; without Nitro the ones you
+  cannot use in the current channel are locked, and picking one offers
+  "Send as image" (a small scaled copy uploaded as a normal attachment;
+  animated ones stay animated) instead of the Nitro upsell.
 - Send messages, typing indicators, unread and mention state (synced with
   read states / `MESSAGE_ACK`), desktop notifications for mentions and DMs.
 - Local SQLite cache so the window opens instantly with your last state.
@@ -161,3 +166,7 @@ cargo test
 
 MIT, see [LICENSE](LICENSE). Bundled fonts: Inter (SIL OFL 1.1, see
 `assets/fonts/OFL.txt`). Icons: Lucide (ISC, see `assets/icons/LICENSE`).
+Emoji: [Twemoji](https://github.com/jdecked/twemoji) by Twitter, jdecked and
+contributors, licensed [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+(COLRv0 font build, converted and renamed; see `assets/fonts/Twemoji-LICENSE.txt`).
+See [THIRD_PARTY.md](THIRD_PARTY.md).
