@@ -301,14 +301,39 @@ mod tests {
         assert_eq!(g, vec![true, true]);
     }
 
-    /// Text that cannot take spans (the composer) falls back to Twemoji.
+    /// Text that cannot take spans (the composer) falls back to Twemoji,
+    /// even with the system fonts loaded (a system Noto Color Emoji, the
+    /// platform's first emoji fallback, would otherwise win).
     #[test]
-    fn fallback_prefers_twemoji() {
-        let mut fs = twemoji_only();
-        let g = render(&mut fs, "\u{1F600}", Family::SansSerif);
-        assert_eq!(g, vec![true]);
+    fn fallback_prefers_twemoji_over_system_fonts() {
         use cosmic_text::Fallback;
         assert_eq!(TwemojiFirst::new().common_fallback().first(), Some(&FAMILY));
+        let mut fs = FontSystem::new();
+        install_into(&mut fs);
+        let mut buf = Buffer::new(&mut fs, Metrics::new(32.0, 40.0));
+        buf.set_text(
+            &mut fs,
+            "hi \u{1F600} \u{1F44B}\u{1F3FD}",
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            None,
+        );
+        buf.shape_until_scroll(&mut fs, false);
+        let fonts: Vec<_> = buf
+            .layout_runs()
+            .flat_map(|r| r.glyphs.iter())
+            .filter(|g| g.start >= 3 && !buf.lines[0].text()[g.start..g.end].trim().is_empty())
+            .map(|g| g.font_id)
+            .collect();
+        assert_eq!(fonts.len(), 2, "{fonts:?}");
+        for id in fonts {
+            let face = fs.db().face(id).unwrap();
+            assert!(
+                face.families.iter().any(|(f, _)| f == FAMILY),
+                "{:?}",
+                face.families
+            );
+        }
     }
 
     fn kinds(s: &str) -> Vec<(bool, String)> {
