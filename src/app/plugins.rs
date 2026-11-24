@@ -749,7 +749,7 @@ impl App {
                     text: text.into(),
                     tooltip: tip.map(Into::into),
                 };
-                if let [a, b, c, ..] = ids[..] {
+                if let [c, b, a, ..] = ids[..] {
                     self.plugins.decorations.set(
                         "word-highlighter",
                         a,

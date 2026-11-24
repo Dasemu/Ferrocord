@@ -173,7 +173,7 @@ ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" \
 Copy a plugin folder (or a `.ferroplug` file) into the plugins folder
 (`~/.config/ferrocord/plugins/` on Linux,
 `%APPDATA%\ferro\ferrocord\config\plugins\` on Windows), then open
-Settings → Plugins → Manage, press **Reload plugins** and enable it. There is
+User Settings → Plugins (in the sidebar), press **Reload plugins** and enable it. There is
 no plugin store. Three examples live in [`examples/plugins/`](examples/plugins)
 (text replacements and `/shrug`, a word highlighter, "Copy as Quote"); writing
 your own is a few lines of Rust with the SDK in

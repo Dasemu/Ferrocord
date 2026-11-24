@@ -38,7 +38,7 @@ A plugin is either a **folder** or a **`.ferroplug` file** (a zip) holding
 `FERROCORD_PLUGINS_DIR` overrides it (also in `--mock` mode, which otherwise
 has no plugins folder).
 
-Settings → Plugins → **Manage** lists what is installed. Every plugin is
+User Settings → **Plugins** (last sidebar category) lists what is installed. Every plugin is
 **off by default**. Turning one on shows everything it may do (its
 permissions and, for network access, every host it can reach) and needs a
 click on **Enable**. The choice, the granted permissions and the plugin's
@@ -329,7 +329,7 @@ cp target/wasm32-unknown-unknown/release/shout.wasm ~/.config/ferrocord/plugins/
 # or zip both files into shout.ferroplug
 ```
 
-Then Settings → Plugins → Reload plugins, and enable it.
+Then User Settings → Plugins → Reload plugins, and enable it.
 
 Host calls are in `ferrocord_plugin_sdk::host` (`toast`, `setting`,
 `set_setting`, `kv_get`/`kv_set`/`kv_delete`, `http_fetch`,
@@ -411,4 +411,4 @@ pull request that added plugins and are repeated in `README.md`.
 The app touches plugins at narrow hook points only: `App::send`
 (commands and transform), `on_net` (observers), `switch_view` and history
 pages (`channel_switch` / `history`), the message context menu, the message
-view (decorations) and the settings dialog.
+view (decorations) and the settings screen (the `Plugins` category).
