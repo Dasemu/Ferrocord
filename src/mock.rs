@@ -1190,6 +1190,35 @@ pub fn gif_page_url(n: usize) -> String {
     format!("https://tenor.example/view/mock-{n}")
 }
 
+/// Number of the mock GIF with this page URL.
+pub fn gif_number(url: &str) -> Option<usize> {
+    let n: usize = url
+        .strip_prefix("https://tenor.example/view/mock-")?
+        .parse()
+        .ok()?;
+    (1..=MOCK_GIF_SIZES.len()).contains(&n).then_some(n)
+}
+
+/// The animation of mock GIF `n` (a slow pan across its landscape, 32
+/// frames at 50 ms), run through the picker's decode limits. Called off the
+/// UI thread, like a real decode.
+pub fn gif_anim(n: usize) -> Option<crate::app::anim::Anim> {
+    let (w, h) = *MOCK_GIF_SIZES.get(n.checked_sub(1)?)?;
+    let (bw, _, base) = mock_image(w * 2, h);
+    let frames = (0..32u32)
+        .map(|f| {
+            let off = (f * w / 32) as usize;
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h as usize {
+                let row = (y * bw as usize + off) * 4;
+                px.extend_from_slice(&base[row..row + w as usize * 4]);
+            }
+            (w, h, px, std::time::Duration::from_millis(50))
+        })
+        .collect();
+    crate::app::anim::from_frames_limited(frames, &crate::app::anim::Class::Picker.limits()).ok()
+}
+
 /// Saved GIFs of the mock account: mock GIFs 3 and 6, newest first.
 pub fn gif_favorites() -> Vec<crate::net::frecency::FavoriteGif> {
     [(3usize, 2u32), (6, 1)]
@@ -1782,31 +1811,48 @@ pub mod cosmetics {
             [255, 220, 120],
             [160, 255, 190],
         ];
-        let face = |n: u32| {
-            anim::from_rgba_frames(
-                colors
-                    .iter()
-                    .map(|c| (n, n, dot_face(n, *c), Duration::from_millis(150)))
-                    .collect(),
-            )
+        // Like a real animated avatar: a 60-frame GIF at 30 ms, run
+        // through the same limits as a downloaded one.
+        let face = |n: u32, class: Class| {
+            let frames = (0..60)
+                .map(|i| {
+                    (
+                        n,
+                        n,
+                        dot_face(n, colors[(i / 15) % colors.len()]),
+                        Duration::from_millis(30),
+                    )
+                })
+                .collect();
+            anim::from_frames_limited(frames, &class.limits()).ok()
         };
-        for size in [anim_sizes::AV_POP, 80] {
-            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, size) {
-                out.push((url, Class::Avatar, face(48)));
+        for (size, class) in [(anim_sizes::AV_POP, Class::Avatar), (80, Class::AvatarList)] {
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, size)
+                && let Some(a) = face(48, class)
+            {
+                out.push((url, class, a));
             }
         }
+        // Like a real decoration: a 3 s APNG at 60 fps (180 frames).
         if let Some(d) = &u.avatar_decoration {
-            for size in [anim_sizes::DEC_LIST, anim_sizes::DEC_POP] {
+            for (size, class) in [
+                (anim_sizes::DEC_LIST, Class::DecorationList),
+                (anim_sizes::DEC_POP, Class::Decoration),
+            ] {
                 let n = size.min(96);
-                out.push((
-                    d.url(cdn, size, true),
-                    Class::Decoration,
-                    anim::from_rgba_frames(
-                        (0..12)
-                            .map(|i| (n, n, ring(n, i as f32 * 0.52), Duration::from_millis(80)))
-                            .collect(),
-                    ),
-                ));
+                let frames = (0..180)
+                    .map(|i| {
+                        (
+                            n,
+                            n,
+                            ring(n, i as f32 * std::f32::consts::TAU / 180.0),
+                            Duration::from_nanos(1_000_000_000 / 60),
+                        )
+                    })
+                    .collect();
+                if let Ok(a) = anim::from_frames_limited(frames, &class.limits()) {
+                    out.push((d.url(cdn, size, true), class, a));
+                }
             }
         }
         out

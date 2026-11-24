@@ -1595,6 +1595,63 @@ fn gif_picker_home_favorites_and_star() {
     assert_eq!(a.gif_thumb(&first.url).unwrap().id(), id);
 }
 
+#[test]
+fn gif_picker_tiles_animate_near_view_and_free_their_frames() {
+    use ferrocord::app::Done;
+    use ferrocord::app::gifs::GifPage;
+    use std::sync::Arc;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let _ = a.update(Message::Ui(Ui::GifPage(GifPage::Trending)));
+    let urls: Vec<String> = a
+        .gif_picker
+        .as_ref()
+        .unwrap()
+        .results
+        .iter()
+        .map(|g| g.url.clone())
+        .collect();
+    // A decoded tile (the mock decodes like a real GIF, through the
+    // picker limits) lands in the picker cache and the view draws it.
+    let anim = mock::gif_anim(1).map(Arc::new);
+    assert!(anim.as_ref().is_some_and(|x| x.frames.len() == 32));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    let got = a.gif_anim(&urls[0]).expect("tile animation cached").clone();
+    // Same frames (same handles) on every view rebuild.
+    let _ = ferrocord::ui::view(&a);
+    let _ = ferrocord::ui::view(&a);
+    assert!(Arc::ptr_eq(&got, a.gif_anim(&urls[0]).unwrap()));
+    // A result for a GIF the picker does not show is not kept.
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: "https://tenor.example/view/elsewhere".into(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim("https://tenor.example/view/elsewhere").is_none());
+    // Scrolling far away drops the frames of tiles out of view (only 8
+    // mock tiles: scroll beyond them).
+    let _ = a.update(Message::Ui(Ui::GifScrolled(5000.0)));
+    assert!(
+        a.gif_anim(&urls[0]).is_none(),
+        "far tiles lose their frames"
+    );
+    let _ = a.update(Message::Ui(Ui::GifScrolled(0.0)));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim,
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.gif_anims.cache.bytes() <= ferrocord::app::gif_anim::PICKER_BUDGET);
+    // Closing the picker frees every frame: nothing animates when closed.
+    let _ = a.update(Message::Ui(Ui::CloseGifPicker));
+    assert!(a.gif_anims.cache.is_empty());
+    assert!(a.gif_anim(&urls[0]).is_none());
+    // Mock mode never writes a disk cache.
+    assert!(a.gif_disk.is_none());
+}
+
 // -- custom emoji and stickers without Nitro ------------------------------------
 
 fn iced_emoji(a: &App, id: u64) -> Emoji {
@@ -1716,4 +1773,58 @@ fn image_copies_upload_as_an_attachment() {
         result: Err("That image is too large to convert.".into()),
     }));
     assert!(a.toast.as_deref().unwrap().contains("too large"));
+}
+
+#[test]
+fn gif_picker_honours_autoplay_and_reduce_motion() {
+    use ferrocord::app::Done;
+    use ferrocord::app::gifs::GifPage;
+    use std::sync::Arc;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let _ = a.update(Message::Ui(Ui::GifPage(GifPage::Trending)));
+    let urls: Vec<String> = a
+        .gif_picker
+        .as_ref()
+        .unwrap()
+        .results
+        .iter()
+        .map(|g| g.url.clone())
+        .collect();
+    let anim = mock::gif_anim(1).map(Arc::new);
+    // GIF autoplay off: tiles stay still; only a hovered tile is decoded
+    // and plays.
+    a.prefs.autoplay_gifs = false;
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_none(), "not hovered: not kept");
+    assert!(!a.picker_playing(&urls[0]));
+    let _ = a.update(Message::Ui(Ui::GifHoverEnter(urls[0].clone())));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.picker_playing(&urls[0]));
+    assert!(!a.picker_playing(&urls[1]));
+    // A late leave of another tile keeps the hover; leaving drops frames.
+    let _ = a.update(Message::Ui(Ui::GifHoverLeave(urls[1].clone())));
+    assert!(a.picker_playing(&urls[0]));
+    let _ = a.update(Message::Ui(Ui::GifHoverLeave(urls[0].clone())));
+    assert!(!a.picker_playing(&urls[0]));
+    assert!(a.gif_anim(&urls[0]).is_none());
+    // Autoplay on: every tile near view plays.
+    a.prefs.autoplay_gifs = true;
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.picker_playing(&urls[0]) && a.picker_playing(&urls[1]));
+    // Reduce motion: stills only.
+    a.prefs.reduce_motion = true;
+    assert!(!a.picker_playing(&urls[0]));
+    assert!(a.gif_anim(&urls[0]).is_none());
 }

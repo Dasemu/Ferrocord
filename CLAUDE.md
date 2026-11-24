@@ -12,7 +12,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 - `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-- `cargo build --release`.
+- `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
 - Plugins: `examples/plugins/build.sh` (needs `rustup target add wasm32-unknown-unknown`) builds the
   example plugins that `tests/plugins_examples.rs` loads (skipped without them unless
   `FERROCORD_EXPECT_PLUGINS=1`); `cargo test -p ferrocord-plugin-sdk` for the SDK.
@@ -91,3 +91,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   gateway/REST access, a token, files or timers; account actions (`send_message`, reactions) need a user-action grant.
   wasmi needs its `auto-dispatch` feature (else debug builds overflow the stack on long wasm loops). Plugins never draw:
   new extension points must stay declarative and host-rendered.
+- Animations never tick the app: draw them with `ui::anim_image` (self-playing, redraws only when its own
+  next frame is due, on a shared 60 Hz grid, only while visible) with `App::anim_clock(phase)`; effect layers
+  pass a `Timeline`. Size `anim::Class::limits` to the drawn size so typical assets keep every frame (frame
+  caps decimate = lower fps). `FERROCORD_FRAME_STATS=1` logs redraws/views/lateness; under Xvfb run
+  `xdotool windowfocus` first (unfocused windows pause animations).
+- GIF picker media go through `gif_anim::picker_bytes` (100 MB disk LRU in the cache dir, 4 downloads at a
+  time); tile animations live in `App::gif_anims` (near-view tiles only, freed when the picker closes).

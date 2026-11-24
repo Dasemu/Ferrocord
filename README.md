@@ -75,7 +75,8 @@ run `cargo build --release`.
   code, code blocks, spoilers, quotes, headings, lists, links, mentions,
   custom emoji, timestamps), embeds, image and file attachments, GIF and
   image links shown as bare media, stickers.
-- GIF picker (Tenor, via Discord) and sticker picker in the composer; a
+- GIF picker (Tenor, via Discord; tiles animate, saved GIFs are cached on
+  disk) and sticker picker in the composer; a
   participants/profile panel in DMs.
 - Unicode emoji drawn with Twemoji, like the official client. The emoji and
   sticker pickers show every server's items; without Nitro the ones you

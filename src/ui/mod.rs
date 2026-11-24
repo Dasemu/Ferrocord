@@ -7,6 +7,7 @@ pub mod context_menu;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji_font;
+pub mod frame_stats;
 pub mod icons;
 pub mod lightbox;
 pub mod login;
@@ -39,6 +40,7 @@ pub type El<'a> = Element<'a, Message>;
 
 /// View of the (only) main window, in the shape `iced::daemon` expects.
 pub fn view_window(app: &App, _window: iced::window::Id) -> El<'_> {
+    frame_stats::view_built();
     view(app)
 }
 
@@ -349,20 +351,13 @@ pub fn avatar_circle<'a>(
     } else {
         crate::app::cosmetics::AV_LIST
     };
-    if phase == crate::app::cosmetics::Phase::Live
-        && let Some(a) = app.avatar_live(user, cdn_size)
-    {
-        return anim_image::anim_image(
-            a.clone(),
-            app.anim.epoch,
-            app.cosmetics_playing(),
-            size,
-            size,
-        )
-        .border_radius(size / 2.0)
-        .into();
+    if let Some(a) = app.avatar_anim(user, cdn_size, phase) {
+        let (epoch, playing) = app.anim_clock(phase);
+        return anim_image::anim_image(a.clone(), epoch, playing, size, size)
+            .border_radius(size / 2.0)
+            .into();
     }
-    if let Some(h) = app.avatar_frame(user, cdn_size, phase) {
+    if let Some(h) = app.avatar_frame(user, cdn_size) {
         return iced::widget::image(h.clone())
             .width(size)
             .height(size)

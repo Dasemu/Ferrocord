@@ -264,18 +264,34 @@ impl App {
                 self.emoji_picker = None;
                 let (picker, generation) = super::gifs::GifPicker::open(input::cursor());
                 self.gif_picker = Some(picker);
+                self.gif_anims.clear();
+                let fetch = self.fetch_gifs(generation, String::new());
                 Task::batch([
                     focus(iced::widget::Id::new("gif-search")),
-                    self.fetch_gifs(generation, String::new()),
+                    fetch,
                     self.load_gif_favorites(),
+                    self.request_gif_anims(),
+                    self.prefetch_gif_favorites(),
                 ])
             }
             Ui::GifPage(page) => {
                 if let Some(p) = self.gif_picker.as_mut() {
                     p.show(page);
                 }
-                self.request_gif_thumbs()
+                // A new page starts at the top.
+                self.gif_anims.scroll_y = 0.0;
+                Task::batch([
+                    iced::widget::operation::snap_to(
+                        iced::widget::Id::new(super::gif_anim::GRID_ID),
+                        iced::widget::operation::RelativeOffset::START,
+                    ),
+                    self.request_gif_thumbs(),
+                    self.request_gif_anims(),
+                ])
             }
+            Ui::GifScrolled(y) => self.on_gif_scrolled(y),
+            Ui::GifHoverEnter(url) => self.on_gif_hover(Some(url), None),
+            Ui::GifHoverLeave(url) => self.on_gif_hover(None, Some(url)),
             Ui::ToggleGifFavorite(gif) => self.toggle_gif_favorite(&gif),
             Ui::GifQuery(q) => match self.gif_picker.as_mut() {
                 Some(p) => delayed(
@@ -800,7 +816,9 @@ impl App {
     }
 
     /// Fetches the stills of the GIFs the picker can show: its results and
-    /// the saved GIFs. Each is decoded and downscaled off the UI thread.
+    /// the saved GIFs, from the disk cache when there (see
+    /// [`super::gif_anim`]). Each is decoded and downscaled off the UI
+    /// thread.
     pub(super) fn request_gif_thumbs(&mut self) -> Task<Message> {
         if self.cfg.mock {
             return Task::none();
@@ -809,15 +827,12 @@ impl App {
             return Task::none();
         };
         let mut gifs: Vec<crate::net::model::Gif> = Vec::new();
-        let favorites = self.gif_favorites.items();
-        match (p.searching(), p.page) {
-            (false, super::gifs::GifPage::Home) => {
-                // The tile backgrounds.
-                gifs.extend(favorites.into_iter().take(1));
-                gifs.extend(p.results.iter().take(1).cloned());
-            }
-            (false, super::gifs::GifPage::Favorites) => gifs = favorites,
-            _ => gifs.extend(p.results.iter().cloned()),
+        if !p.searching() && p.page == super::gifs::GifPage::Home {
+            // The tile backgrounds.
+            gifs.extend(self.gif_favorites.items().into_iter().take(1));
+            gifs.extend(p.results.iter().take(1).cloned());
+        } else {
+            gifs = self.picker_grid();
         }
         let tasks: Vec<Task<Message>> = gifs
             .into_iter()
@@ -825,11 +840,12 @@ impl App {
             .filter(|g| self.gif_thumbs.want(&g.url))
             .map(|g| {
                 let rest = self.rest.clone();
+                let disk = self.gif_disk.clone();
                 let sources = super::gifs::thumb_sources(&g);
                 Task::perform(
                     async move {
                         for src in sources {
-                            match rest.fetch_picker_media(&src).await {
+                            match super::gif_anim::picker_bytes(&rest, disk.as_ref(), &src).await {
                                 Ok(bytes) => {
                                     let still = tokio::task::spawn_blocking(move || {
                                         super::gifs::thumbnail(&bytes)

@@ -237,6 +237,8 @@ pub struct Config {
     /// `<config dir>/plugins` (`FERROCORD_PLUGINS_DIR` overrides it; in
     /// mock mode only the override is used).
     pub plugins_dir: Option<PathBuf>,
+    /// Disposable caches (GIF picker media).
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -263,7 +265,7 @@ impl Config {
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]\n       ferrocord --version | -V".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }
@@ -312,6 +314,7 @@ impl Config {
                 None if mock => None,
                 None => dirs.as_ref().map(|d| d.config_dir().join("plugins")),
             },
+            cache_dir: dirs.as_ref().map(|d| d.cache_dir().to_path_buf()),
         })
     }
 
@@ -333,6 +336,7 @@ impl Config {
             data_dir: None,
             state_dir: None,
             plugins_dir: None,
+            cache_dir: None,
         }
     }
 
