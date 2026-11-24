@@ -151,6 +151,9 @@ jobs:
           # Media Foundation's H.264 and AAC decoders must be found and work.
           FERROCORD_EXPECT_PLATFORM: "1"
           FERROCORD_EXPECT_PLUGINS: "1"
+          # The sandbox tests run wasmi on libtest threads: give them the
+          # plugin thread's stack (see `PLUGIN_THREAD_STACK`).
+          RUST_MIN_STACK: "16777216"
         run: cargo test --all-targets
       # mfplat.dll is loaded at run time: Windows N without the Media Feature
       # Pack must still start the helper.

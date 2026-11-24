@@ -32,6 +32,8 @@ pub const EVENT_QUEUE: usize = 256;
 pub const MAX_FAULTS: u32 = 3;
 /// Wall-clock budget of a whole transform chain.
 const TRANSFORM_BUDGET: Duration = Duration::from_millis(150);
+/// Stack reserved for the plugin thread.
+pub const PLUGIN_THREAD_STACK: usize = 16 * 1024 * 1024;
 /// Capacity of the plugin → app channel.
 pub const OUT_QUEUE: usize = 1024;
 
@@ -190,6 +192,12 @@ pub fn spawn(
     let s2 = shared.clone();
     std::thread::Builder::new()
         .name("ferrocord-plugins".into())
+        // wasmi's interpreter loop has very large native frames in
+        // unoptimised builds (wasmi notes the same for its own Windows CI);
+        // with the default 2 MiB the plugin tests died with an access
+        // violation on Windows. Address space only: pages are committed on
+        // use.
+        .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
             let mut w = Worker::new(kv_path, out, now_ms);
             while let Some(n) = next(&s2) {
