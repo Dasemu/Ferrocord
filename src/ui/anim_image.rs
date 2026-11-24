@@ -521,4 +521,20 @@ mod tests {
         assert_eq!(shown_frame(&a, t0, Some(now), false, Some(&tl)), Some(0));
         assert_eq!(next_redraw_in(&a, t0, now, false, Some(&tl)), None);
     }
+
+    #[test]
+    fn a_60_fps_animation_changes_every_display_frame() {
+        // Delays as an APNG gives them (1/60 s, through `image::Delay`).
+        let d = crate::app::anim::delay_of(image::Delay::from_numer_denom_ms(1000, 60));
+        let a = from_rgba_frames((0..180).map(|_| (1, 1, vec![0u8; 4], d)).collect());
+        for start_ms in [0u64, 3, 9] {
+            let t0 = Instant::now();
+            let changes = simulate(
+                &a,
+                t0 + Duration::from_millis(start_ms),
+                Duration::from_secs(1),
+            );
+            assert!(changes.len() >= 59, "{} changes in 1 s", changes.len());
+        }
+    }
 }
