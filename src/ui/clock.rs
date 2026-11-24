@@ -1,17 +1,21 @@
 //! 12- or 24-hour clock for every timestamp the views format (Appearance
-//! "24-Hour Time", synced as `timestamp_hour_cycle`). A process-wide flag:
-//! the formatters are free functions called from many views.
+//! "Time format", synced as `timestamp_hour_cycle`). The formatters are free
+//! functions called from many views, so the choice is a flag. `update` and
+//! `view` run on the same (UI) thread, so the flag is thread-local: tests
+//! running in parallel never see each other's clock.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
-static H24: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static H24: Cell<bool> = const { Cell::new(false) };
+}
 
 pub fn set_24h(on: bool) {
-    H24.store(on, Ordering::Relaxed);
+    H24.with(|h| h.set(on));
 }
 
 pub fn is_24h() -> bool {
-    H24.load(Ordering::Relaxed)
+    H24.with(Cell::get)
 }
 
 /// `chrono` format of a time of day.
