@@ -67,7 +67,6 @@ fn main() -> iced::Result {
         ferrocord::win_app_id::register();
     }
 
-    let theme = ferrocord::ui::theme::FerroTheme::new(cfg.theme).iced_theme();
     // A daemon, not an application: hiding to the tray closes the window
     // (freeing the renderer) while the app keeps running.
     let app = iced::daemon(
@@ -77,7 +76,9 @@ fn main() -> iced::Result {
     )
     .title(|app: &App, _window: iced::window::Id| app.title())
     .subscription(App::subscription)
-    .theme(move |_: &App, _window: iced::window::Id| theme.clone())
+    // Appearance theme and zoom level change at run time.
+    .theme(|app: &App, _window: iced::window::Id| app.theme.iced_theme())
+    .scale_factor(|app: &App, _window: iced::window::Id| app.zoom())
     .default_font(ferrocord::ui::theme::INTER)
     .antialiasing(true);
     // Colour emoji: the bundled Twemoji (see `ui::emoji_font`).

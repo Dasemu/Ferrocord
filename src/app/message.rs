@@ -238,6 +238,8 @@ pub enum Ui {
     CloseFolderSettings,
     // -- voice channels and calls
     Voice(super::voice::VoiceUi),
+    /// User Settings screen.
+    Settings(super::settings::SettingsUi),
 }
 
 /// Completion of a `Task`.
@@ -312,6 +314,8 @@ pub enum Done {
         pasted: Vec<PathBuf>,
     },
     ClearHighlight(MessageId),
+    /// User Settings tasks.
+    Settings(Box<super::settings::SettingsDone>),
     Upload {
         id: u64,
         event: UploadEvent,

@@ -20,6 +20,17 @@ pub fn mix_into(acc: &mut [f32], src: &[f32], gain: f32) {
     }
 }
 
+/// Scales `frame` by `gain` ("Input Volume" / "Output Volume"); 1.0 is a
+/// no-op.
+pub fn apply_gain(frame: &mut [f32], gain: f32) {
+    if (gain - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for s in frame.iter_mut() {
+        *s *= gain;
+    }
+}
+
 /// Soft-clips the mix into [-1, 1].
 pub fn finish(acc: &mut [f32]) {
     for s in acc.iter_mut() {

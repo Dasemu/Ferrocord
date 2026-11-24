@@ -26,6 +26,7 @@ pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
+pub mod settings;
 pub mod state;
 pub mod stickers;
 pub mod upload;
@@ -184,6 +185,8 @@ pub struct App {
     /// "Open at login" (the autostart file exists).
     pub autostart: bool,
     pub settings_open: bool,
+    /// User Settings screen: categories, synced and local settings.
+    pub settings: settings::SettingsState,
     /// Animation clock, hover target and decoded frames.
     pub anim: anim::AnimState,
     /// Profile popout, fetched profiles and effect configs.
@@ -233,6 +236,7 @@ impl App {
         });
 
         let prefs = Prefs::load(&store);
+        let local_settings = settings::LocalSettings::load(&store);
         let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
         let start_hidden = cfg.minimized || prefs.start_minimized;
         let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
@@ -302,6 +306,7 @@ impl App {
             prefs,
             autostart: false,
             settings_open: false,
+            settings: settings::SettingsState::new(local_settings),
             anim: anim::AnimState::default(),
             profiles: profile::ProfileState::default(),
             tray_control: None,
@@ -311,6 +316,13 @@ impl App {
             cfg,
         };
         app.window_focused = app.win.visible;
+        // "Play GIFs automatically" is synced; the local copy holds until
+        // Discord's value arrives.
+        app.settings.synced.seed(
+            crate::net::user_settings::Synced::GifAutoPlay,
+            crate::net::user_settings::Value::Bool(app.prefs.autoplay_gifs),
+        );
+        app.apply_settings();
         let open_window = app.run_window_action(first_action);
         let autostart = if app.cfg.mock {
             Task::none()
@@ -679,7 +691,11 @@ impl App {
                 self.chat.mark_read(mock::CH_GENERAL);
             }
         }
-        self.settings_open = screen == Some(ScreenshotScreen::Settings);
+        self.settings_open = matches!(
+            screen,
+            Some(ScreenshotScreen::Settings | ScreenshotScreen::SettingsPage(_))
+        );
+        self.mock_settings(screen);
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
@@ -854,7 +870,8 @@ impl App {
             now_ms: now_ms(),
             open_channel: self.open_channel(),
             window_focused: self.window_focused,
-            notification_preview: self.cfg.notification_preview,
+            notification_preview: self.cfg.notification_preview
+                && self.settings.local.notify_preview,
         }
     }
 
@@ -1057,6 +1074,7 @@ impl App {
             }
             Ui::Logout => self.logout(),
             Ui::Voice(v) => self.update_voice(v),
+            Ui::Settings(s) => self.update_settings(s),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -1285,7 +1303,14 @@ impl App {
     }
 
     fn send(&mut self) -> Task<Message> {
-        let content = self.composer.text().trim().to_owned();
+        let mut content = self.composer.text().trim().to_owned();
+        if self
+            .settings
+            .synced
+            .bool(crate::net::user_settings::Synced::ConvertEmoticons)
+        {
+            content = settings::convert_emoticons(&content);
+        }
         let Some(c) = self.open_channel() else {
             return Task::none();
         };
@@ -1369,6 +1394,10 @@ impl App {
 
     fn logout(&mut self) -> Task<Message> {
         self.settings_open = false;
+        // Account settings belong to the account; local ones stay.
+        self.settings = settings::SettingsState::new(self.settings.local.clone());
+        self.gateway.set_custom_status(None);
+        self.apply_settings();
         let me = self.chat.me_id();
         let _ = self.voice.leave(me);
         self.voice = voice::Voice::with_prefs(self.voice.prefs.clone());
@@ -1519,6 +1548,7 @@ impl App {
             }
             tasks.push(self.request_images());
             tasks.push(self.sync_members());
+            tasks.push(self.load_user_settings());
         }
         if matches!(ev, Event::MessageCreate(_) | Event::MemberList(_)) {
             tasks.push(self.request_images());
@@ -1526,7 +1556,10 @@ impl App {
         for fx in effects {
             match fx {
                 Effect::Notify(_) if self.prefs.muted => {}
-                Effect::Notify(n) => tasks.push(notify(n, self.cfg.mock)),
+                Effect::Notify(n) => {
+                    tasks.push(notify(n, self.cfg.mock, self.settings.local.notify_sound));
+                    tasks.push(self.flash_taskbar());
+                }
                 Effect::Ack(c, m) if !self.cfg.mock => {
                     let rest = self.rest.clone();
                     tasks.push(Task::perform(async move { rest.ack(c, m).await }, |_| {
@@ -1589,6 +1622,7 @@ impl App {
                 Task::none()
             }
             Done::Voice(d) => self.on_voice_done(d),
+            Done::Settings(d) => self.on_settings_done(*d),
             Done::ScreenshotReady => iced::window::latest()
                 .and_then(iced::window::screenshot)
                 .map(|s| Message::Done(Done::Screenshot(s))),
@@ -2266,8 +2300,12 @@ impl App {
         if let Some(v) = self.voice_subscription() {
             subs.push(v);
         }
-        // Live microphone meter in the voice settings while connected.
-        if self.settings_open && self.voice.conn.is_some() && !self.cfg.mock {
+        // Live microphone meter in the voice settings while connected or
+        // testing the microphone.
+        if self.settings_open
+            && (self.voice.conn.is_some() || self.settings.mic_test.is_some())
+            && !self.cfg.mock
+        {
             subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Ui(Ui::Tick)));
         }
         Subscription::batch(subs)
@@ -2410,7 +2448,7 @@ pub fn escape_markup(s: &str) -> String {
     out
 }
 
-fn notify(n: state::Notification, mock: bool) -> Task<Message> {
+fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
     if mock {
         return Task::none();
     }
@@ -2423,6 +2461,21 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
                     .summary(&escape_markup(&n.title))
                     .body(&escape_markup(&n.body))
                     .icon("dev.ferro.ferrocord");
+                // "Enable Notification Sounds": the desktop's message sound
+                // (freedesktop sound-name / Windows default toast audio),
+                // or an explicitly silent notification.
+                #[cfg(all(unix, not(target_os = "macos")))]
+                if sound {
+                    note.sound_name("message-new-instant");
+                } else {
+                    note.hint(notify_rust::Hint::SuppressSound(true));
+                }
+                #[cfg(windows)]
+                if sound {
+                    note.sound_name("Default");
+                }
+                #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+                let _ = sound;
                 // The registered AppUserModelID (`win_app_id`): without it
                 // the toast is attributed to PowerShell.
                 #[cfg(windows)]

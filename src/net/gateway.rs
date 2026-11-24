@@ -63,6 +63,8 @@ pub struct VoiceRequest {
 #[derive(Debug)]
 struct Desired {
     status: Presence,
+    /// Custom status sent with the presence (activity type 4).
+    custom: Option<crate::net::user_settings::CustomStatus>,
     status_dirty: bool,
     members: Option<MemberSubscription>,
     members_dirty: bool,
@@ -96,6 +98,7 @@ impl GatewayHandle {
         Self {
             desired: std::sync::Arc::new(std::sync::Mutex::new(Desired {
                 status,
+                custom: None,
                 status_dirty: false,
                 members: None,
                 members_dirty: false,
@@ -119,6 +122,22 @@ impl GatewayHandle {
         self.with(|d| {
             if d.status != status {
                 d.status = status;
+                d.status_dirty = true;
+            }
+        });
+        self.notify.notify_one();
+    }
+
+    pub fn custom_status(&self) -> Option<crate::net::user_settings::CustomStatus> {
+        self.with(|d| d.custom.clone()).flatten()
+    }
+
+    /// Sets the custom status sent with the presence (op 3 once connected;
+    /// IDENTIFY uses it too). `None` clears it.
+    pub fn set_custom_status(&self, custom: Option<crate::net::user_settings::CustomStatus>) {
+        self.with(|d| {
+            if d.custom != custom {
+                d.custom = custom;
                 d.status_dirty = true;
             }
         });
@@ -185,7 +204,10 @@ impl GatewayHandle {
             let mut out = Vec::new();
             if d.status_dirty {
                 d.status_dirty = false;
-                out.push(to_json(&types::presence_payload(d.status)));
+                out.push(to_json(&types::presence_payload(
+                    d.status,
+                    d.custom.as_ref(),
+                )));
             }
             if d.voice_dirty {
                 d.voice_dirty = false;
@@ -292,6 +314,8 @@ pub struct Session {
     pub resuming: bool,
     /// Status sent in IDENTIFY.
     pub status: Presence,
+    /// Custom status sent in IDENTIFY.
+    pub custom_status: Option<crate::net::user_settings::CustomStatus>,
 }
 
 impl Session {
@@ -372,7 +396,12 @@ impl Session {
                     (Some(sid), Some(seq), true) => types::resume_payload(token, sid, seq),
                     _ => {
                         self.resuming = false;
-                        types::identify_payload(token, props, self.status)
+                        types::identify_payload(
+                            token,
+                            props,
+                            self.status,
+                            self.custom_status.as_ref(),
+                        )
                     }
                 };
                 vec![
@@ -566,6 +595,7 @@ async fn connect_once(
     };
     session.on_connect();
     session.status = cfg.handle.status();
+    session.custom_status = cfg.handle.custom_status();
     // A status change made before this connection is part of IDENTIFY.
     if !session.can_resume() {
         cfg.handle.take_pending_status_only();

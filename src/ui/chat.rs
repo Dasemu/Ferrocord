@@ -387,8 +387,8 @@ fn message<'a>(
     let mut body = column![].spacing(4).width(Length::Fill);
     if let Some(e) = editing {
         body = body.push(edit_box(app, e));
-    } else if !m.content.is_empty() && !m.content_is_gif_link() {
-        let content = markdown::render(app, m.id, &m.content, base, 16.0);
+    } else if !m.content.is_empty() && (!m.content_is_gif_link() || !app.show_embeds()) {
+        let content = markdown::render(app, m.id, &m.content, base, app.chat_font());
         if m.edited {
             body = body.push(column![
                 content,
@@ -402,12 +402,16 @@ fn message<'a>(
         body = body.push(attachment(app, a));
     }
     for s in &m.stickers {
-        body = body.push(sticker(app, s, STICKER_SIZE));
+        body = body.push(message_sticker(app, s, STICKER_SIZE, Some(m.id)));
     }
-    for card in super::embeds::message_embeds(app, m) {
-        body = body.push(card);
+    // "Show embeds and preview website links".
+    if app.show_embeds() {
+        for card in super::embeds::message_embeds(app, m) {
+            body = body.push(card);
+        }
     }
-    if !m.reactions.is_empty() {
+    // "Show emoji reactions on messages".
+    if app.show_reactions() && !m.reactions.is_empty() {
         body = body.push(reactions_row(app, c, m));
     }
     if m.failed {
@@ -424,7 +428,9 @@ fn message<'a>(
     } else {
         None
     };
-    let line: El<'a> = if grouped {
+    let line: El<'a> = if app.compact() {
+        compact_line(app, c, m, grouped, body, preview.as_ref())
+    } else if grouped {
         row![
             container(
                 text(format_time(m.timestamp_ms()))
@@ -449,7 +455,7 @@ fn message<'a>(
                 app,
                 &m.author,
                 m.author.display_name(),
-                16.0,
+                app.chat_font(),
                 INTER_MEDIUM,
                 name_color
             ),
@@ -855,10 +861,22 @@ const STICKER_SIZE: f32 = 160.0;
 /// A sticker image, or a box with its name while loading and for Lottie
 /// stickers (vector animations, not rendered).
 pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a> {
+    message_sticker(app, s, size, None)
+}
+
+/// A sticker of message `msg` (`None`: outside a message): it animates
+/// as "Animate stickers" says (always, while hovered, never).
+fn message_sticker<'a>(
+    app: &'a App,
+    s: &model::Sticker,
+    size: f32,
+    msg: Option<model::MessageId>,
+) -> El<'a> {
     let p = app.theme.palette;
-    if let Some(a) = s
-        .image_url(&app.cfg.cdn_url)
-        .and_then(|url| app.media_anim(&url))
+    if app.sticker_animates(msg)
+        && let Some(a) = s
+            .image_url(&app.cfg.cdn_url)
+            .and_then(|url| app.media_anim(&url))
     {
         return message_anim(app, a, size, size)
             .content_fit(iced::ContentFit::Contain)
@@ -894,8 +912,75 @@ pub(super) fn sticker<'a>(app: &'a App, s: &model::Sticker, size: f32) -> El<'a>
     .into()
 }
 
-fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
+/// A message in the "Compact" message display: time, name and text on one
+/// line, no avatar; continuation messages show only their (faint) time.
+fn compact_line<'a>(
+    app: &'a App,
+    c: &'a Channel,
+    m: &'a model::Message,
+    grouped: bool,
+    body: iced::widget::Column<'a, Message>,
+    preview: Option<&model::ReplyPreview>,
+) -> El<'a> {
     let p = app.theme.palette;
+    let t = &app.theme.metrics;
+    let time = text(format_time(m.timestamp_ms()))
+        .size(t.font_xs - 1.0)
+        .color(if grouped {
+            Color {
+                a: 0.0,
+                ..p.text_muted
+            }
+        } else {
+            p.text_muted
+        });
+    let time = container(time)
+        .width(COMPACT_TIME_WIDTH)
+        .padding(Padding::ZERO.left(16).top(3));
+    let row: El<'a> = if grouped {
+        row![time, body].into()
+    } else {
+        let name_color = app
+            .chat
+            .author_color(m.guild_id.or(c.guild_id), m)
+            .map(theme::from_int)
+            .unwrap_or(p.header_text);
+        let name = cosmetics::clickable(
+            cosmetics::name(
+                app,
+                &m.author,
+                m.author.display_name(),
+                app.chat_font(),
+                INTER_MEDIUM,
+                name_color,
+            ),
+            &m.author,
+            m.guild_id.or(c.guild_id),
+        );
+        row![time, container(name).padding(Padding::ZERO.right(6)), body].into()
+    };
+    let row = container(row).padding(Padding::from([1, 0]).right(48));
+    match preview {
+        Some(pv) if !grouped => column![
+            container(reply_header(app, c, m, pv)).padding(Padding::ZERO.top(6)),
+            row
+        ]
+        .into(),
+        _ => container(row)
+            .padding(Padding::ZERO.top(if grouped { 0 } else { 4 }))
+            .into(),
+    }
+}
+
+/// Time column of compact message rows.
+const COMPACT_TIME_WIDTH: f32 = 72.0;
+
+fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
+    // "Display images, videos and lolcats: when uploaded directly" off:
+    // every attachment is a file card (a click opens it in the browser).
+    if !app.inline_attachments() {
+        return file_card(app, a);
+    }
     if a.is_image() {
         let key = preview_key(a);
         let (nw, nh) = (a.width.unwrap_or(400), a.height.unwrap_or(300));
@@ -915,6 +1000,11 @@ fn attachment<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
     if let Some(clip) = Clip::from_attachment(a) {
         return video::inline(app, &clip);
     }
+    file_card(app, a)
+}
+
+fn file_card<'a>(app: &'a App, a: &'a Attachment) -> El<'a> {
+    let p = app.theme.palette;
     let link_spans = vec![
         span::<Ui, Font>(a.filename.clone())
             .color(p.link)
