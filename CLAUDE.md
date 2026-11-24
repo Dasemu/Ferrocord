@@ -12,7 +12,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 - `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-- `cargo build --release`.
+- `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
 - Shared machine: `export CARGO_BUILD_JOBS=2`.
 
 ## Architecture
@@ -78,3 +78,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   time, never imported; CI checks with dumpbin). OpenH264/VP8/VP9 stay the default; the platform decoder takes over at
   run time when they fail. `ferrocord-player --backends` lists what the system has; `FERROCORD_PLATFORM_DECODERS=0`
   turns them off, `FERROCORD_VIDEO_DECODER=platform` prefers them. Never link `ffmpeg-sys` or bundle a decoder.
+- Animations never tick the app: draw them with `ui::anim_image` (self-playing, redraws only when its own
+  next frame is due, on a shared 60 Hz grid, only while visible) with `App::anim_clock(phase)`; effect layers
+  pass a `Timeline`. Size `anim::Class::limits` to the drawn size so typical assets keep every frame (frame
+  caps decimate = lower fps). `FERROCORD_FRAME_STATS=1` logs redraws/views/lateness; under Xvfb run
+  `xdotool windowfocus` first (unfocused windows pause animations).
+- GIF picker media go through `gif_anim::picker_bytes` (100 MB disk LRU in the cache dir, 4 downloads at a
+  time); tile animations live in `App::gif_anims` (near-view tiles only, freed when the picker closes).
