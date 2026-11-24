@@ -146,6 +146,16 @@ jobs:
       - name: Example plugins
         shell: bash
         run: examples/plugins/build.sh
+      # TEMP diagnostic: which plugin test dies on Windows, one at a time.
+      - name: Plugin tests (diagnostic)
+        continue-on-error: true
+        shell: bash
+        env:
+          FERROCORD_EXPECT_PLUGINS: "1"
+        run: |
+          cargo test --test plugins_sandbox -- --test-threads=1 --nocapture || echo "::warning::plugins_sandbox exit $?"
+          cargo test --test plugins_zero_cost -- --nocapture || echo "::warning::plugins_zero_cost exit $?"
+          cargo test --test plugins_examples -- --test-threads=1 --nocapture || echo "::warning::plugins_examples exit $?"
       - name: cargo test
         env:
           # Media Foundation's H.264 and AAC decoders must be found and work.
