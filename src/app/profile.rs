@@ -140,6 +140,11 @@ impl ProfileState {
         }
     }
 
+    /// Drops every cached profile of `user` (it was just edited).
+    pub fn forget(&mut self, user: UserId) {
+        self.entries.retain(|k, _| k.0 != user);
+    }
+
     /// The profile to draw: fresh, or the stale one while refreshing.
     pub fn get(&self, key: Key) -> Option<&Profile> {
         let e = self.entries.get(&key)?;

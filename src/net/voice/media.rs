@@ -13,7 +13,7 @@ use davey::OPUS_SILENCE_PACKET;
 use super::audio::AudioIo;
 use super::dave::DaveOut;
 use super::jitter::{JitterBuffer, Pop};
-use super::mixer::{FRAME_LEN, FRAME_SAMPLES, Vad, finish, level_db, mix_into};
+use super::mixer::{FRAME_LEN, FRAME_SAMPLES, Vad, apply_gain, finish, level_db, mix_into};
 use super::rtp::{Cipher, OPUS_PAYLOAD_TYPE, RtpHeader, opus_header};
 use super::session::SharedDave;
 use super::{VoiceControl, VoiceEvent};
@@ -170,6 +170,9 @@ impl Engine {
         // --- send
         let mut frame = std::mem::take(&mut self.frame);
         let captured = io.capture(&mut frame);
+        if captured {
+            apply_gain(&mut frame, self.control.input_gain());
+        }
         let level = if captured {
             level_db(&frame)
         } else {
@@ -232,6 +235,7 @@ impl Engine {
             }
         }
         if any {
+            apply_gain(&mut mix, self.control.output_gain());
             finish(&mut mix);
             io.play(&mix);
         }
@@ -419,6 +423,28 @@ mod tests {
         for _ in 0..10 {
             assert!(a.tick(&mut quiet).packets.is_empty());
         }
+    }
+
+    #[test]
+    fn input_volume_scales_the_microphone() {
+        // A quiet microphone below the threshold is sent once "Input
+        // Volume" boosts it, and the meter shows the boosted level.
+        let key = [3u8; 32];
+        let c = VoiceControl::new();
+        c.set_threshold_db(-30.0);
+        c.set_volumes(100.0, 100.0);
+        let mut a = engine(1, 100, &key, c.clone());
+        let (mut quiet, _) = FakeIo::new(440.0, 0.02);
+        assert!(a.tick(&mut quiet).packets.is_empty());
+        let unboosted = c.input_level();
+        c.set_volumes(200.0, 100.0);
+        assert!((c.input_gain() - 2.0).abs() < 1e-6);
+        let _ = a.tick(&mut quiet);
+        assert!((c.input_level() - unboosted - 6.02).abs() < 0.2);
+        c.set_volumes(0.0, 0.0);
+        let _ = a.tick(&mut quiet);
+        assert_eq!(c.input_level(), super::super::mixer::FLOOR_DB);
+        assert_eq!(c.output_gain(), 0.0);
     }
 
     #[test]

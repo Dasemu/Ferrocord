@@ -34,7 +34,8 @@ pub fn render<'a>(app: &'a App, msg: MessageId, content: &str, base: Color, size
     let ctx = Ctx {
         app,
         msg,
-        revealed: app.revealed_spoilers.contains(&msg),
+        // "Show spoiler content": always, or in channels we moderate.
+        revealed: app.revealed_spoilers.contains(&msg) || app.spoilers_revealed(app.open_channel()),
     };
     if is_emoji_only(blocks) {
         return jumbo(&ctx, blocks);

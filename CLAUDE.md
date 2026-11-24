@@ -9,7 +9,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`.
@@ -68,6 +68,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   only in a call. DAVE is mandatory (close 4017); keep `davey` calls under `catch_unwind`.
 - Unicode emoji are Twemoji (`assets/fonts/Twemoji.ttf`, COLRv0, CC-BY 4.0, family "Ferrocord Twemoji"): use the emoji span (`ui::emoji_font::emoji_text`/`emoji_runs`/`emoji_font()`). `emoji_font::install()` (in `main`) loads it zero-copy and puts it first in cosmic-text's common fallback, so the composer (`text_editor`, no spans) gets Twemoji too. swash draws COLRv0 and CBDT/sbix in colour, never COLRv1: do not swap in a COLRv1 or SVG-only font. No system emoji font is used.
 - Custom emoji / stickers without Nitro: `app/nitro.rs` decides (`premium_type`, the item's guild vs the open one, `available`, emoji `roles`, sticker format). Locked items stay visible with a lock; picking one shows a footer with an explicit "Send as image" (scaled PNG / animated GIF upload). Never send a locked item silently or as `<:name:id>`.
+- User Settings (`app/settings.rs`, `ui/settings.rs`, `docs/protocol.md` §14): account settings go through
+  `settings-proto/1` (`net/user_settings.rs`): PATCH only the touched top-level fields, each complete
+  (sent top-level fields REPLACE the stored ones), read-modify-write keeping unknown bytes, debounced and
+  rolled back on failure. Local ones live in `meta("pref.settings")`. Never add a switch the app does not honour.
 - `text_editor` `min_height`/`max_height` limit the text area, then the padding is added: pass `composer::text_height_limits`, never a total height (the 68 px composer bug).
 - Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Container `shadow` is safe with ferroiced (tiny-skia clips it to the damage region), but
   the house style keeps the gradient header and sets no shadow (`ui/theme.rs` guard test).

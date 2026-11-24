@@ -95,7 +95,6 @@ impl Decorations {
 /// State of the Plugins settings page.
 #[derive(Debug, Default)]
 pub struct Page {
-    pub open: bool,
     /// Plugin whose permissions are being shown before enabling.
     pub prompt: Option<String>,
     /// Text being typed into string/int settings, by (plugin, key).

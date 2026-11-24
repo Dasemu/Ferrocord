@@ -2,12 +2,10 @@
 //! settings) and the host-rendered message decorations. Plugins never draw:
 //! everything here is built from their manifest and their decoration data.
 //!
-//! `page` is self-contained (title, back button, its own scrollable) so it
-//! can sit in the settings dialog or in a settings sidebar.
+//! `page` is the "Plugins" category of the settings screen. Text and number
+//! settings are bound to `Page::drafts`, filled when the page opens.
 
-use iced::widget::{
-    Space, button, column, container, row, scrollable, text, text_input, toggler, tooltip,
-};
+use iced::widget::{Space, button, column, container, row, text, text_input, toggler, tooltip};
 use iced::{Alignment, Length, Padding};
 
 use super::El;
@@ -23,30 +21,14 @@ fn pm(m: PluginMsg) -> Message {
     Message::Plugin(m)
 }
 
-pub fn scroll_id() -> iced::widget::Id {
-    iced::widget::Id::new("plugins-page")
-}
-
 /// The Plugins page.
 pub fn page(app: &App) -> El<'_> {
     let t = &app.theme;
     let p = t.palette;
-    let title = row![
-        button(
-            text("\u{2190} Back")
-                .size(t.metrics.font_s)
-                .color(p.text_secondary)
-        )
-        .padding(Padding::from([4, 8]))
-        .on_press(pm(PluginMsg::ClosePage))
-        .style(theme::secondary_button(p)),
-        text("Plugins")
-            .size(t.metrics.font_l)
-            .font(INTER_SEMIBOLD)
-            .color(p.header_text),
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center);
+    let title = text("Plugins")
+        .size(t.metrics.font_l)
+        .font(INTER_SEMIBOLD)
+        .color(p.header_text);
 
     if let Some(id) = &app.plugins.page.prompt
         && let Some(f) = app.plugins.scan.as_ref().and_then(|s| s.get(id))
@@ -136,19 +118,8 @@ pub fn page(app: &App) -> El<'_> {
             .color(p.text_muted),
         );
     }
-    column![
-        title,
-        note,
-        tools,
-        container(
-            scrollable(list.padding(Padding::ZERO.right(10)))
-                .id(scroll_id())
-                .style(theme::thin_scrollbar(p, false))
-        )
-        .max_height(440),
-    ]
-    .spacing(14)
-    .into()
+    // The settings screen's content scrollable (fixed id) scrolls the page.
+    column![title, note, tools, list].spacing(14).into()
 }
 
 fn header<'a>(app: &'a App, m: &'a Manifest) -> El<'a> {

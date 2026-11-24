@@ -9,6 +9,7 @@ pub mod conn;
 pub mod dave;
 pub mod jitter;
 pub mod media;
+pub mod mic_test;
 pub mod mixer;
 pub mod rtp;
 pub mod session;
@@ -50,6 +51,10 @@ struct ControlInner {
     threshold: AtomicI32,
     /// Last microphone level in dB * 100 (settings meter).
     input_level: AtomicI32,
+    /// "Input Volume" / "Output Volume" in percent (0..=200; 0 = unset,
+    /// read as 100).
+    input_volume: AtomicI32,
+    output_volume: AtomicI32,
     /// user -> (gain, locally muted).
     users: Mutex<HashMap<u64, (f32, bool)>>,
     /// Bumped when the device choice changes: the engine reopens audio.
@@ -97,6 +102,28 @@ impl VoiceControl {
     }
     pub fn input_level(&self) -> f32 {
         self.inner.input_level.load(Ordering::Relaxed) as f32 / 100.0
+    }
+    /// Microphone and speaker volume in percent (0..=200).
+    pub fn set_volumes(&self, input: f32, output: f32) {
+        let pct = |v: f32| (v.clamp(0.0, 200.0).round() as i32).max(0) + 1;
+        self.inner.input_volume.store(pct(input), Ordering::Relaxed);
+        self.inner
+            .output_volume
+            .store(pct(output), Ordering::Relaxed);
+    }
+    fn volume(v: &AtomicI32) -> f32 {
+        match v.load(Ordering::Relaxed) {
+            0 => 1.0,
+            n => (n - 1) as f32 / 100.0,
+        }
+    }
+    /// Gain applied to the microphone before voice activity and encoding.
+    pub fn input_gain(&self) -> f32 {
+        Self::volume(&self.inner.input_volume)
+    }
+    /// Gain applied to everything played.
+    pub fn output_gain(&self) -> f32 {
+        Self::volume(&self.inner.output_volume)
     }
     /// Per-user volume (0.0..=2.0) and local mute.
     pub fn set_user(&self, user: u64, volume: f32, muted: bool) {

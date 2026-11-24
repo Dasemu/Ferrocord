@@ -40,8 +40,8 @@ pub enum PluginMsg {
         reload: bool,
     },
     Out(Box<Out>),
+    /// The Plugins settings page opened: rescan the folder.
     OpenPage,
-    ClosePage,
     /// The switch next to a plugin.
     Toggle(String),
     ConfirmEnable,
@@ -79,7 +79,6 @@ impl std::fmt::Debug for PluginMsg {
             Self::HttpDone { plugin, .. } => write!(f, "PluginMsg::HttpDone({plugin})"),
             other => f.write_str(match other {
                 Self::OpenPage => "PluginMsg::OpenPage",
-                Self::ClosePage => "PluginMsg::ClosePage",
                 Self::ConfirmEnable => "PluginMsg::ConfirmEnable",
                 Self::CancelPrompt => "PluginMsg::CancelPrompt",
                 Self::Reload => "PluginMsg::Reload",
@@ -216,6 +215,7 @@ impl App {
                 }
                 self.plugins.scan = Some(*scan);
                 self.plugins.page.scanning = false;
+                self.fill_plugin_drafts();
                 if boot || reload {
                     return self.start_enabled(reload);
                 }
@@ -223,14 +223,8 @@ impl App {
             }
             PluginMsg::Out(o) => self.on_plugin_out(*o),
             PluginMsg::OpenPage => {
-                self.plugins.page.open = true;
                 self.plugins.page.prompt = None;
                 self.rescan()
-            }
-            PluginMsg::ClosePage => {
-                self.plugins.page.open = false;
-                self.plugins.page.prompt = None;
-                Task::none()
             }
             PluginMsg::Toggle(id) => {
                 if self.plugins.state.is_enabled(&id) {
@@ -377,6 +371,34 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    /// Text and number settings are edited in `page.drafts`, filled once
+    /// per scan (when the page opens), never rebuilt from the state while
+    /// the user types.
+    fn fill_plugin_drafts(&mut self) {
+        let Some(scan) = &self.plugins.scan else {
+            return;
+        };
+        let mut drafts = std::collections::HashMap::new();
+        for f in &scan.found {
+            let stored = self
+                .plugins
+                .state
+                .plugins
+                .get(&f.manifest.id)
+                .map(|r| r.settings.clone())
+                .unwrap_or_default();
+            for (key, v) in f.manifest.effective_settings(&stored) {
+                let text = match v {
+                    abi::SettingValue::Int(i) => i.to_string(),
+                    abi::SettingValue::Str(s) => s,
+                    abi::SettingValue::Bool(_) => continue,
+                };
+                drafts.insert((f.manifest.id.clone(), key), text);
+            }
+        }
+        self.plugins.page.drafts = drafts;
     }
 
     fn rescan(&mut self) -> Task<Message> {
@@ -703,8 +725,9 @@ impl App {
                 }
                 self.plugins.scan = Some(scan);
                 self.plugins.dir = Some("~/.config/ferrocord/plugins".into());
+                self.fill_plugin_drafts();
                 self.settings_open = true;
-                self.plugins.page.open = true;
+                self.settings.category = Some(super::settings::Category::Plugins);
                 if screen == Some(S::PluginPrompt) {
                     self.plugins.page.prompt = Some("text-replacer".into());
                 }
