@@ -43,7 +43,7 @@ pub const MAX_SOURCE_DIM: u32 = 2048;
 pub enum Class {
     /// Avatar in the popout.
     Avatar,
-    /// Avatar in lists and messages (plays all the time, kept small).
+    /// Avatar in lists and messages (plays while its row is hovered).
     AvatarList,
     /// Decoration in the popout.
     Decoration,
@@ -599,10 +599,47 @@ impl AnimCache {
 // ---------------------------------------------------------------------------
 
 /// What the pointer is over: a user's avatar area (list row, message row).
+/// Animated avatars and decorations in lists play only while their own row
+/// is hovered, like the official client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hover {
     pub user: UserId,
     pub message: Option<MessageId>,
+    pub zone: Zone,
+}
+
+/// The list a hovered row belongs to: the same user can be in several at
+/// once (member list and DM list), and only the hovered row animates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    /// A message row (`Hover::message` names it).
+    Message,
+    /// The member list (guild or group DM).
+    Members,
+    /// The DM list.
+    DmList,
+    /// The user panel at the bottom of the sidebar.
+    Panel,
+}
+
+impl Hover {
+    /// The row of message `message` by `user`.
+    pub fn message(user: UserId, message: MessageId) -> Self {
+        Self {
+            user,
+            message: Some(message),
+            zone: Zone::Message,
+        }
+    }
+
+    /// `user`'s row in a list.
+    pub fn row(user: UserId, zone: Zone) -> Self {
+        Self {
+            user,
+            message: None,
+            zone,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -928,19 +965,13 @@ mod tests {
     fn hover_restarts_the_clock_only_on_a_new_target() {
         let mut s = AnimState::default();
         let t0 = Instant::now();
-        let h = Hover {
-            user: Snowflake(1),
-            message: Some(Snowflake(9)),
-        };
+        let h = Hover::message(Snowflake(1), Snowflake(9));
         s.enter(h, t0);
         assert_eq!(s.hover_epoch(), t0);
         // Re-entering the same target keeps the phase.
         s.enter(h, t0 + Duration::from_millis(500));
         assert_eq!(s.hover_epoch(), t0);
-        let h2 = Hover {
-            user: Snowflake(2),
-            message: None,
-        };
+        let h2 = Hover::row(Snowflake(2), Zone::Members);
         let t1 = t0 + Duration::from_millis(600);
         s.enter(h2, t1);
         assert_eq!(s.hover_epoch(), t1);

@@ -142,6 +142,13 @@ struct State {
     asked: Option<Instant>,
 }
 
+/// How many self-playing animation widgets the widget tree `tree` holds
+/// (tests: a still avatar draws a plain image, not an [`AnimImage`]).
+pub fn count_in(tree: &Tree) -> usize {
+    usize::from(tree.tag == tree::Tag::of::<State>())
+        + tree.children.iter().map(count_in).sum::<usize>()
+}
+
 /// Time into the animation at `now` (`None`: hidden by the timeline).
 fn local_time(
     epoch: Instant,
