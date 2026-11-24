@@ -161,3 +161,7 @@ cargo test
 
 MIT, see [LICENSE](LICENSE). Bundled fonts: Inter (SIL OFL 1.1, see
 `assets/fonts/OFL.txt`). Icons: Lucide (ISC, see `assets/icons/LICENSE`).
+Emoji: [Twemoji](https://github.com/jdecked/twemoji) by Twitter, jdecked and
+contributors, licensed [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+(COLRv0 font build, converted and renamed; see `assets/fonts/Twemoji-LICENSE.txt`).
+See [THIRD_PARTY.md](THIRD_PARTY.md).

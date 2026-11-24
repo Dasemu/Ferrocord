@@ -288,7 +288,7 @@ Shadows are safe with ferroiced (tiny-skia clips them to the damage region), but
 no style uses `container::Style::shadow`: header "shadows" are a gradient on the
 bar itself and popups rely on their border, as in the official client.
 
-Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
+Fonts: Inter (OFL) and Twemoji (CC-BY 4.0, COLRv0 font) embedded. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
