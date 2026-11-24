@@ -167,6 +167,11 @@ ttf-parser = "0.25"
 # Encodes an APNG fixture in the animation tests (already compiled for `image`).
 png = "0.18"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }
+# Renders scenes with the software renderer iced already uses (ferroiced's
+# iced_tiny_skia and its tiny-skia, both already in the tree) to compare
+# partial and full redraws pixel by pixel.
+iced_tiny_skia = { version = "0.14", default-features = false, features = ["image"] }
+tiny-skia = "0.11"
 
 [profile.release]
 opt-level = 3

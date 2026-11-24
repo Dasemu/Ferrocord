@@ -489,7 +489,12 @@ fn message<'a>(
         );
         let main = row![
             container(cosmetics::clickable(
-                avatar(app, &m.author, 40.0),
+                super::hover_avatar(
+                    app,
+                    &m.author,
+                    40.0,
+                    crate::app::anim::Hover::message(m.author.id, m.id)
+                ),
                 &m.author,
                 profile_guild
             ))
@@ -555,10 +560,7 @@ fn message<'a>(
                 a: 0.04,
                 ..p.text_primary
             }));
-        let h = crate::app::anim::Hover {
-            user: m.author.id,
-            message: Some(m.id),
-        };
+        let h = crate::app::anim::Hover::message(m.author.id, m.id);
         mouse_area(hover(base_el, overlay))
             .on_right_press(ui(Ui::ContextMenu(m.id)))
             .on_enter(Message::Ui(Ui::HoverEnter(h)))

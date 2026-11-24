@@ -332,6 +332,86 @@ mod tests {
     use crate::app::anim::from_rgba_frames;
     use crate::ui::anim_image::anim_image;
 
+    /// Official policy: a message's avatar and decoration are stills (no
+    /// animation widget, so no redraws) until that message is hovered,
+    /// then both play; the popout plays them without a hover; reduced
+    /// motion keeps them still everywhere.
+    #[test]
+    fn message_avatars_animate_only_while_their_message_is_hovered() {
+        use crate::app::anim::{Hover, Zone};
+        use crate::app::cosmetics::Phase;
+        use crate::app::{App, Message, Ui};
+        use crate::net::model::Snowflake;
+        use crate::ui::anim_image::count_in;
+
+        let (mut a, _) = App::boot(crate::config::Config::for_tests());
+        let alice = crate::mock::user(2);
+        let mine = Hover::message(alice.id, Snowflake(41));
+        let other = Hover::message(alice.id, Snowflake(42));
+        let anims = |a: &App, h: Hover| {
+            let el = crate::ui::hover_avatar(a, &alice, 40.0, h);
+            count_in(&Tree::new(&el))
+        };
+        let popout = |a: &App| {
+            let el = super::avatar_decorated(a, &alice, 80.0, Phase::Popout);
+            count_in(&Tree::new(&el))
+        };
+        assert_eq!(anims(&a, mine), 0, "a still off-hover");
+        assert_eq!(popout(&a), 2, "the popout plays avatar and decoration");
+
+        let _ = a.update(Message::Ui(Ui::HoverEnter(mine)));
+        assert_eq!(anims(&a, mine), 2, "avatar and decoration play");
+        assert_eq!(anims(&a, other), 0, "another message by her stays still");
+        let _ = a.update(Message::Ui(Ui::HoverLeave(mine)));
+        assert_eq!(anims(&a, mine), 0);
+
+        // The user panel follows the same rule.
+        let panel = Hover::row(alice.id, Zone::Panel);
+        let _ = a.update(Message::Ui(Ui::HoverEnter(panel)));
+        assert_eq!(a.list_phase(panel), Phase::Hover);
+
+        let _ = a.update(Message::Ui(Ui::ToggleReduceMotion));
+        let _ = a.update(Message::Ui(Ui::HoverEnter(mine)));
+        assert_eq!(anims(&a, mine), 0, "reduced motion: stills");
+        assert_eq!(popout(&a), 0);
+    }
+
+    /// A paused animation (window in the background) draws its first frame
+    /// and asks for no redraw.
+    #[test]
+    fn a_paused_animation_requests_no_redraws() {
+        let anim = Arc::new(from_rgba_frames(vec![
+            (1, 1, vec![0u8; 4], Duration::from_millis(40)),
+            (1, 1, vec![9u8; 4], Duration::from_millis(40)),
+        ]));
+        let epoch = Instant::now();
+        let mut img = anim_image(anim, epoch, false, 48.0, 48.0);
+        let mut tree = Tree::new(&img as &dyn Widget<(), (), ()>);
+        let node = Widget::<(), (), ()>::layout(
+            &mut img,
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+        );
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let mut clipboard = iced::advanced::clipboard::Null;
+        Widget::<(), (), ()>::update(
+            &mut img,
+            &mut tree,
+            &Event::Window(window::Event::RedrawRequested(
+                epoch + Duration::from_secs(1),
+            )),
+            iced::advanced::Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &(),
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::new(Point::ORIGIN, Size::new(500.0, 500.0)),
+        );
+        assert_eq!(shell.redraw_request(), window::RedrawRequest::Wait);
+    }
+
     /// Regression: `Placed` (decoration frames, effect layers) swallowed
     /// every event, so the animation inside never saw a redraw and stayed
     /// on its first frame. A redraw must reach it and schedule the next.

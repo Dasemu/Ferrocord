@@ -398,6 +398,25 @@ draw; they are dropped when the popout closes.
 `i.scdn.co` was added to the media host allow-list for Spotify album art;
 downloads never carry the token.
 
+### When cosmetics animate (official policy)
+
+Outside profiles, animated avatars and avatar decorations are stills (the
+`.png` / `passthrough=false` URLs) and play only while their own row is
+hovered: a message row (chat), a member-list row, a DM-list row, the user
+panel's identity area (`App::list_phase`, `anim::Hover` with its `Zone`). The
+animated asset is fetched on the first hover, like the official client,
+which asks for the `a_` asset only when the component may animate. The
+profile popout (and nothing else) animates avatar, decoration, banner and
+effect without a hover. Animated emoji and GIFs in messages are unchanged
+(they follow "Play GIFs automatically"); "Reduce motion" keeps everything
+still. Sources: Discord's own client gates avatar and decoration animation
+per component (`canAnimate`, `isAvatarDecorationAnimating`,
+`onlyAnimateOnHoverOrFocus` props, visible in the client mods that patch
+them, e.g. Vencord's `AlwaysAnimate` and `Decor` plugins), and the Discord
+support community has long-standing requests to make animated avatars play
+without hovering. A still draws no animation widget, so an idle window with
+cosmetics on screen asks for no redraws.
+
 ### Animation engine (`app/anim.rs`)
 
 * GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
@@ -413,8 +432,8 @@ downloads never carry the token.
   are refused.
 * `AnimCache` is an LRU with an 80 MB budget. Banner and effect frames are
   dropped when the popout closes.
-* Nothing ticks. Every animation (list / message avatars and decorations,
-  the popout's avatar, decoration, banner and effect layers, message media,
+* Nothing ticks. Every animation (hovered list / message avatars and
+  decorations, the popout's avatar, decoration, banner and effect layers, message media,
   hover-played emoji, GIF-picker tiles) is an `ui::anim_image::AnimImage`
   with a start time (`App::anim_clock`: the app epoch, the popout opening
   or the hover start) and a playing flag (window focused, motion on).

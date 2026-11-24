@@ -332,10 +332,22 @@ fn banner(app: &App) -> Option<El<'_>> {
     )
 }
 
-/// Round avatar with its decoration; animated ones play all the time
-/// (see `App::phase_of`).
+/// Round avatar with its decoration, as a still: like the official client,
+/// animated avatars and decorations outside profiles play only while their
+/// row is hovered ([`hover_avatar`]).
 pub fn avatar<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
-    cosmetics::avatar_decorated(app, user, size, app.phase_of(user.id))
+    cosmetics::avatar_decorated(app, user, size, crate::app::cosmetics::Phase::Still)
+}
+
+/// Round avatar with its decoration in a list row or message that animates
+/// while `hover` (that row) is hovered (see `App::list_phase`).
+pub fn hover_avatar<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    hover: crate::app::anim::Hover,
+) -> El<'a> {
+    cosmetics::avatar_decorated(app, user, size, app.list_phase(hover))
 }
 
 /// The avatar circle alone: the downloaded image (the animated frame in
@@ -392,27 +404,35 @@ pub fn initials_circle<'a>(p: &Palette, name: &str, color: iced::Color, size: f3
     .into()
 }
 
-/// Avatar with its presence dot (user panel and DM list).
-pub fn avatar_with_status<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
+/// Avatar with its presence dot (user panel), drawn in `phase`.
+pub fn avatar_with_status<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    phase: crate::app::cosmetics::Phase,
+) -> El<'a> {
     avatar_with_presence(
         app,
         user,
         size,
         app.chat.presence_of(user.id),
         app.theme.palette.user_panel,
+        phase,
     )
 }
 
-/// Avatar with a presence dot; `ring` is the background colour the dot is
-/// cut out of.
+/// Avatar with a presence dot, drawn in `phase`; `ring` is the background
+/// colour the dot is cut out of.
 pub fn avatar_with_presence<'a>(
     app: &'a App,
     user: &User,
     size: f32,
     status: crate::net::model::Presence,
     ring_color: iced::Color,
+    phase: crate::app::cosmetics::Phase,
 ) -> El<'a> {
-    with_presence(app, avatar(app, user, size), size, status, ring_color)
+    let base = cosmetics::avatar_decorated(app, user, size, phase);
+    with_presence(app, base, size, status, ring_color)
 }
 
 /// Puts the presence dot on `base` (an avatar slot of `size`).
