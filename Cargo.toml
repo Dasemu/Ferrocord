@@ -72,8 +72,8 @@ qrcode = { version = "0.14", default-features = false }
 # Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
 unicode-segmentation = "1"
 emojis = "0.9"
-# Reads font tables to tell a drawable (CBDT) system emoji font from a COLRv1 one (already in the tree via fontdb).
-ttf-parser = "0.25"
+# Script type of cosmic-text's font fallback trait (Twemoji first); already in the tree via cosmic-text.
+unicode-script = "0.5"
 # System UI language for X-Discord-Locale / IDENTIFY (already in the tree via iced).
 sys-locale = "0.3"
 # IANA time zone for X-Discord-Timezone (already in the tree via chrono).
@@ -143,6 +143,8 @@ openmls_rust_crypto = "0.5"
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"
+# Reads the bundled Twemoji's tables in tests (already in the tree via fontdb).
+ttf-parser = "0.25"
 # Encodes an APNG fixture in the animation tests (already compiled for `image`).
 png = "0.18"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }

@@ -138,15 +138,54 @@ fn custom_emoji(mut g: Guild) -> Guild {
             name: "ferris".into(),
             animated: false,
             available: true,
+            roles: vec![],
         },
         CustomEmoji {
             id: Snowflake(1002),
             name: "party".into(),
             animated: false,
             available: true,
+            roles: vec![],
         },
     ];
     g.stickers = mock_stickers();
+    g
+}
+
+/// Emoji and stickers of the mock Iced server: from the Rust server they
+/// are Nitro-locked for the mock user (no Nitro), so the pickers show the
+/// lock and "Send as image".
+fn iced_emoji(mut g: Guild) -> Guild {
+    g.emojis = vec![
+        CustomEmoji {
+            id: Snowflake(1003),
+            name: "iced_cube".into(),
+            animated: false,
+            available: true,
+            roles: vec![],
+        },
+        CustomEmoji {
+            id: Snowflake(1004),
+            name: "spinner".into(),
+            animated: true,
+            available: true,
+            roles: vec![],
+        },
+    ];
+    g.stickers = vec![
+        Sticker {
+            id: Snowflake(1105),
+            name: "Ice cube".into(),
+            format: StickerFormat::Png,
+            available: true,
+        },
+        Sticker {
+            id: Snowflake(1106),
+            name: "Melting".into(),
+            format: StickerFormat::Lottie,
+            available: true,
+        },
+    ];
     g
 }
 
@@ -311,7 +350,7 @@ pub fn ready() -> ReadyData {
                     role(ROLE_BOT, "Bot", 0x9b59b6, 2),
                 ],
             )),
-            guild(GUILD_ICED, "Iced GUI", vec![]),
+            iced_emoji(guild(GUILD_ICED, "Iced GUI", vec![])),
             guild(GUILD_LINUX, "Linux Desktop", vec![]),
             guild(GUILD_GAMES, "Game Night", vec![]),
             guild(GUILD_CAFE, "Open Source Café", vec![]),

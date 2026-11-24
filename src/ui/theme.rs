@@ -359,10 +359,10 @@ pub const INTER_ITALIC: Font = Font {
 };
 pub const MONO: Font = Font::MONOSPACE;
 
-/// Noto Color Emoji (SIL OFL 1.1), renamed "Ferrocord Color Emoji" so no
-/// system face can shadow it; loaded unless the system has a drawable copy
-/// (`emoji_font::pick_emoji_font`).
-pub const NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../assets/fonts/NotoColorEmoji.ttf");
+/// Twemoji (graphics CC-BY 4.0 by Twitter and jdecked/twemoji, COLRv0 build
+/// Apache-2.0 by Mozilla / Sable), renamed "Ferrocord Twemoji" so no system
+/// face can shadow it. Loaded by `emoji_font::install`.
+pub const TWEMOJI: &[u8] = include_bytes!("../../assets/fonts/Twemoji.ttf");
 
 /// Embedded font files (SIL OFL 1.1).
 pub const FONT_FILES: [&[u8]; 4] = [
