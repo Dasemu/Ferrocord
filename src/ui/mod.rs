@@ -2,6 +2,7 @@
 
 pub mod anim_image;
 pub mod chat;
+pub mod clock;
 pub mod context_menu;
 pub mod cosmetics;
 pub mod embeds;
@@ -494,7 +495,7 @@ pub fn format_timestamp(ms: u64, now_ms: u64) -> String {
         return String::new();
     };
     let now = local(now_ms).unwrap_or(t);
-    let time = t.format("%-I:%M %p");
+    let time = t.format(clock::hm());
     let days = now.date_naive().num_days_from_ce() - t.date_naive().num_days_from_ce();
     match days {
         0 => format!("Today at {time}"),
@@ -506,7 +507,7 @@ pub fn format_timestamp(ms: u64, now_ms: u64) -> String {
 /// Short time for continuation messages ("2:03 PM").
 pub fn format_time(ms: u64) -> String {
     local(ms)
-        .map(|t| t.format("%-I:%M %p").to_string())
+        .map(|t| t.format(clock::hm()).to_string())
         .unwrap_or_default()
 }
 
@@ -530,13 +531,13 @@ pub fn format_discord_timestamp(unix: i64, style: char, now_ms: u64) -> String {
         return format!("<t:{unix}>");
     };
     match style {
-        't' => t.format("%-I:%M %p").to_string(),
-        'T' => t.format("%-I:%M:%S %p").to_string(),
+        't' => t.format(clock::hm()).to_string(),
+        'T' => t.format(clock::hms()).to_string(),
         'd' => t.format("%m/%d/%Y").to_string(),
         'D' => t.format("%B %-d, %Y").to_string(),
-        'F' => t.format("%A, %B %-d, %Y %-I:%M %p").to_string(),
+        'F' => format!("{} {}", t.format("%A, %B %-d, %Y"), t.format(clock::hm())),
         'R' => relative(unix * 1000 - now_ms as i64),
-        _ => t.format("%B %-d, %Y %-I:%M %p").to_string(),
+        _ => format!("{} {}", t.format("%B %-d, %Y"), t.format(clock::hm())),
     }
 }
 

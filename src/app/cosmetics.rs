@@ -566,9 +566,13 @@ impl App {
                 Task::batch([t, self.request_images()])
             }
             Ui::ToggleAutoplayGifs => {
-                self.prefs.autoplay_gifs = !self.prefs.autoplay_gifs;
-                let t = self.save_pref(super::window::KEY_AUTOPLAY_GIFS, self.prefs.autoplay_gifs);
-                Task::batch([t, self.request_images()])
+                // Synced as `gif_auto_play`; the local pref mirrors it so the
+                // last value is known before Discord answers.
+                use crate::net::user_settings::{Edit, Synced, Value};
+                let on = !self.settings.synced.bool(Synced::GifAutoPlay);
+                let t = self.edit_synced(Edit::Set(Synced::GifAutoPlay, Value::Bool(on)));
+                let save = self.save_pref(super::window::KEY_AUTOPLAY_GIFS, on);
+                Task::batch([t, save, self.request_images()])
             }
             _ => Task::none(),
         }

@@ -97,8 +97,30 @@ impl App {
             muted: self.prefs.muted,
             start_minimized: self.prefs.start_minimized,
             // An incoming call asks for attention like an unread mention.
-            mentions: self.chat.attention_count() + u32::from(self.voice.incoming.is_some()),
+            // "Enable Unread Message Badge" off: no count on the icon.
+            mentions: if self.settings.local.unread_badge {
+                self.chat.attention_count() + u32::from(self.voice.incoming.is_some())
+            } else {
+                0
+            },
         }
+    }
+
+    /// "Enable Taskbar Flashing": asks the window manager for attention
+    /// (taskbar flash / urgent hint) for a new mention while unfocused.
+    pub(super) fn flash_taskbar(&self) -> Task<Message> {
+        match self.window_id {
+            Some(id) if self.wants_flash() => iced::window::request_user_attention(
+                id,
+                Some(iced::window::UserAttention::Informational),
+            ),
+            _ => Task::none(),
+        }
+    }
+
+    /// Whether a new mention flashes the taskbar now.
+    pub(super) fn wants_flash(&self) -> bool {
+        self.settings.local.taskbar_flash && !self.window_focused
     }
 
     /// Pushes the current state to the tray (a no-op when unchanged).
@@ -140,13 +162,18 @@ impl App {
             Ui::OpenSettings => {
                 self.settings_open = true;
                 self.status_menu = false;
+                self.menu = None;
+                self.ctx_menu = None;
                 // Device names for the voice section (blocking enumeration
                 // runs off the UI thread).
-                self.update_voice(super::voice::VoiceUi::RefreshDevices)
+                Task::batch([
+                    self.open_settings_screen(),
+                    self.update_voice(super::voice::VoiceUi::RefreshDevices),
+                ])
             }
             Ui::CloseSettings => {
                 self.settings_open = false;
-                Task::none()
+                self.close_settings_screen()
             }
             Ui::ToggleCloseToTray => {
                 self.prefs.close_to_tray = !self.prefs.close_to_tray;

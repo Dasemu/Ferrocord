@@ -76,3 +76,6 @@ Things learned while building Ferrocord that are worth remembering.
   any 60 fps animation inside the popout repaints the full scaled effect layers.
 - A disk cache keyed by `sha256(url)` (no URL on disk) with mtime-as-LRU needs no index: `File::set_modified` on read,
   trim the oldest on write; write to a temp file and rename so a crash never leaves a truncated entry.
+- **settings-proto PATCH replaces whole top-level fields**: a field sent in `PATCH /users/@me/settings-proto/1` replaces that category entirely (unsent subfields reset), omitted top-level fields stay. Send each touched category complete (read-modify-write keeps unknown fields) and nothing else. `google.protobuf.*Value` wrappers: absent = unset (client default), empty wrapper = explicit `false`/`0`.
+- A process-wide display flag read by free formatting functions (12/24-hour clock) is best thread-local: iced runs `update` and `view` on one thread, and parallel tests then cannot see each other's value.
+- iced `daemon::scale_factor` takes `Fn(&State, window::Id) -> f32`: a zoom setting is just state read there, no window reopen.

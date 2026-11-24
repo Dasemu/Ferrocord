@@ -161,7 +161,8 @@ impl App {
 
     /// The decoded animation of a custom emoji, when it autoplays.
     pub fn emoji_anim(&self, id: Snowflake, animated: bool) -> Option<&Arc<Anim>> {
-        if !animated {
+        // Accessibility "Play animated emoji".
+        if !animated || !self.animate_emoji() {
             return None;
         }
         self.media_anim(&emoji_anim_url(self.cfg.cdn_url.trim_end_matches('/'), id))
@@ -206,6 +207,16 @@ impl App {
                 );
             }
         }
+        // Accessibility: still emoji / stickers are not even downloaded.
+        let (emoji, stickers) = (
+            self.animate_emoji(),
+            self.sticker_anim() != super::settings::StickerAnim::Never,
+        );
+        out.retain(|(_, c)| match c {
+            Class::Emoji => emoji,
+            Class::Sticker => stickers,
+            _ => true,
+        });
         out
     }
 
