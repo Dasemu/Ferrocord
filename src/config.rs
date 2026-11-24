@@ -213,6 +213,9 @@ pub struct Config {
     pub trace_startup: bool,
     pub data_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    /// `<config dir>/plugins` (`FERROCORD_PLUGINS_DIR` overrides it; in
+    /// mock mode only the override is used).
+    pub plugins_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -283,6 +286,11 @@ impl Config {
             state_dir: dirs
                 .as_ref()
                 .map(|d| d.state_dir().unwrap_or(d.data_dir()).to_path_buf()),
+            plugins_dir: match env("FERROCORD_PLUGINS_DIR") {
+                Some(d) => Some(PathBuf::from(d)),
+                None if mock => None,
+                None => dirs.as_ref().map(|d| d.config_dir().join("plugins")),
+            },
         })
     }
 
@@ -303,6 +311,7 @@ impl Config {
             trace_startup: false,
             data_dir: None,
             state_dir: None,
+            plugins_dir: None,
         }
     }
 
@@ -312,6 +321,14 @@ impl Config {
             return None;
         }
         self.data_dir.as_ref().map(|d| d.join("cache.sqlite3"))
+    }
+
+    /// The plugins' key-value store, `None` (in memory) in mock mode.
+    pub fn plugin_store_path(&self) -> Option<PathBuf> {
+        if self.mock {
+            return None;
+        }
+        self.data_dir.as_ref().map(|d| d.join("plugins.sqlite3"))
     }
 
     pub fn log_path(&self) -> Option<PathBuf> {
