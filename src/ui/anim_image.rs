@@ -139,10 +139,11 @@ where
         if let Event::Window(window::Event::RedrawRequested(now)) = event {
             let state = tree.state.downcast_mut::<State>();
             let visible = layout.bounds().intersects(viewport);
+            let asked = state.asked.take();
             if super::frame_stats::enabled() && visible && self.playing {
                 let before = shown_index(&self.anim, self.epoch, state.now, self.playing);
                 let after = shown_index(&self.anim, self.epoch, Some(*now), self.playing);
-                super::frame_stats::record(*now, state.asked.take(), before != after);
+                super::frame_stats::record(*now, asked, before != after);
             }
             state.now = Some(*now);
             // Off-screen images stop asking; scrolling back redraws them.
