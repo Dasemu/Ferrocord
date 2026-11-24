@@ -507,6 +507,14 @@ fn menu_items(app: &App, m: MessageId) -> Vec<Item> {
         action: Ui::CopyLink(m),
         danger: false,
     });
+    if app.developer_mode() {
+        v.push(Item {
+            icon: Icon::Copy,
+            label: "Copy Message ID",
+            action: Ui::CopyToClipboard(m.to_string()),
+            danger: false,
+        });
+    }
     if mine {
         v.push(Item {
             icon: Icon::Trash,

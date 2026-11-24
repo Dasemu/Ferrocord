@@ -138,6 +138,94 @@ impl Palette {
     };
 }
 
+impl Palette {
+    /// "Ash": the dark theme with lighter greys.
+    pub const ASH: Palette = Palette {
+        bg_app: rgb(0x26272b),
+        bg_sidebar: rgb(0x303136),
+        bg_panel: rgb(0x37383e),
+        bg_elevated: rgb(0x1c1d20),
+        border: rgb(0x26272b),
+        bubble_out: rgb(0x3c3d43),
+        composer_bg: rgb(0x414249),
+        code_bg: rgb(0x303136),
+        user_panel: rgb(0x2a2b30),
+        embed_bg: rgb(0x303136),
+        spoiler: rgb(0x26272b),
+        ..Palette::DARK
+    };
+
+    /// "Onyx": near-black surfaces.
+    pub const ONYX: Palette = Palette {
+        bg_app: rgb(0x070709),
+        bg_sidebar: rgb(0x0f0f12),
+        bg_panel: rgb(0x141417),
+        bg_elevated: rgb(0x000000),
+        border: rgb(0x1f1f23),
+        bubble_out: rgb(0x1a1a1e),
+        composer_bg: rgb(0x1d1d21),
+        code_bg: rgb(0x1a1a1e),
+        user_panel: rgb(0x0b0b0d),
+        embed_bg: rgb(0x1a1a1e),
+        spoiler: rgb(0x070709),
+        ..Palette::DARK
+    };
+
+    /// Every colour with its saturation scaled by `f` (0 = grey, 1 = as
+    /// is): the Accessibility "Saturation" slider.
+    pub fn saturated(self, f: f32) -> Palette {
+        if f >= 1.0 {
+            return self;
+        }
+        let f = f.clamp(0.0, 1.0);
+        let s = |c: Color| {
+            // Rec. 709 luma, then mix toward it.
+            let y = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+            Color {
+                r: y + (c.r - y) * f,
+                g: y + (c.g - y) * f,
+                b: y + (c.b - y) * f,
+                a: c.a,
+            }
+        };
+        Palette {
+            bg_app: s(self.bg_app),
+            bg_sidebar: s(self.bg_sidebar),
+            bg_panel: s(self.bg_panel),
+            bg_elevated: s(self.bg_elevated),
+            bg_hover: s(self.bg_hover),
+            bg_selected: s(self.bg_selected),
+            text_primary: s(self.text_primary),
+            text_secondary: s(self.text_secondary),
+            text_muted: s(self.text_muted),
+            accent: s(self.accent),
+            accent_text: s(self.accent_text),
+            danger: s(self.danger),
+            success: s(self.success),
+            border: s(self.border),
+            bubble_out: s(self.bubble_out),
+            bubble_in: s(self.bubble_in),
+            badge: s(self.badge),
+            badge_muted: s(self.badge_muted),
+            text_normal: s(self.text_normal),
+            header_text: s(self.header_text),
+            link: s(self.link),
+            mention_bg: s(self.mention_bg),
+            mention_text: s(self.mention_text),
+            mention_bar: s(self.mention_bar),
+            composer_bg: s(self.composer_bg),
+            code_bg: s(self.code_bg),
+            user_panel: s(self.user_panel),
+            embed_bg: s(self.embed_bg),
+            spoiler: s(self.spoiler),
+            channel_icon: s(self.channel_icon),
+            rail_pill: s(self.rail_pill),
+            status_idle: s(self.status_idle),
+            status_offline: s(self.status_offline),
+        }
+    }
+}
+
 /// Spacing scale, radii, widths and font sizes (logical pixels).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
@@ -210,6 +298,22 @@ impl FerroTheme {
                 metrics: Metrics::DEFAULT,
                 dark: false,
             },
+        }
+    }
+
+    /// The theme picked in Appearance, with the Accessibility saturation.
+    pub fn from_settings(theme: crate::net::user_settings::Theme, saturation: f32) -> Self {
+        use crate::net::user_settings::Theme as T;
+        let (palette, dark) = match theme {
+            T::Dark => (Palette::DARK, true),
+            T::Light => (Palette::LIGHT, false),
+            T::Darker => (Palette::ASH, true),
+            T::Midnight => (Palette::ONYX, true),
+        };
+        Self {
+            palette: palette.saturated(saturation),
+            metrics: Metrics::DEFAULT,
+            dark,
         }
     }
 
@@ -516,6 +620,77 @@ pub fn switch(p: Palette) -> impl Fn(&Theme, toggler::Status) -> toggler::Style 
             border_radius: None,
             padding_ratio: 0.2,
         }
+    }
+}
+
+/// Settings screen layout (logical px), as in the official client.
+pub const SETTINGS_SIDEBAR_W: f32 = 218.0;
+pub const SETTINGS_CONTENT_MAX_W: f32 = 740.0;
+pub const SETTINGS_SWATCH: f32 = 60.0;
+
+/// Radio buttons of the settings screen.
+pub fn radio(
+    p: Palette,
+) -> impl Fn(&Theme, iced::widget::radio::Status) -> iced::widget::radio::Style {
+    use iced::widget::radio::Status;
+    move |_, status| {
+        let (selected, hovered) = match status {
+            Status::Active { is_selected } => (is_selected, false),
+            Status::Hovered { is_selected } => (is_selected, true),
+        };
+        iced::widget::radio::Style {
+            background: Background::Color(Color::TRANSPARENT),
+            dot_color: p.accent,
+            border_width: 2.0,
+            border_color: if selected {
+                p.accent
+            } else if hovered {
+                p.text_normal
+            } else {
+                p.text_muted
+            },
+            text_color: Some(p.text_normal),
+        }
+    }
+}
+
+/// A theme swatch in Appearance: a circle of `fill`, ringed when picked.
+pub fn swatch(
+    fill: Color,
+    ring: Color,
+    selected: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| button::Style {
+        background: Some(Background::Color(fill)),
+        border: Border {
+            radius: (SETTINGS_SWATCH / 2.0).into(),
+            width: if selected {
+                3.0
+            } else if matches!(status, button::Status::Hovered) {
+                2.0
+            } else {
+                1.0
+            },
+            color: if selected {
+                ring
+            } else {
+                Color { a: 0.4, ..ring }
+            },
+        },
+        ..Default::default()
+    }
+}
+
+/// Bordered panel inside a settings page (account card, keybind table).
+pub fn settings_card(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.bg_sidebar)),
+        border: Border {
+            radius: Metrics::DEFAULT.radius_large.into(),
+            width: 1.0,
+            color: p.border,
+        },
+        ..Default::default()
     }
 }
 
@@ -840,6 +1015,24 @@ mod tests {
     #[test]
     fn int_colours() {
         assert_eq!(from_int(0xff0000), Color::from_rgb8(255, 0, 0));
+    }
+
+    #[test]
+    fn settings_themes_and_saturation() {
+        use crate::net::user_settings::Theme as T;
+        let all = T::ALL.map(|t| FerroTheme::from_settings(t, 1.0));
+        for i in 0..all.len() {
+            for j in i + 1..all.len() {
+                assert_ne!(all[i].palette.bg_panel, all[j].palette.bg_panel);
+            }
+        }
+        assert!(!FerroTheme::from_settings(T::Light, 1.0).dark);
+        let grey = FerroTheme::from_settings(T::Dark, 0.0).palette.accent;
+        assert!((grey.r - grey.g).abs() < 1e-6 && (grey.g - grey.b).abs() < 1e-6);
+        assert_eq!(
+            FerroTheme::from_settings(T::Dark, 1.0).palette,
+            Palette::DARK
+        );
     }
 
     #[test]

@@ -87,14 +87,46 @@ pub use super::identity::ClientProperties;
 /// copes with both in case the server sends them anyway.
 pub const CAPABILITIES: u64 = 0;
 
-pub fn identify_payload(token: &str, props: &ClientProperties, status: Presence) -> GatewayPayload {
+/// The `activities` of our own presence: the custom status (type 4), as
+/// the official client sends it, or nothing.
+pub fn own_activities(
+    custom: Option<&crate::net::user_settings::CustomStatus>,
+) -> serde_json::Value {
+    let Some(c) = custom.filter(|c| !c.is_empty()) else {
+        return serde_json::json!([]);
+    };
+    let mut a = serde_json::json!({ "type": 4, "name": "Custom Status" });
+    if !c.text.is_empty() {
+        a["state"] = c.text.clone().into();
+    }
+    if c.emoji_id != 0 || !c.emoji_name.is_empty() {
+        a["emoji"] = serde_json::json!({
+            "id": (c.emoji_id != 0).then(|| c.emoji_id.to_string()),
+            "name": c.emoji_name,
+            "animated": false,
+        });
+    }
+    serde_json::json!([a])
+}
+
+pub fn identify_payload(
+    token: &str,
+    props: &ClientProperties,
+    status: Presence,
+    custom: Option<&crate::net::user_settings::CustomStatus>,
+) -> GatewayPayload {
     GatewayPayload::new(
         OpCode::Identify,
         serde_json::json!({
             "token": token,
             "capabilities": CAPABILITIES,
             "properties": props,
-            "presence": { "status": status.wire(), "since": 0, "activities": [], "afk": false },
+            "presence": {
+                "status": status.wire(),
+                "since": 0,
+                "activities": own_activities(custom),
+                "afk": false,
+            },
             "compress": false,
             "client_state": { "guild_versions": {} },
             // Transport compression (zlib-stream) is negotiated in the URL;
@@ -105,13 +137,16 @@ pub fn identify_payload(token: &str, props: &ClientProperties, status: Presence)
 }
 
 /// Op 3: change the session's own status.
-pub fn presence_payload(status: Presence) -> GatewayPayload {
+pub fn presence_payload(
+    status: Presence,
+    custom: Option<&crate::net::user_settings::CustomStatus>,
+) -> GatewayPayload {
     GatewayPayload::new(
         OpCode::PresenceUpdate,
         serde_json::json!({
             "status": status.wire(),
             "since": 0,
-            "activities": [],
+            "activities": own_activities(custom),
             "afk": false,
         }),
     )
@@ -1736,7 +1771,7 @@ mod tests {
 
     #[test]
     fn identify_contains_token_and_properties() {
-        let p = identify_payload("tok", &ClientProperties::default(), Presence::Dnd);
+        let p = identify_payload("tok", &ClientProperties::default(), Presence::Dnd, None);
         assert_eq!(p.d["presence"]["status"], "dnd");
         assert_eq!(p.op, 2);
         assert_eq!(p.d["token"], "tok");

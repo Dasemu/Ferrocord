@@ -12,6 +12,7 @@ pub mod ratelimit;
 pub mod remote_auth;
 pub mod rest;
 pub mod types;
+pub mod user_settings;
 pub mod voice;
 pub mod zlib;
 

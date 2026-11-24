@@ -644,7 +644,7 @@ impl App {
         }
         if self.settings_open {
             self.settings_open = false;
-            return Task::none();
+            return self.close_settings_screen();
         }
         if self.status_menu {
             self.status_menu = false;
@@ -1061,17 +1061,13 @@ impl App {
         Task::none()
     }
 
+    /// Status menu, tray and settings: applied at once (op 3) and saved
+    /// in the user settings proto (`status.status`), like the official
+    /// client.
     fn set_status(&mut self, p: Presence) -> Task<Message> {
+        use crate::net::user_settings::{Edit, Synced, Value};
         self.status_menu = false;
-        self.chat.my_status = p;
-        self.gateway.set_status(p);
-        if self.cfg.mock {
-            return Task::none();
-        }
-        let rest = self.rest.clone();
-        Task::perform(async move { rest.set_status_setting(p).await }, |r| {
-            Message::Done(Done::StatusSaved(r.map_err(|e| e.user_message())))
-        })
+        self.edit_synced(Edit::Set(Synced::Status, Value::Str(p.wire().into())))
     }
 
     // -- search and jumps ------------------------------------------------------------

@@ -42,6 +42,8 @@ pub enum ScreenshotScreen {
     Search,
     Compose,
     Settings,
+    /// One User Settings page (`settings-<category>`).
+    SettingsPage(crate::app::settings::Category),
     /// Long display name and status in the user panel.
     Panel,
     /// Right-click menu on a message.
@@ -121,6 +123,10 @@ impl ScreenshotScreen {
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
+            s if s.starts_with("settings-") => {
+                crate::app::settings::Category::from_slug(&s["settings-".len()..])
+                    .map(Self::SettingsPage)
+            }
             "panel" | "userpanel" => Some(Self::Panel),
             "menu" | "context-menu" => Some(Self::Menu),
             "bell" | "notifications" => Some(Self::Bell),
@@ -356,6 +362,12 @@ mod tests {
         let c = Config::from_args(args(&["--screenshot", "settings", "/tmp/x.png"])).unwrap();
         assert!(!c.tray);
         assert_eq!(c.screenshot.unwrap().0, ScreenshotScreen::Settings);
+        let c = Config::from_args(args(&["--screenshot", "settings-voice", "/tmp/x.png"])).unwrap();
+        assert_eq!(
+            c.screenshot.unwrap().0,
+            ScreenshotScreen::SettingsPage(crate::app::settings::Category::VoiceVideo)
+        );
+        assert!(Config::from_args(args(&["--screenshot", "settings-nope", "x"])).is_err());
     }
 
     #[test]

@@ -128,11 +128,15 @@ fn user_rows(app: &App, user: UserId, guild: Option<GuildId>) -> Vec<Row> {
             Ui::CopyToClipboard(u.username.clone()),
         ));
     }
-    rows.push(Row::item(
-        Icon::Copy,
-        "Copy User ID",
-        Ui::CopyToClipboard(user.to_string()),
-    ));
+    // "Copy ID" items exist only in Developer Mode, like the official
+    // client.
+    if app.developer_mode() {
+        rows.push(Row::item(
+            Icon::Copy,
+            "Copy User ID",
+            Ui::CopyToClipboard(user.to_string()),
+        ));
+    }
     rows
 }
 
@@ -179,6 +183,9 @@ fn channel_rows(app: &App, c: ChannelId) -> Vec<Row> {
                 Ui::MuteChannel(c, MuteDuration::Forever),
             ));
         }
+    }
+    if !app.developer_mode() {
+        return rows;
     }
     if !rows.is_empty() {
         rows.push(Row::Separator);
@@ -230,12 +237,14 @@ pub fn guild_rows(app: &App, g: GuildId) -> Vec<Row> {
         "Suppress @everyone",
         Ui::SuppressEveryone(g, !suppressed),
     ));
-    rows.push(Row::Separator);
-    rows.push(Row::item(
-        Icon::Copy,
-        "Copy Server ID",
-        Ui::CopyToClipboard(g.to_string()),
-    ));
+    if app.developer_mode() {
+        rows.push(Row::Separator);
+        rows.push(Row::item(
+            Icon::Copy,
+            "Copy Server ID",
+            Ui::CopyToClipboard(g.to_string()),
+        ));
+    }
     rows.push(Row::Separator);
     rows
 }
