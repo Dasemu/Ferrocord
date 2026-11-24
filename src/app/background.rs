@@ -140,6 +140,9 @@ impl App {
             Ui::OpenSettings => {
                 self.settings_open = true;
                 self.status_menu = false;
+                // Always open on the main page, not on Plugins.
+                self.plugins.page.open = false;
+                self.plugins.page.prompt = None;
                 // Device names for the voice section (blocking enumeration
                 // runs off the UI thread).
                 self.update_voice(super::voice::VoiceUi::RefreshDevices)

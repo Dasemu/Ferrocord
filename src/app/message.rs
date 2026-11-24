@@ -26,6 +26,8 @@ pub enum Message {
     Tray(crate::tray::Event),
     /// Events from the running voice connection.
     Voice(crate::net::voice::VoiceEvent),
+    /// Plugins: page input, plugin-thread output, task results.
+    Plugin(super::plugins::PluginMsg),
 }
 
 /// User input.

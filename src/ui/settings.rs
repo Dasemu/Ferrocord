@@ -5,14 +5,18 @@ use iced::{Alignment, Length, Padding};
 
 use super::theme::{self, INTER_SEMIBOLD};
 use super::{El, ui};
+use crate::app::plugins::PluginMsg;
 use crate::app::window::TrayHost;
-use crate::app::{App, Ui};
+use crate::app::{App, Message, Ui};
 use crate::config::APP_NAME;
 use crate::tray::autostart;
 
 pub fn view(app: &App) -> El<'_> {
     let t = &app.theme;
     let p = t.palette;
+    if app.plugins.page.open {
+        return dialog(app, super::plugins::page(app));
+    }
     let tray_missing = app.cfg.tray && app.win.host == TrayHost::Unavailable;
     let tray_note: Option<&'static str> = if !app.cfg.tray {
         Some("The system tray is turned off (--no-tray): closing the window quits.")
@@ -95,6 +99,31 @@ pub fn view(app: &App) -> El<'_> {
     rows = rows.push(super::voice::settings_section(app));
     rows = rows
         .push(
+            text("Plugins")
+                .size(t.metrics.font_s)
+                .font(INTER_SEMIBOLD)
+                .color(p.text_secondary),
+        )
+        .push(
+            row![
+                column![
+                    text("Plugins").size(t.metrics.font_m).color(p.text_normal),
+                    text("Community add-ons: sandboxed, off until you enable them.")
+                        .size(t.metrics.font_s)
+                        .color(p.text_muted),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                button(text("Manage").size(14))
+                    .padding(Padding::from([8, 16]))
+                    .on_press(Message::Plugin(PluginMsg::OpenPage))
+                    .style(theme::secondary_button(p)),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        );
+    rows = rows
+        .push(
             text("Account")
                 .size(t.metrics.font_s)
                 .font(INTER_SEMIBOLD)
@@ -118,9 +147,15 @@ pub fn view(app: &App) -> El<'_> {
             .spacing(16)
             .align_y(Alignment::Center),
         );
+    dialog(app, rows.into())
+}
+
+/// The centred settings card with its "Done" button, over a dimmed backdrop.
+fn dialog<'a>(app: &'a App, content: El<'a>) -> El<'a> {
+    let p = app.theme.palette;
     let card = container(
         column![
-            rows,
+            content,
             row![
                 Space::new().width(Length::Fill),
                 button(text("Done").size(14).color(p.accent_text))
@@ -131,7 +166,7 @@ pub fn view(app: &App) -> El<'_> {
         ]
         .spacing(18),
     )
-    .width(460)
+    .width(if app.plugins.page.open { 560 } else { 460 })
     .padding(20)
     .style(theme::rounded_bg(p.bg_panel, 8.0));
     opaque(

@@ -11,6 +11,7 @@ pub mod lightbox;
 pub mod login;
 pub mod markdown;
 pub mod members;
+pub mod plugins;
 pub mod popovers;
 pub mod popups;
 pub mod profile;

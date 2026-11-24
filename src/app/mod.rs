@@ -21,6 +21,7 @@ pub mod media_anim;
 pub mod members;
 pub mod message;
 pub mod panels;
+pub mod plugins;
 pub mod profile;
 pub mod rail;
 pub mod search;
@@ -194,6 +195,8 @@ pub struct App {
     /// The one video that is downloading or playing.
     pub video: Option<video::Playback>,
     video_session: u32,
+    /// Plugins: no engine or thread until one is enabled.
+    pub plugins: crate::plugins::Plugins,
 }
 
 pub fn now_ms() -> u64 {
@@ -307,6 +310,11 @@ impl App {
             voice,
             video: None,
             video_session: 0,
+            plugins: crate::plugins::Plugins::new(
+                cfg.plugins_dir.clone(),
+                cfg.plugin_store_path(),
+                !cfg.mock,
+            ),
             cfg,
         };
         app.window_focused = app.win.visible;
@@ -360,9 +368,10 @@ impl App {
             })
         };
         let sweep = app.sweep_videos();
+        let plugins = app.boot_plugins();
         (
             app,
-            Task::batch([open_window, fonts, restore, autostart, sweep]),
+            Task::batch([open_window, fonts, restore, autostart, sweep, plugins]),
         )
     }
 
@@ -828,6 +837,7 @@ impl App {
             Message::Done(d) => self.on_done(d),
             Message::Tray(ev) => self.on_tray(ev),
             Message::Voice(ev) => self.on_voice_event(ev),
+            Message::Plugin(m) => self.on_plugin(m),
         };
         let task = match self.toast_timer(toast_before) {
             Some(t) => Task::batch([task, t]),
@@ -1126,6 +1136,7 @@ impl App {
             },
             |_| Message::Done(Done::Ignored),
         );
+        self.plugin_channel_switch();
         let Some(c) = c else {
             return Task::batch([persist, members]);
         };
@@ -1261,6 +1272,9 @@ impl App {
         }
         if content.is_empty() {
             return Task::none();
+        }
+        if let Some(t) = self.plugin_intercept_send(c, &content) {
+            return t;
         }
         self.composer.clear();
         self.send_text(c, content)
@@ -1460,6 +1474,7 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        self.plugin_observe(&ev);
         tasks.push(self.voice_on_gateway(&ev));
         if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
             self.cache_folders();
@@ -1647,6 +1662,7 @@ impl App {
                     if let Some(w) = self.chat.messages.get_mut(&channel) {
                         w.synced = true;
                     }
+                    self.plugin_history(channel);
                     Task::batch([
                         Task::perform(
                             async move { store.blocking(move |s| s.upsert_messages(&to_store)).await },
@@ -2162,6 +2178,9 @@ impl App {
         if self.anim.active(self.prefs.reduce_motion) {
             subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
         }
+        if let Some(p) = self.plugin_subscription() {
+            subs.push(p);
+        }
         if self.cfg.mock {
             return Subscription::batch(subs);
         }
@@ -2222,6 +2241,7 @@ impl App {
         if let Some(v) = self.voice_subscription() {
             subs.push(v);
         }
+
         // Live microphone meter in the voice settings while connected.
         if self.settings_open && self.voice.conn.is_some() && !self.cfg.mock {
             subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Ui(Ui::Tick)));
