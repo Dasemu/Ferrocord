@@ -748,7 +748,11 @@ impl App {
                     self.plugins.decorations.set(
                         "read-time",
                         c,
-                        vec![d(DecorationKind::Badge, "1 min read", Some("Estimated reading time"))],
+                        vec![d(
+                            DecorationKind::Badge,
+                            "1 min read",
+                            Some("Estimated reading time"),
+                        )],
                     );
                 }
             }
