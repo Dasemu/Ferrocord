@@ -250,8 +250,9 @@ impl Plugins {
             .as_ref()
             .is_some_and(|r| r.loaded.is_empty() && r.starting.is_empty())
         {
+            // A pending transform is kept: its timeout sends the text as
+            // typed, so stopping the thread never loses a message.
             self.running = None;
-            self.pending_transform = None;
         }
     }
 
