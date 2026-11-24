@@ -288,7 +288,7 @@ Shadows are safe with ferroiced (tiny-skia clips them to the damage region), but
 no style uses `container::Style::shadow`: header "shadows" are a gradient on the
 bar itself and popups rely on their border, as in the official client.
 
-Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
+Fonts: Inter (OFL) and Twemoji (CC-BY 4.0, COLRv0 font) embedded. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
@@ -390,6 +390,8 @@ draw; they are dropped when the popout closes.
 | profile badge | `/badge-icons/{icon}.png` (fetched from the CDN, not bundled; a neutral dot shows until loaded) |
 | activity art | application asset `/app-assets/{app}/{id}.png`, `mp:` -> `media.discordapp.net`, `spotify:` -> `i.scdn.co/image` |
 | animated emoji | `/emojis/{id}.gif?size=96` |
+| emoji "Send as image" | `/emojis/{id}.png\|.gif?size=48&quality=lossless`, scaled to fit 48 px, uploaded as an attachment |
+| sticker "Send as image" | `/stickers/{id}.png\|.gif?size=160`, scaled to fit 160 px (APNG becomes an animated GIF) |
 
 `i.scdn.co` was added to the media host allow-list for Spotify album art;
 downloads never carry the token.

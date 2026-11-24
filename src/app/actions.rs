@@ -236,10 +236,22 @@ impl App {
                 if let Some(p) = self.emoji_picker.as_mut() {
                     p.picker.section = s;
                     p.picker.query.clear();
+                    p.picker.locked = None;
+                }
+                // Another server's emoji images.
+                self.request_images()
+            }
+            Ui::PickEmoji(e) => self.pick_emoji(e),
+            Ui::SendLockedAsImage => self.send_locked_as_image(),
+            Ui::DismissLocked => {
+                if let Some(p) = self.emoji_picker.as_mut() {
+                    p.picker.locked = None;
+                }
+                if let Some(p) = self.sticker_picker.as_mut() {
+                    p.locked = None;
                 }
                 Task::none()
             }
-            Ui::PickEmoji(e) => self.pick_emoji(e),
             Ui::CloseEmojiPicker => {
                 self.emoji_picker = None;
                 Task::none()
@@ -306,6 +318,7 @@ impl App {
                 self.sticker_picker = Some(super::stickers::StickerPicker {
                     at: input::cursor(),
                     query: String::new(),
+                    locked: None,
                 });
                 Task::batch([
                     focus(iced::widget::Id::new("sticker-search")),
@@ -319,6 +332,17 @@ impl App {
                 Task::none()
             }
             Ui::PickSticker(id) => {
+                let access = self.nitro_access();
+                let locked = super::stickers::find_with_guild(&self.chat.guilds, id)
+                    .is_some_and(|(g, s)| access.sticker(g, s).locked());
+                if locked {
+                    // Never sent as `sticker_ids` where the API would refuse
+                    // it: the picker shows the lock and the explicit choice.
+                    if let Some(p) = self.sticker_picker.as_mut() {
+                        p.locked = Some(id);
+                    }
+                    return Task::none();
+                }
                 self.sticker_picker = None;
                 self.send_sticker(id)
             }
@@ -882,7 +906,129 @@ impl App {
         )
     }
 
+    /// What the user may use in the open channel (Nitro, roles, server).
+    pub fn nitro_access(&self) -> super::nitro::Access<'_> {
+        super::nitro::Access {
+            here: self
+                .open_chan()
+                .and_then(|c| self.chat.channels.get(&c))
+                .and_then(|c| c.guild_id),
+            premium_type: self.chat.premium_type,
+            my_roles: &self.chat.my_roles,
+            me: self.chat.me_id(),
+        }
+    }
+
+    /// Whether custom emoji `id` is Nitro-locked in the open channel.
+    fn emoji_locked(&self, id: Snowflake) -> bool {
+        let access = self.nitro_access();
+        super::emoji::find_custom(&self.chat.guilds, id)
+            .is_some_and(|(g, e)| access.emoji(g, e).locked())
+    }
+
+    /// "Send as image" for the locked emoji or sticker of the open picker.
+    fn send_locked_as_image(&mut self) -> Task<Message> {
+        use super::nitro::{EMOJI_IMAGE_SIZE, STICKER_IMAGE_SIZE};
+        let cdn = self.cfg.cdn_url.clone();
+        if let Some(open) = &self.emoji_picker
+            && open.picker.target == PickerTarget::Composer
+            && let Some(e) = open.picker.locked.clone()
+        {
+            self.emoji_picker = None;
+            let Some(url) = super::nitro::emoji_image_url(&cdn, &e) else {
+                return Task::none();
+            };
+            return self.send_image_copy(url, e.name, EMOJI_IMAGE_SIZE);
+        }
+        if let Some(id) = self.sticker_picker.as_ref().and_then(|p| p.locked) {
+            let Some(s) = super::stickers::find(&self.chat.guilds, id).cloned() else {
+                return Task::none();
+            };
+            let Some(url) = s.image_url(&cdn) else {
+                // Lottie: the footer explains it; nothing to send.
+                return Task::none();
+            };
+            self.sticker_picker = None;
+            return self.send_image_copy(url, s.name, STICKER_IMAGE_SIZE);
+        }
+        Task::none()
+    }
+
+    /// Downloads `url`, scales it to fit `max` and uploads it to the open
+    /// channel as an ordinary attachment (a reply if one is being
+    /// composed), like sending a sticker.
+    fn send_image_copy(&mut self, url: String, name: String, max: u32) -> Task<Message> {
+        let Some(c) = self.open_chan() else {
+            return Task::none();
+        };
+        let reply = self.reply_target(c);
+        self.reply = None;
+        let mock = self.cfg.mock;
+        let rest = self.rest.clone();
+        Task::perform(
+            async move {
+                let bytes = if mock {
+                    // No network in mock mode: a drawn stand-in.
+                    let (n, px) = crate::mock::mock_emoji([88, 101, 242]);
+                    upload::encode_png(n as usize, n as usize, &px, usize::MAX)
+                        .ok_or_else(|| "The image could not be converted.".to_owned())?
+                } else {
+                    rest.fetch_bytes(&url).await.map_err(|e| e.user_message())?
+                };
+                tokio::task::spawn_blocking(move || {
+                    let img = super::nitro::scale_for_upload(&bytes, max)
+                        .map_err(|e| e.user_message().to_owned())?;
+                    let path = upload::save_temp_file(&img.bytes, "image", img.ext)
+                        .map_err(|_| "Could not save the image.".to_owned())?;
+                    Ok(UploadFile {
+                        path,
+                        name: super::nitro::image_file_name(&name, img.ext),
+                        size: img.bytes.len() as u64,
+                    })
+                })
+                .await
+                .map_err(|_| "The image could not be converted.".to_owned())?
+            },
+            move |result| {
+                Message::Done(Done::ImageCopy {
+                    channel: c,
+                    reply,
+                    result,
+                })
+            },
+        )
+    }
+
+    /// The scaled copy is ready: upload it now (deleted afterwards).
+    pub(super) fn on_image_copy(
+        &mut self,
+        c: ChannelId,
+        reply: Option<ReplyTarget>,
+        result: Result<UploadFile, String>,
+    ) -> Task<Message> {
+        match result {
+            Ok(file) => {
+                let temp = vec![upload::DraftAttachment::from_file(file.clone(), true)];
+                self.upload_now(c, String::new(), reply, vec![file], temp)
+            }
+            Err(e) => {
+                self.toast = Some(format!("Could not send the image: {e}"));
+                Task::none()
+            }
+        }
+    }
+
     fn pick_emoji(&mut self, e: Emoji) -> Task<Message> {
+        if let Some(id) = e.id
+            && self.emoji_locked(id)
+        {
+            // Never inserted as `<:name:id>` where it would not work: the
+            // picker stays open with the lock and the explicit choice.
+            if let Some(open) = self.emoji_picker.as_mut() {
+                open.picker.locked = Some(e);
+            }
+            return Task::none();
+        }
         let Some(open) = self.emoji_picker.take() else {
             return Task::none();
         };
@@ -971,6 +1117,23 @@ impl App {
         self.draft.clear();
         self.reply = None;
         self.composer.clear();
+        self.upload_now(c, content, reply, files, temp)
+    }
+
+    /// Uploads `files` with `content` to `c`, showing a progress strip;
+    /// `temp` files are deleted afterwards.
+    fn upload_now(
+        &mut self,
+        c: ChannelId,
+        content: String,
+        reply: Option<ReplyTarget>,
+        files: Vec<UploadFile>,
+        temp: Vec<upload::DraftAttachment>,
+    ) -> Task<Message> {
+        if let Err(e) = check_upload(&files, self.upload_limit()) {
+            self.toast = Some(upload::upload_error_text(&e));
+            return Task::none();
+        }
         self.next_upload_id += 1;
         let id = self.next_upload_id;
         let total: u64 = files.iter().map(|f| f.size).sum();

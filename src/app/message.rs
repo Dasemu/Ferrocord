@@ -111,6 +111,11 @@ pub enum Ui {
     EmojiSection(Section),
     PickEmoji(Emoji),
     CloseEmojiPicker,
+    /// "Send as image" on the Nitro lock footer of the emoji or sticker
+    /// picker: uploads a scaled copy of the locked item.
+    SendLockedAsImage,
+    /// Closes the Nitro lock footer of the open picker.
+    DismissLocked,
     /// Composer GIF button.
     OpenGifPicker,
     GifQuery(String),
@@ -311,6 +316,13 @@ pub enum Done {
     Upload {
         id: u64,
         event: UploadEvent,
+    },
+    /// The scaled copy of a locked emoji or sticker ("Send as image"),
+    /// written to a temporary file, or why it could not be made.
+    ImageCopy {
+        channel: ChannelId,
+        reply: Option<crate::net::rest::ReplyTarget>,
+        result: Result<UploadFile, String>,
     },
     /// A window around a message (jump), or `None` when loading failed.
     Around {
