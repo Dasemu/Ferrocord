@@ -80,6 +80,10 @@ pub enum ScreenshotScreen {
     GifTrending,
     /// GIF picker: the saved GIFs.
     GifFavorites,
+    /// Emoji picker on another server's emoji, with the Nitro lock footer.
+    EmojiLocked,
+    /// Sticker picker with a Nitro-locked sticker picked.
+    StickersLocked,
 }
 
 impl ScreenshotScreen {
@@ -145,6 +149,8 @@ impl ScreenshotScreen {
             "gifs" | "gif-picker" => Some(Self::Gifs),
             "gif-trending" => Some(Self::GifTrending),
             "gif-favorites" => Some(Self::GifFavorites),
+            "emoji-locked" => Some(Self::EmojiLocked),
+            "stickers-locked" => Some(Self::StickersLocked),
             _ => None,
         }
     }

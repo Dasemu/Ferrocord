@@ -1594,3 +1594,126 @@ fn gif_picker_home_favorites_and_star() {
     let _ = ferrocord::ui::view_window(&a, iced::window::Id::unique());
     assert_eq!(a.gif_thumb(&first.url).unwrap().id(), id);
 }
+
+// -- custom emoji and stickers without Nitro ------------------------------------
+
+fn iced_emoji(a: &App, id: u64) -> Emoji {
+    let (_, e) = ferrocord::app::emoji::find_custom(&a.chat.guilds, Snowflake(id)).unwrap();
+    Emoji::custom(e)
+}
+
+#[test]
+fn locked_emoji_offers_send_as_image_instead_of_inserting() {
+    let mut a = app();
+    assert_eq!(a.chat.premium_type, 0);
+    ui(&mut a, Ui::OpenEmojiPicker(PickerTarget::Composer));
+    // From this server: inserted as usual.
+    let ferris = iced_emoji(&a, 1001);
+    ui(&mut a, Ui::PickEmoji(ferris));
+    assert_eq!(a.composer.text(), "<:ferris:1001> ");
+    // From another server: the picker stays open with the lock footer.
+    ui(&mut a, Ui::OpenEmojiPicker(PickerTarget::Composer));
+    ui(&mut a, Ui::EmojiSection(Section::Server(mock::GUILD_ICED)));
+    let cube = iced_emoji(&a, 1003);
+    ui(&mut a, Ui::PickEmoji(cube.clone()));
+    let open = a.emoji_picker.as_ref().unwrap();
+    assert_eq!(open.picker.locked, Some(cube));
+    assert_eq!(a.composer.text(), "<:ferris:1001> ");
+    let _ = ferrocord::ui::view(&a);
+    // Dismiss, then the explicit choice closes the picker and starts it.
+    ui(&mut a, Ui::DismissLocked);
+    assert!(a.emoji_picker.as_ref().unwrap().picker.locked.is_none());
+    let spinner = iced_emoji(&a, 1004);
+    ui(&mut a, Ui::PickEmoji(spinner));
+    ui(&mut a, Ui::SendLockedAsImage);
+    assert!(a.emoji_picker.is_none());
+    assert_eq!(a.composer.text(), "<:ferris:1001> ");
+}
+
+#[test]
+fn locked_emoji_is_not_used_as_a_reaction() {
+    let mut a = app();
+    let m = last_of(&a, 3);
+    let before = m.reactions.len();
+    ui(
+        &mut a,
+        Ui::OpenEmojiPicker(PickerTarget::Reaction {
+            channel: mock::CH_GENERAL,
+            message: m.id,
+        }),
+    );
+    let cube = iced_emoji(&a, 1003);
+    ui(&mut a, Ui::PickEmoji(cube.clone()));
+    assert_eq!(
+        a.chat
+            .message(mock::CH_GENERAL, m.id)
+            .unwrap()
+            .reactions
+            .len(),
+        before
+    );
+    assert_eq!(a.emoji_picker.as_ref().unwrap().picker.locked, Some(cube));
+    // No image can be sent as a reaction: nothing happens.
+    ui(&mut a, Ui::SendLockedAsImage);
+    assert!(a.emoji_picker.is_some());
+    let _ = ferrocord::ui::view(&a);
+}
+
+#[test]
+fn nitro_users_use_every_emoji_normally() {
+    let mut a = app();
+    a.chat.premium_type = 2;
+    ui(&mut a, Ui::OpenEmojiPicker(PickerTarget::Composer));
+    let spinner = iced_emoji(&a, 1004);
+    ui(&mut a, Ui::PickEmoji(spinner));
+    assert!(a.emoji_picker.is_none());
+    assert_eq!(a.composer.text(), "<a:spinner:1004> ");
+}
+
+#[test]
+fn locked_stickers_show_the_choice_and_lottie_cannot_be_sent() {
+    let mut a = app();
+    ui(&mut a, Ui::OpenStickerPicker);
+    ui(&mut a, Ui::PickSticker(Snowflake(1106)));
+    assert_eq!(
+        a.sticker_picker.as_ref().unwrap().locked,
+        Some(Snowflake(1106))
+    );
+    let _ = ferrocord::ui::view(&a);
+    // Lottie: no image to send, the picker stays with its explanation.
+    ui(&mut a, Ui::SendLockedAsImage);
+    assert!(a.sticker_picker.is_some());
+    ui(&mut a, Ui::PickSticker(Snowflake(1105)));
+    assert_eq!(
+        a.sticker_picker.as_ref().unwrap().locked,
+        Some(Snowflake(1105))
+    );
+    ui(&mut a, Ui::SendLockedAsImage);
+    assert!(a.sticker_picker.is_none());
+}
+
+#[test]
+fn image_copies_upload_as_an_attachment() {
+    let mut a = app();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ferrocord-image-test.png");
+    std::fs::write(&path, b"\x89PNG fake").unwrap();
+    let _ = a.update(Message::Done(Done::ImageCopy {
+        channel: mock::CH_GENERAL,
+        reply: None,
+        result: Ok(UploadFile {
+            path,
+            name: "iced_cube.png".into(),
+            size: 9,
+        }),
+    }));
+    assert_eq!(a.uploads.len(), 1);
+    assert_eq!(a.uploads[0].label, "iced_cube.png");
+    assert_eq!(a.uploads[0].channel, mock::CH_GENERAL);
+    let _ = a.update(Message::Done(Done::ImageCopy {
+        channel: mock::CH_GENERAL,
+        reply: None,
+        result: Err("That image is too large to convert.".into()),
+    }));
+    assert!(a.toast.as_deref().unwrap().contains("too large"));
+}

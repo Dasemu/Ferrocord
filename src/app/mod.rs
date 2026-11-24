@@ -20,6 +20,7 @@ pub mod markdown;
 pub mod media_anim;
 pub mod members;
 pub mod message;
+pub mod nitro;
 pub mod panels;
 pub mod profile;
 pub mod rail;
@@ -439,12 +440,23 @@ impl App {
         self.mock_load_cosmetics();
         self.mock_load_media_anims();
         // Mock sticker images, under the CDN URLs the views ask for.
-        for (st, rgb) in mock::mock_stickers().into_iter().zip([
-            [255u8, 140, 60],
-            [230, 70, 70],
-            [90, 200, 120],
-            [0, 0, 0],
-        ]) {
+        let iced_sticker = Sticker {
+            id: Snowflake(1105),
+            name: String::new(),
+            format: StickerFormat::Png,
+            available: true,
+        };
+        for (st, rgb) in mock::mock_stickers()
+            .into_iter()
+            .chain([iced_sticker])
+            .zip([
+                [255u8, 140, 60],
+                [230, 70, 70],
+                [90, 200, 120],
+                [0, 0, 0],
+                [120, 190, 250],
+            ])
+        {
             if let Some(url) = st.image_url(&self.cfg.cdn_url) {
                 let (n, px) = mock::mock_emoji(rgb);
                 self.images.insert(
@@ -454,7 +466,12 @@ impl App {
                 );
             }
         }
-        for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
+        for (id, rgb) in [
+            (1001u64, [247u8, 130, 52]),
+            (1002, [250, 200, 60]),
+            (1003, [120, 190, 250]),
+            (1004, [170, 120, 250]),
+        ] {
             let (n, px) = mock::mock_emoji(rgb);
             self.images.insert(
                 emoji_url(&self.cfg.cdn_url, Snowflake(id)),
@@ -691,6 +708,27 @@ impl App {
             p.finish(generation, Ok(mock::gifs("")));
             p.show(page);
             self.gif_picker = Some(p);
+        }
+        if screen == Some(ScreenshotScreen::EmojiLocked) {
+            // Another server's emoji picked from the composer without Nitro.
+            let mut picker = emoji::EmojiPicker::open(
+                emoji::PickerTarget::Composer,
+                self.chat.guild(mock::GUILD_RUST),
+            );
+            picker.section = emoji::Section::Server(mock::GUILD_ICED);
+            picker.locked = emoji::find_custom(&self.chat.guilds, Snowflake(1003))
+                .map(|(_, e)| Emoji::custom(e));
+            self.emoji_picker = Some(actions::OpenPicker {
+                picker,
+                at: iced::Point::new(1000.0, 752.0),
+            });
+        }
+        if screen == Some(ScreenshotScreen::StickersLocked) {
+            self.sticker_picker = Some(stickers::StickerPicker {
+                at: iced::Point::new(960.0, 752.0),
+                query: String::new(),
+                locked: Some(Snowflake(1105)),
+            });
         }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
@@ -1745,6 +1783,11 @@ impl App {
                 self.on_files_ready(files)
             }
             Done::Upload { id, event } => self.on_upload_event(id, event),
+            Done::ImageCopy {
+                channel,
+                reply,
+                result,
+            } => self.on_image_copy(channel, reply, result),
             Done::Around {
                 channel,
                 target,
@@ -1998,15 +2041,16 @@ impl App {
                 );
             }
         }
-        if self.emoji_picker.is_some()
-            && let Some(g) = self
-                .open_channel()
-                .and_then(|c| self.chat.channels.get(&c))
-                .and_then(|c| c.guild_id)
-                .and_then(|g| self.chat.guild(g))
-        {
-            for e in g.emojis.iter().filter(|e| e.available) {
+        if let Some(open) = &self.emoji_picker {
+            let access = self.nitro_access();
+            for (_, e, _) in emoji::shown_custom(&open.picker, &self.chat.guilds, &access) {
                 urls.push(emoji_url(&self.cfg.cdn_url, e.id));
+            }
+            // Sidebar icons of the servers with emoji.
+            for g in emoji::server_sections(&self.chat.guilds, &access) {
+                if let Some(u) = self.rest.guild_icon_url(g, 96) {
+                    urls.push(u);
+                }
             }
         }
         if let Some(l) = &self.chat.member_list {
