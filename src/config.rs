@@ -225,6 +225,8 @@ pub struct Config {
     pub trace_startup: bool,
     pub data_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    /// Disposable caches (GIF picker media).
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -251,7 +253,7 @@ impl Config {
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]\n       ferrocord --version | -V".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }
@@ -295,6 +297,7 @@ impl Config {
             state_dir: dirs
                 .as_ref()
                 .map(|d| d.state_dir().unwrap_or(d.data_dir()).to_path_buf()),
+            cache_dir: dirs.as_ref().map(|d| d.cache_dir().to_path_buf()),
         })
     }
 
@@ -315,6 +318,7 @@ impl Config {
             trace_startup: false,
             data_dir: None,
             state_dir: None,
+            cache_dir: None,
         }
     }
 

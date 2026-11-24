@@ -10,7 +10,12 @@ use ferrocord::error::log_sink::LogSink;
 use ferrocord::tray::instance::{self, Role};
 use tracing_subscriber::EnvFilter;
 
+/// Usage line shown by `ferrocord --help`.
+const USAGE: &str =
+    "ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <screen> <out.png>]";
+
 fn main() -> iced::Result {
+    ferrocord::cli::handle_info_flags("ferrocord", USAGE);
     let _ = ferrocord::config::PROCESS_START.set(std::time::Instant::now());
     // Default to the CPU renderer: it keeps idle RSS around 50 MB, while
     // wgpu costs 100-200 MB (driver dependent) for no visible gain in a

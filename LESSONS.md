@@ -54,6 +54,28 @@ Things learned while building Ferrocord that are worth remembering.
 - Media URLs from Discord's GIF API point at the provider's CDN (several Tenor hosts): fetch them as the browser would (plain client, no Discord headers), not through the Discord-CDN allowlist. Favourite GIFs live in the frecency settings proto (`settings-proto/2`, field 2); writes must be read-modify-write of the whole message.
 - **"No picture could be decoded from the H.264 stream"** had several causes, each reproduced with an ffmpeg fixture: a *fragmented* MP4 (browsers, OBS, crash-safe recorders) keeps its samples in `moof`/`trun`, so the empty `moov` sample table gave zero packets (the `mp4` crate also mis-places fragment samples at `base_data_offset`); QuickTime `.mov` failed in the `mp4` crate's sound-description parser; and OpenH264 returns nothing, with no error worth showing, for High 10, 4:2:2, 4:4:4 and interlaced SPSs and for a stream without any IDR. Read the SPS to name the format, and test new container layouts with real files (`tests/fixtures/video`). OpenH264's error concealment cannot start a stream at a recovery-point I-frame cleanly (freeze modes hold output until an IDR; the others drop B-frames).
 - symphonia 0.5: `AacDecoder::codec_params()` echoes the parameters it was given and the isomp4 reader leaves `channels` unset, so MP4 AAC looked like "AAC without a channel layout" and every MP4 played mute. The channel count is in the AudioSpecificConfig (`audio::asc_channels`).
+- **A wrapper widget must forward `update`.** `ui::cosmetics::Placed` implemented `draw`/`layout` but not `update`, so the
+  self-playing decoration inside never saw `RedrawRequested` and list decorations never moved. Any custom container
+  around an `anim_image` needs `update` forwarding (regression test with the `()` null renderer, which implements
+  `image::Renderer`, so widgets can be driven in unit tests).
+- **Choppy animation had more causes, found by measuring (`FERROCORD_FRAME_STATS=1`)**: (1) decode caps decimated
+  typical assets (a 3 s 60 fps decoration was cut to its first 160 frames and kept 1 in 4: 12.5 fps; GIF avatars
+  1 in 2; delays were truncated to whole ms and clamped to >= 20 ms, so 60 fps APNGs ran 17 % slow); (2) the popout
+  and hovered emoji ran on a 66 ms `time::every` tick that rebuilt the whole `view()` 15 times a second; (3) redraws of
+  unrelated animations were not coalesced. Fix: caps sized to the drawn size so whole assets fit, exact `Delay`
+  fractions (only <= 10 ms becomes 100 ms, like Chromium), every animation self-playing (`ui::anim_image`, with a
+  `Timeline` for effect layers) and redraws rounded up to one 60 Hz grid with a process-wide origin (per-epoch
+  grids interleaved: 73 redraws/s with the popout open).
+- iced broadcasts `RedrawRequested` to subscriptions, but `event::listen_with` filters it out: a self-playing widget
+  costs no `update`/`view`. Under Xvfb without a window manager the window is never focused, so focus-gated
+  animations do not run until `xdotool windowfocus`.
+- In a debug build tiny-skia's scaled, alpha-blended `draw_pixmap` dominates: the profile-effect overlay (a 170 px
+  wide layer drawn at 2x over the card) costs ~300 ms per redraw unoptimised. Measure rendering with optimised
+  dependencies (`--config 'profile.dev.package."*".opt-level=3'` in a separate target dir), not plain debug. Even
+  optimised it is ~11 ms per redraw: tiny-skia fills an image's whole rectangle (the damage clip is only a mask), so
+  any 60 fps animation inside the popout repaints the full scaled effect layers.
+- A disk cache keyed by `sha256(url)` (no URL on disk) with mtime-as-LRU needs no index: `File::set_modified` on read,
+  trim the oldest on write; write to a temp file and rename so a crash never leaves a truncated entry.
 - **settings-proto PATCH replaces whole top-level fields**: a field sent in `PATCH /users/@me/settings-proto/1` replaces that category entirely (unsent subfields reset), omitted top-level fields stay. Send each touched category complete (read-modify-write keeps unknown fields) and nothing else. `google.protobuf.*Value` wrappers: absent = unset (client default), empty wrapper = explicit `false`/`0`.
 - A process-wide display flag read by free formatting functions (12/24-hour clock) is best thread-local: iced runs `update` and `view` on one thread, and parallel tests then cannot see each other's value.
 - iced `daemon::scale_factor` takes `Fn(&State, window::Id) -> f32`: a zoom setting is just state read there, no window reopen.

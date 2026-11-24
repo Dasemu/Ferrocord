@@ -39,9 +39,9 @@ use crate::net::rest::RestClient;
 
 /// Messages (newest first) whose media may animate.
 pub const RECENT_MESSAGES: usize = 30;
-/// `gifv` clips (newest first) that are decoded: at most 6 MB of frames
+/// `gifv` clips (newest first) that are decoded: at most 10 MB of frames
 /// each, so together they stay well inside the cache budget.
-pub const MAX_GIFVS: usize = 6;
+pub const MAX_GIFVS: usize = 5;
 /// Helper processes decoding `gifv` clips at the same time.
 pub const GIFV_DECODES: usize = 2;
 /// Larger `gifv` files are not downloaded.
@@ -53,7 +53,7 @@ pub fn gifv_spec() -> FrameSpec {
     let lim = Class::Gifv.limits();
     FrameSpec {
         max_w: lim.target_width,
-        max_h: 300,
+        max_h: 270,
         max_frames: lim.max_frames as u32,
         max_bytes: lim.max_bytes as u64,
     }

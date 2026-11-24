@@ -11,6 +11,7 @@ pub mod embeds;
 pub mod emoji;
 pub mod features;
 pub mod folders;
+pub mod gif_anim;
 pub mod gifs;
 pub mod images;
 pub mod input;
@@ -140,6 +141,13 @@ pub struct App {
     pub gif_thumbs: images::ImageCache,
     /// Saved GIFs (frecency settings).
     pub gif_favorites: gifs::Favorites,
+    /// Decoded animations of the picker tiles near view (freed on close).
+    pub gif_anims: gif_anim::PickerAnims,
+    /// On-disk cache of picker media (`None` in mock mode / without a
+    /// cache directory).
+    pub gif_disk: Option<crate::media::disk_cache::DiskCache>,
+    /// The saved GIFs were prefetched this session.
+    pub gif_prefetched: bool,
     /// Serialises favourite saves (each is a read-modify-write).
     gif_favorites_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub sticker_picker: Option<stickers::StickerPicker>,
@@ -275,6 +283,14 @@ impl App {
             gif_picker: None,
             gif_thumbs: images::ImageCache::new(gifs::THUMB_BUDGET),
             gif_favorites: gifs::Favorites::default(),
+            gif_anims: gif_anim::PickerAnims::default(),
+            gif_disk: cfg.cache_dir.as_ref().filter(|_| !cfg.mock).map(|d| {
+                crate::media::disk_cache::DiskCache::new(
+                    d.join("gifs"),
+                    crate::media::disk_cache::GIF_CACHE_CAP,
+                )
+            }),
+            gif_prefetched: false,
             gif_favorites_lock: Default::default(),
             sticker_picker: None,
             draft: Vec::new(),
@@ -889,6 +905,12 @@ impl App {
             None => task,
         };
         self.sync_tray();
+        // However the picker closed, its tile frames go with it.
+        if self.gif_picker.is_none()
+            && (self.gif_anims.scroll_y != 0.0 || !self.gif_anims.cache.is_empty())
+        {
+            self.gif_anims.clear();
+        }
         let task = if self.video.is_some() {
             Task::batch([task, self.stop_video_if_left()])
         } else {
@@ -1111,7 +1133,6 @@ impl App {
             | Ui::CloseProfile
             | Ui::HoverEnter(_)
             | Ui::HoverLeave(_)
-            | Ui::AnimTick(_)
             | Ui::ToggleReduceMotion
             | Ui::ToggleAutoplayGifs => self.update_cosmetics(u),
             other => self.update_action(other),
@@ -1834,7 +1855,21 @@ impl App {
                 if let Some(p) = self.gif_picker.as_mut() {
                     p.finish(generation, result);
                 }
-                self.request_gif_thumbs()
+                // New results start at the top.
+                self.gif_anims.scroll_y = 0.0;
+                Task::batch([
+                    iced::widget::operation::snap_to(
+                        iced::widget::Id::new(gif_anim::GRID_ID),
+                        iced::widget::operation::RelativeOffset::START,
+                    ),
+                    self.request_gif_thumbs(),
+                    self.request_gif_anims(),
+                ])
+            }
+            Done::GifAnim { key, anim } => self.on_gif_anim(key, anim),
+            Done::GifPrefetched(n) => {
+                tracing::debug!(files = n, "saved GIFs prefetched");
+                Task::none()
             }
             Done::GifThumb { key, image } => {
                 match image {
@@ -1855,7 +1890,11 @@ impl App {
                 if let Some(e) = self.gif_favorites.finish(generation, result, rollback) {
                     self.toast = Some(format!("Could not save your favorite GIFs: {e}"));
                 }
-                self.request_gif_thumbs()
+                Task::batch([
+                    self.request_gif_thumbs(),
+                    self.request_gif_anims(),
+                    self.prefetch_gif_favorites(),
+                ])
             }
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
@@ -2234,11 +2273,6 @@ impl App {
                 Subscription::run(tray::instance::show_requests)
                     .map(|()| Message::Ui(Ui::ShowWindow)),
             );
-        }
-        // Ticks exist only while something animated is hovered or the
-        // popout shows one: idle CPU stays flat otherwise.
-        if self.anim.active(self.prefs.reduce_motion) {
-            subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
         }
         if self.cfg.mock {
             return Subscription::batch(subs);

@@ -46,16 +46,24 @@ fn opening_a_profile_loads_it_and_starts_the_effect() {
     assert!(p.bio.contains("Rustacean"));
     assert_eq!(p.badges.len(), 2);
     assert!(a.effects_ready(), "effect configs were requested");
-    // Alice has an animated avatar, decoration, banner and an effect.
-    assert!(a.anim.popout_hot);
-    assert!(a.anim.active(false));
+    // Alice has an animated avatar, decoration, banner and an effect,
+    // all self-playing from the moment the popout opened (no app tick).
+    let alice = mock::user(2);
+    assert!(a.avatar_anim(&alice, 160, Phase::Popout).is_some());
+    let popout_start = a.anim.popout_epoch().expect("popout clock");
+    assert_eq!(a.anim_clock(Phase::Popout), (popout_start, true));
     assert!(!a.effect_layers().is_empty());
+    assert!(
+        a.effect_layers()
+            .iter()
+            .all(|l| matches!(l.image, ferrocord::app::cosmetics::EffectImage::Anim(..)))
+    );
     // The whole UI renders with the popout open.
     let _ = ferrocord::ui::view(&a);
-    // Closing stops the tick and frees effect + banner frames.
+    // Closing stops the popout clock and frees effect + banner frames.
     ui(&mut a, Ui::CloseProfile);
     assert!(a.profiles.popout.is_none());
-    assert!(!a.anim.active(false));
+    assert_eq!(a.anim.popout_epoch(), None);
     assert!(!a.anim.cache.is_empty(), "avatar / decoration frames stay");
     let cdn = a.cfg.cdn_url.clone();
     assert!(
@@ -70,7 +78,7 @@ fn escape_closes_the_popout_before_anything_else() {
     open(&mut a, ALICE);
     ui(&mut a, Ui::Escape);
     assert!(a.profiles.popout.is_none());
-    assert!(!a.anim.active(false));
+    assert_eq!(a.anim.popout_epoch(), None);
 }
 
 #[test]
@@ -79,8 +87,8 @@ fn popout_of_a_plain_user_has_no_animation() {
     open(&mut a, BOB);
     assert!(a.open_profile().unwrap().1.is_some());
     // Bob has a still decoration and no effect.
-    assert!(!a.anim.popout_hot);
-    assert!(!a.anim.active(false));
+    let bob = mock::user(3);
+    assert!(a.avatar_anim(&bob, 160, Phase::Popout).is_none());
     assert!(a.effect_layers().is_empty());
     let _ = ferrocord::ui::view(&a);
 }
@@ -110,7 +118,6 @@ fn failed_profile_requests_show_loading_and_never_panic() {
 #[test]
 fn list_avatars_play_by_themselves_without_ticking() {
     let mut a = app();
-    assert!(!a.anim.active(a.prefs.reduce_motion));
     // Every list / message avatar is live, hovered or not...
     assert_eq!(a.phase_of(ALICE), Phase::Live);
     assert_eq!(a.phase_of(BOB), Phase::Live);
@@ -121,7 +128,7 @@ fn list_avatars_play_by_themselves_without_ticking() {
         message: None,
     };
     ui(&mut a, Ui::HoverEnter(h));
-    assert!(!a.anim.active(a.prefs.reduce_motion));
+    assert_eq!(a.anim_clock(Phase::Live), (a.anim.epoch, true));
     ui(&mut a, Ui::HoverLeave(h));
     assert!(a.cosmetics_playing());
     let _ = ferrocord::ui::view(&a);
@@ -137,40 +144,57 @@ fn reduce_motion_stops_every_animation() {
         message: None,
     };
     ui(&mut a, Ui::HoverEnter(h));
-    assert!(!a.anim.active(a.prefs.reduce_motion));
     assert_eq!(a.phase_of(ALICE), Phase::Still);
     assert!(!a.cosmetics_playing());
     open(&mut a, ALICE);
-    assert!(!a.anim.active(a.prefs.reduce_motion));
+    let alice = mock::user(2);
+    assert!(a.avatar_anim(&alice, 160, Phase::Popout).is_none());
+    assert!(!a.anim_clock(Phase::Popout).1);
     // The effect falls back to its (absent) static frame: nothing drawn.
     assert!(a.effect_layers().is_empty());
     let _ = ferrocord::ui::view(&a);
     // And back on.
     ui(&mut a, Ui::ToggleReduceMotion);
     assert!(!a.prefs.reduce_motion);
-    assert!(a.anim.active(a.prefs.reduce_motion));
+    assert!(a.avatar_anim(&alice, 160, Phase::Popout).is_some());
+    assert!(a.anim_clock(Phase::Popout).1);
 }
 
 #[test]
-fn hovering_picks_animated_frames_over_time() {
-    let mut a = app();
+fn animation_handles_keep_their_identity_across_view_calls() {
+    let a = app();
     let u = mock::user(2);
-    let h = Hover {
-        user: ALICE,
-        message: None,
-    };
-    ui(&mut a, Ui::HoverEnter(h));
-    let still = a.avatar_frame(&u, 80, Phase::Still).unwrap().id();
-    let t0 = Instant::now();
-    let mut ids = std::collections::HashSet::new();
-    for i in 0..8 {
-        ui(&mut a, Ui::AnimTick(t0 + Duration::from_millis(i * 150)));
-        ids.insert(a.avatar_frame(&u, 80, Phase::Hover).unwrap().id());
-    }
-    assert!(ids.len() > 1, "frames advance with the clock");
-    // Handles are created once: asking twice gives the same id.
-    let again = a.avatar_frame(&u, 80, Phase::Still).unwrap().id();
-    assert_eq!(still, again);
+    // The views get the same decoded animation (and so the same frame
+    // handles, never re-uploaded) on every rebuild.
+    let first = a
+        .avatar_anim(&u, 80, Phase::Live)
+        .expect("mock avatar anim")
+        .clone();
+    let ids: Vec<_> = first.frames.iter().map(|f| f.handle.id()).collect();
+    let _ = ferrocord::ui::view(&a);
+    let _ = ferrocord::ui::view(&a);
+    let again = a.avatar_anim(&u, 80, Phase::Live).unwrap();
+    assert!(Arc::ptr_eq(&first, again));
+    let ids2: Vec<_> = again.frames.iter().map(|f| f.handle.id()).collect();
+    assert_eq!(ids, ids2);
+    // The still is cached too.
+    let still = a.avatar_frame(&u, 80).unwrap().id();
+    assert_eq!(still, a.avatar_frame(&u, 80).unwrap().id());
+    // The mock avatar went through the real limits and kept every frame
+    // (60 frames at 30 ms): it plays at its own frame rate.
+    assert_eq!(first.frames.len(), 60);
+    assert!(
+        first
+            .frames
+            .iter()
+            .all(|f| f.delay == Duration::from_millis(30))
+    );
+    let deco = u.avatar_decoration.as_ref().unwrap();
+    let d = a.decoration_anim(deco, 96, Phase::Live).unwrap();
+    assert_eq!(d.frames.len(), 180, "60 fps decoration kept whole");
+    // Exact APNG-style delays (1/60 s), not 16 or 20 ms per frame.
+    let total = d.total.as_secs_f64();
+    assert!((total - 3.0).abs() < 0.002, "{total}");
 }
 
 #[test]

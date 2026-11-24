@@ -146,7 +146,7 @@ client's retry. Ferrocord never solves a captcha and uses no solver service.
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` with `X-Fingerprint` |
 | Fingerprint | `GET /experiments` (logged out) → `fingerprint` |
-| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US` (`{url, src, gif_src, preview, width, height}`); picking sends the Tenor `url` as text (shown back as a `gifv` embed). Opens on Favorites / Trending GIFs tiles like the official picker. Stills: `preview`, else `gif_src`, from whatever HTTPS host the API names (Tenor uses several), with a plain client (no token, no Discord headers or cookies, 10 MB cap), decoded to a <= 256x400 first frame off the UI thread, own 12 MB LRU (`App::gif_thumbs`). Not animated in the picker (yet). |
+| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US` (`{url, src, gif_src, preview, width, height}`); picking sends the Tenor `url` as text (shown back as a `gifv` embed). Opens on Favorites / Trending GIFs tiles like the official picker. Stills: `preview`, else `gif_src`, from whatever HTTPS host the API names (Tenor uses several), with a plain client (no token, no Discord headers or cookies, 10 MB cap), decoded to a <= 256x400 first frame off the UI thread, own 12 MB LRU (`App::gif_thumbs`). Tiles animate (`app/gif_anim.rs`): Tenor's tile-sized `tinygif` (`AAAAM`), else `gif_src`, else Giphy's `200w.gif`, decoded in-process to tile-sized frames; an MP4-only saved GIF goes through the video helper's frames mode. With "Automatically play GIFs" off only the hovered tile plays; "Reduce motion" shows stills. Only tiles near the visible part of the grid are decoded (40 MB budget, frames of tiles a screen away dropped, all freed on close). Every picker download goes through a 100 MB on-disk LRU (`<cache dir>/gifs`, SHA-256 of the URL as file name, at most 4 downloads at a time); the saved GIFs are prefetched into it the first time the picker opens in a session. |
 | Favourite GIFs | `GET /users/@me/settings-proto/2` -> `{settings: base64}` = `FrecencyUserSettings` (discord-protos): field 2 `FavoriteGIFs { map<string, FavoriteGIF> gifs = 1; bool hide_tooltip = 2 }`, `FavoriteGIF { GIFType format = 1 (1 image, 2 video); string src = 2; uint32 width = 3, height = 4, order = 5 }`, key = Tenor page URL, `src` = the MP4 (format 2). The star does GET, changes one map entry, `PATCH /users/@me/settings-proto/2 {settings: base64}` with the whole message (every other field and unknown fields copied byte for byte, `net/frecency.rs`); saves are serialised, optimistic and rolled back on failure. Loaded once, when the picker first opens. |
 | Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
 | Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (HTTPS, never with the token) |
@@ -403,15 +403,23 @@ downloads never carry the token.
 * GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
   `image` crate; single-frame images are left to the static path.
 * Caps per asset (source frames read, frames kept, bytes kept, width) are
-  per `Class`; extra frames are merged (delay added to the kept frame) so the
-  duration is unchanged. Sources above 2048 px are refused.
-* `AnimCache` is an LRU with a 48 MB budget. Banner and effect frames are
+  per `Class`. Frames are decoded at about 1.5-2x their drawn size and every
+  source frame is read (up to 600), so a typical asset (a 3 s 60 fps
+  decoration, a 2 s GIF avatar or emoji) keeps all of its frames and plays
+  at its own rate; only unusually long or large ones are decimated (evenly:
+  merged frames add their delay, so the duration is unchanged). Delays are
+  exact (APNG / WebP fractions such as 1/60 s); only "as fast as possible"
+  delays (<= 10 ms) become 100 ms, as in Chromium. Sources above 2048 px
+  are refused.
+* `AnimCache` is an LRU with an 80 MB budget. Banner and effect frames are
   dropped when the popout closes.
-* Lists and messages show the still image; hovering a row / message starts
-  the clock for that avatar, decoration and (in messages) animated emoji.
-  The popout animates everything. A `time::every(66 ms)` subscription exists
-  only while `AnimState::active` is true (something animated is hovered or
-  the popout shows one); "Reduce motion" in Settings turns all of it off.
+* Nothing ticks. Every animation (list / message avatars and decorations,
+  the popout's avatar, decoration, banner and effect layers, message media,
+  hover-played emoji, GIF-picker tiles) is an `ui::anim_image::AnimImage`
+  with a start time (`App::anim_clock`: the app epoch, the popout opening
+  or the hover start) and a playing flag (window focused, motion on).
+  Effect layers carry their `Timeline` (start, duration, loop delay).
+  "Reduce motion" in Settings turns all of it off.
 * Handles are created once when data arrives (`Handle::from_rgba` in the
   decode task), never in `view`.
 * **Message media** (`app/media_anim.rs`): GIF / animated WebP attachments
@@ -424,8 +432,12 @@ downloads never carry the token.
   `ui::anim_image::AnimImage`, which records the frame time on each redraw and
   calls `Shell::request_redraw_at` for its next frame change while it is
   inside the viewport: no `Message`, no `view()`/layout per frame, and
-  tiny-skia repaints only its rectangle. Off-screen or unfocused images ask
-  for nothing. With the setting off, emoji keep the hover behaviour above and
+  tiny-skia repaints only its rectangle. Redraw times are rounded up to a
+  60 Hz grid shared by every image, so any number of animations cost at
+  most 60 window redraws a second. Off-screen or unfocused images ask
+  for nothing (the official client also pauses GIFs while unfocused).
+  `FERROCORD_FRAME_STATS=1` logs redraws, `view()` rebuilds, frame changes
+  and redraw lateness every 5 s. With the setting off, animated emoji play while their message is hovered and
   GIFs show their first frame; "Reduce motion" stops everything.
 
 ### Display name styles
