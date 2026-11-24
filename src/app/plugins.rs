@@ -676,6 +676,86 @@ impl App {
         })
     }
 
+    /// Screenshot screens: the example plugins as if installed (no wasm
+    /// runs; the page only needs their manifests).
+    pub(super) fn mock_plugin_screen(&mut self, screen: Option<crate::config::ScreenshotScreen>) {
+        use crate::config::ScreenshotScreen as S;
+        use crate::plugins::package::Found;
+        use crate::plugins::{Decoration, DecorationKind};
+        match screen {
+            Some(S::Plugins | S::PluginPrompt) => {
+                let manifests = [
+                    include_str!("../../examples/plugins/text-replacer/plugin.toml"),
+                    include_str!("../../examples/plugins/word-highlighter/plugin.toml"),
+                    include_str!("../../examples/plugins/quote-message/plugin.toml"),
+                ];
+                let mut scan = Scan::default();
+                for t in manifests {
+                    if let Ok(manifest) = Manifest::parse(t) {
+                        scan.found.push(Found {
+                            path: std::path::PathBuf::from(&manifest.id),
+                            manifest,
+                        });
+                    }
+                }
+                if let Some(f) = scan.get("word-highlighter") {
+                    self.plugins.state.enable(&f.manifest);
+                }
+                self.plugins.scan = Some(scan);
+                self.plugins.dir = Some("~/.config/ferrocord/plugins".into());
+                self.settings_open = true;
+                self.plugins.page.open = true;
+                if screen == Some(S::PluginPrompt) {
+                    self.plugins.page.prompt = Some("text-replacer".into());
+                }
+            }
+            Some(S::PluginDecorations) => {
+                let Some(w) = self.open_channel().and_then(|c| self.chat.messages.get(&c)) else {
+                    return;
+                };
+                let ids: Vec<u64> = w
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|m| !m.content.is_empty())
+                    .take(4)
+                    .map(|m| m.id.0)
+                    .collect();
+                let d = |kind, text: &str, tip: Option<&str>| Decoration {
+                    kind,
+                    text: text.into(),
+                    tooltip: tip.map(Into::into),
+                };
+                if let [a, b, c, ..] = ids[..] {
+                    self.plugins.decorations.set(
+                        "word-highlighter",
+                        a,
+                        vec![d(
+                            DecorationKind::Highlight,
+                            "rust",
+                            Some("Matched by Word Highlighter"),
+                        )],
+                    );
+                    self.plugins.decorations.set(
+                        "translator",
+                        b,
+                        vec![d(
+                            DecorationKind::Line,
+                            "Translated from Spanish: see you tomorrow at the meetup",
+                            None,
+                        )],
+                    );
+                    self.plugins.decorations.set(
+                        "read-time",
+                        c,
+                        vec![d(DecorationKind::Badge, "1 min read", Some("Estimated reading time"))],
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     // -- hook points ----------------------------------------------------------
 
     /// Before a composer send: runs a plugin `/command` or the outgoing

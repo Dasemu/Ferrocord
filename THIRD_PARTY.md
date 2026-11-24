@@ -46,3 +46,9 @@ and Iced contributors) with one change in `iced_tiny_skia`.
 Rust crate dependencies keep their own licences (see `Cargo.lock`; all are
 MIT, Apache-2.0, ISC, BSD, Zlib or similar permissive licences).
 Noto Color Emoji is used from the system if installed and is not bundled.
+
+Plugins (`src/plugins/`): the WebAssembly interpreter `wasmi` (MIT OR
+Apache-2.0), MessagePack via `rmp-serde` (MIT), manifests via `toml` (MIT OR
+Apache-2.0), `.ferroplug` packages via `zip` (MIT). Plugins themselves are
+third-party code that is not part of Ferrocord and not covered by its
+licence; each plugin's licence is its author's.

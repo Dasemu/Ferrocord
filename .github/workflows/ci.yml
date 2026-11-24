@@ -34,14 +34,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/plugins -> target
 
       - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path examples/plugins/Cargo.toml --all -- --check
 
       - name: cargo clippy -- -D warnings
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy -p ferrocord-plugin-sdk --all-targets -- -D warnings
+          cargo clippy --manifest-path examples/plugins/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+
+      # The example plugins: unit tests natively, then the wasm modules the
+      # plugin integration tests load (tests/plugins_examples.rs).
+      - name: Example plugins
+        run: |
+          cargo test -p ferrocord-plugin-sdk
+          cargo test --manifest-path examples/plugins/Cargo.toml
+          examples/plugins/build.sh
 
       # The video helper's platform decoders: the system FFmpeg, opened with
       # dlopen at run time. Install the newest libavcodec the distribution has
@@ -56,6 +74,8 @@ jobs:
         env:
           # The platform decoder tests fail instead of skipping.
           FERROCORD_EXPECT_PLATFORM: "1"
+          # The example plugin tests fail instead of skipping.
+          FERROCORD_EXPECT_PLUGINS: "1"
         run: cargo test --all-targets
 
       # The video helper must run on a machine with no codec packages: build it
@@ -114,13 +134,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/plugins -> target
       - name: cargo build
         run: cargo build --all-targets
+      - name: Example plugins
+        shell: bash
+        run: examples/plugins/build.sh
       - name: cargo test
         env:
           # Media Foundation's H.264 and AAC decoders must be found and work.
           FERROCORD_EXPECT_PLATFORM: "1"
+          FERROCORD_EXPECT_PLUGINS: "1"
         run: cargo test --all-targets
       # mfplat.dll is loaded at run time: Windows N without the Media Feature
       # Pack must still start the helper.

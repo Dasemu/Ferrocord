@@ -310,3 +310,10 @@ single-instance lock (a second launch shows the window); `tray::autostart`
 writes `~/.config/autostart/dev.ferro.ferrocord.desktop` with `--minimized`.
 Preferences live in SQLite `meta` under `pref.*` (kept on logout). Flags:
 `--minimized`, `--no-tray`.
+
+**Plugins (`src/plugins/`, `app/plugins.rs`, `ui/plugins.rs`).** Sandboxed
+WebAssembly plugins (wasmi, fuel and memory limits) on one worker thread,
+declared by a manifest, reaching the app only through a capability-checked
+host ABI; account actions need a user-action grant and go through the app's
+own REST paths. Nothing runs while no plugin is enabled. See
+`docs/plugins.md`.

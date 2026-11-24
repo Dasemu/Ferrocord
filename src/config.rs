@@ -80,6 +80,12 @@ pub enum ScreenshotScreen {
     GifTrending,
     /// GIF picker: the saved GIFs.
     GifFavorites,
+    /// Settings → Plugins with the example plugins installed.
+    Plugins,
+    /// The permission prompt shown before a plugin is enabled.
+    PluginPrompt,
+    /// Plugin decorations (badges, a note line, a highlight) on messages.
+    PluginDecorations,
 }
 
 impl ScreenshotScreen {
@@ -145,6 +151,9 @@ impl ScreenshotScreen {
             "gifs" | "gif-picker" => Some(Self::Gifs),
             "gif-trending" => Some(Self::GifTrending),
             "gif-favorites" => Some(Self::GifFavorites),
+            "plugins" => Some(Self::Plugins),
+            "plugin-prompt" => Some(Self::PluginPrompt),
+            "plugin-decorations" => Some(Self::PluginDecorations),
             _ => None,
         }
     }

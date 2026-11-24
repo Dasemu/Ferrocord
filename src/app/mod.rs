@@ -672,6 +672,7 @@ impl App {
             }
         }
         self.settings_open = screen == Some(ScreenshotScreen::Settings);
+        self.mock_plugin_screen(screen);
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
