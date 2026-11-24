@@ -126,6 +126,10 @@ pub enum Ui {
     GifPage(super::gifs::GifPage),
     /// The picker grid scrolled to this offset (px from the top).
     GifScrolled(f32),
+    /// The pointer entered a picker tile (its page URL).
+    GifHoverEnter(String),
+    /// The pointer left a picker tile.
+    GifHoverLeave(String),
     /// Saves or unsaves this GIF (the star on a picker tile).
     ToggleGifFavorite(Box<crate::net::model::Gif>),
     /// Composer sticker button.

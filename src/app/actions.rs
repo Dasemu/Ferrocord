@@ -290,6 +290,8 @@ impl App {
                 ])
             }
             Ui::GifScrolled(y) => self.on_gif_scrolled(y),
+            Ui::GifHoverEnter(url) => self.on_gif_hover(Some(url), None),
+            Ui::GifHoverLeave(url) => self.on_gif_hover(None, Some(url)),
             Ui::ToggleGifFavorite(gif) => self.toggle_gif_favorite(&gif),
             Ui::GifQuery(q) => match self.gif_picker.as_mut() {
                 Some(p) => delayed(

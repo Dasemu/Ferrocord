@@ -1774,3 +1774,57 @@ fn image_copies_upload_as_an_attachment() {
     }));
     assert!(a.toast.as_deref().unwrap().contains("too large"));
 }
+
+#[test]
+fn gif_picker_honours_autoplay_and_reduce_motion() {
+    use ferrocord::app::Done;
+    use ferrocord::app::gifs::GifPage;
+    use std::sync::Arc;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let _ = a.update(Message::Ui(Ui::GifPage(GifPage::Trending)));
+    let urls: Vec<String> = a
+        .gif_picker
+        .as_ref()
+        .unwrap()
+        .results
+        .iter()
+        .map(|g| g.url.clone())
+        .collect();
+    let anim = mock::gif_anim(1).map(Arc::new);
+    // GIF autoplay off: tiles stay still; only a hovered tile is decoded
+    // and plays.
+    a.prefs.autoplay_gifs = false;
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_none(), "not hovered: not kept");
+    assert!(!a.picker_playing(&urls[0]));
+    let _ = a.update(Message::Ui(Ui::GifHoverEnter(urls[0].clone())));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.picker_playing(&urls[0]));
+    assert!(!a.picker_playing(&urls[1]));
+    // A late leave of another tile keeps the hover; leaving drops frames.
+    let _ = a.update(Message::Ui(Ui::GifHoverLeave(urls[1].clone())));
+    assert!(a.picker_playing(&urls[0]));
+    let _ = a.update(Message::Ui(Ui::GifHoverLeave(urls[0].clone())));
+    assert!(!a.picker_playing(&urls[0]));
+    assert!(a.gif_anim(&urls[0]).is_none());
+    // Autoplay on: every tile near view plays.
+    a.prefs.autoplay_gifs = true;
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.picker_playing(&urls[0]) && a.picker_playing(&urls[1]));
+    // Reduce motion: stills only.
+    a.prefs.reduce_motion = true;
+    assert!(!a.picker_playing(&urls[0]));
+    assert!(a.gif_anim(&urls[0]).is_none());
+}

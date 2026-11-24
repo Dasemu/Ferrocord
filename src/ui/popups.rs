@@ -283,7 +283,7 @@ fn gif_grid<'a>(app: &'a App, gifs: &[Gif], tile_w: f32, gap: f32) -> El<'a> {
             (Some(a), _) => super::anim_image::anim_image(
                 a.clone(),
                 app.anim.epoch,
-                app.picker_playing(),
+                app.picker_playing(&g.url),
                 tile_w,
                 h,
             )
@@ -300,10 +300,15 @@ fn gif_grid<'a>(app: &'a App, gifs: &[Gif], tile_w: f32, gap: f32) -> El<'a> {
                 .style(theme::rounded_bg(p.bg_app, 4.0))
                 .into(),
         };
-        let tile = button(face)
-            .padding(0)
-            .on_press(ui(Ui::PickGif(g.url.clone())))
-            .style(theme::icon_button(p));
+        // Hover plays the tile when GIF autoplay is off.
+        let tile = iced::widget::mouse_area(
+            button(face)
+                .padding(0)
+                .on_press(ui(Ui::PickGif(g.url.clone())))
+                .style(theme::icon_button(p)),
+        )
+        .on_enter(ui(Ui::GifHoverEnter(g.url.clone())))
+        .on_exit(ui(Ui::GifHoverLeave(g.url.clone())));
         let saved = app.gif_favorites.contains(&g.url);
         let star = button(icon(
             if saved { Icon::StarFilled } else { Icon::Star },

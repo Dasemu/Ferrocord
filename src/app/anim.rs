@@ -94,8 +94,10 @@ impl Class {
             // Shown at most 400 px wide (the chat's media box).
             Self::Media => Limits::new(600, 150, 16 * MB, 400),
             Self::Sticker => Limits::new(600, 150, 8 * MB, 160),
-            // A GIF-picker tile (about 200 px wide). Picker only.
-            Self::Picker => Limits::new(600, 150, 6 * MB, 220),
+            // A GIF-picker tile, decoded at the tile width so it is
+            // drawn 1:1 (tiny-skia's fast path for opaque images, no
+            // per-redraw scaling). Picker only.
+            Self::Picker => Limits::new(600, 150, 6 * MB, super::gif_anim::TILE_W as u32),
             // Fitted by the helper to 90 % of the 400 x 300 media box (a
             // 498 x 280 Tenor clip keeps about 34 frames instead of 17):
             // a clip has many frames to spread over its budget.

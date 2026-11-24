@@ -16,6 +16,9 @@
 //!   self-playing `ui::anim_image` widget draws them (no tick: it redraws
 //!   only the visible tiles, only when their frame changes). MP4-only
 //!   favourites go through the video helper's frames mode instead.
+//! * **Settings.** With "Automatically play GIFs" off only the hovered tile
+//!   is decoded and plays (as in the official picker); "Reduce motion"
+//!   shows stills only. Tiles pause while the window is unfocused.
 //! * **Memory.** Only tiles in or near the visible part of the grid are
 //!   decoded; frames of tiles that scroll more than a screen away are
 //!   dropped, the cache has a byte budget ([`PICKER_BUDGET`]) and closing
@@ -307,6 +310,8 @@ pub struct PickerAnims {
     pub cache: AnimCache,
     /// Scroll offset of the grid (logical px from the top).
     pub scroll_y: f32,
+    /// The tile under the pointer (with GIF autoplay off only it plays).
+    pub hovered: Option<String>,
 }
 
 impl Default for PickerAnims {
@@ -314,6 +319,7 @@ impl Default for PickerAnims {
         Self {
             cache: AnimCache::new(PICKER_BUDGET),
             scroll_y: 0.0,
+            hovered: None,
         }
     }
 }
@@ -335,9 +341,27 @@ impl PickerAnims {
 }
 
 impl App {
-    /// Picker tiles play while the window is focused (and motion is on).
-    pub fn picker_playing(&self) -> bool {
-        !self.prefs.reduce_motion && self.window_focused
+    /// Every tile plays: "Automatically play GIFs" on and motion on.
+    /// With autoplay off a tile plays only while hovered, like the
+    /// official picker; "Reduce motion" stops all of them.
+    pub fn picker_autoplay(&self) -> bool {
+        self.prefs.autoplay_gifs && !self.prefs.reduce_motion
+    }
+
+    /// Whether the tile of `url` plays now (the window must be focused).
+    pub fn picker_playing(&self, url: &str) -> bool {
+        !self.prefs.reduce_motion
+            && self.window_focused
+            && (self.picker_autoplay() || self.gif_anims.hovered.as_deref() == Some(url))
+    }
+
+    /// Tiles that may hold frames now, from the near-view `candidates`.
+    fn picker_wanted<'a>(&self, candidates: impl Iterator<Item = &'a str>) -> HashSet<String> {
+        let auto = self.picker_autoplay();
+        candidates
+            .filter(|u| auto || self.gif_anims.hovered.as_deref() == Some(*u))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The decoded animation of a picker tile, if ready.
@@ -370,16 +394,22 @@ impl App {
         let grid = self.picker_grid();
         let tiles = masonry(&grid, TILE_W, GAP);
         let scroll = self.gif_anims.scroll_y;
-        let keep: HashSet<String> = near_view(&tiles, scroll, KEEP_MARGIN)
-            .into_iter()
-            .map(|i| grid[i].url.clone())
-            .collect();
+        let keep = self.picker_wanted(
+            near_view(&tiles, scroll, KEEP_MARGIN)
+                .into_iter()
+                .map(|i| grid[i].url.as_str()),
+        );
         self.gif_anims.retain(&keep);
+        let load = self.picker_wanted(
+            near_view(&tiles, scroll, LOAD_MARGIN)
+                .into_iter()
+                .map(|i| grid[i].url.as_str()),
+        );
         let now = Instant::now();
         let mut tasks = Vec::new();
         for i in near_view(&tiles, scroll, LOAD_MARGIN) {
             let g = &grid[i];
-            if !self.gif_anims.cache.want(&g.url, now) {
+            if !load.contains(&g.url) || !self.gif_anims.cache.want(&g.url, now) {
                 continue;
             }
             let key = g.url.clone();
@@ -413,12 +443,15 @@ impl App {
     /// A tile animation finished decoding. Kept only if the picker still
     /// shows that tile near the visible area.
     pub(super) fn on_gif_anim(&mut self, key: String, anim: Option<Arc<Anim>>) -> Task<Message> {
-        let wanted = self.gif_picker.is_some() && {
+        let wanted = self.gif_picker.is_some() && !self.prefs.reduce_motion && {
             let grid = self.picker_grid();
             let tiles = masonry(&grid, TILE_W, GAP);
-            near_view(&tiles, self.gif_anims.scroll_y, KEEP_MARGIN)
-                .into_iter()
-                .any(|i| grid[i].url == key)
+            self.picker_wanted(
+                near_view(&tiles, self.gif_anims.scroll_y, KEEP_MARGIN)
+                    .into_iter()
+                    .map(|i| grid[i].url.as_str()),
+            )
+            .contains(&key)
         };
         match anim {
             Some(a) if wanted => self.gif_anims.cache.insert(key, a, Class::Picker),
@@ -426,6 +459,27 @@ impl App {
             None => self.gif_anims.cache.mark_failed(&key, Instant::now()),
         }
         Task::none()
+    }
+
+    /// The pointer entered (`Some`) or left a tile.
+    pub(super) fn on_gif_hover(
+        &mut self,
+        enter: Option<String>,
+        left: Option<String>,
+    ) -> Task<Message> {
+        match (enter, left) {
+            (Some(u), _) => self.gif_anims.hovered = Some(u),
+            // A late leave of another tile does not cancel the hover.
+            (None, Some(u)) if self.gif_anims.hovered.as_deref() == Some(u.as_str()) => {
+                self.gif_anims.hovered = None;
+            }
+            _ => return Task::none(),
+        }
+        if self.picker_autoplay() {
+            Task::none()
+        } else {
+            self.request_gif_anims()
+        }
     }
 
     /// The grid scrolled to `y`.
