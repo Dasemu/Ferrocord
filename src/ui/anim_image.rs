@@ -8,7 +8,8 @@
 //! only the image's rectangle. Off-screen or paused images request nothing.
 //!
 //! Redraw times are rounded up to a 60 Hz grid shared by every image
-//! ([`FRAME_SLOT`] from the app's epoch), so any number of animations with
+//! ([`FRAME_SLOT`] from one process-wide origin, whatever each image's own
+//! epoch), so any number of animations with
 //! unrelated frame delays cost at most 60 window redraws per second (a
 //! display cannot show more), each frame still landing on its own delay.
 //! An optional [`Timeline`] shows the animation only during part of a
@@ -175,12 +176,24 @@ pub fn shown_frame(
     local_time(epoch, now, playing, timeline).map(|t| anim.index_at(t))
 }
 
-/// `at` rounded up to the shared 60 Hz grid counted from `epoch`.
-pub fn snap_to_slot(epoch: Instant, at: Instant) -> Instant {
-    let since = at.saturating_duration_since(epoch).as_nanos();
+/// Origin of the redraw grid, shared by every animation whatever its own
+/// epoch (the app's, the popout's or a hover's), so they all land on the
+/// same 60 slots a second.
+/// It lies a day before the first call, so it precedes every epoch.
+pub fn grid_origin() -> Instant {
+    static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *ORIGIN.get_or_init(|| {
+        let now = Instant::now();
+        now.checked_sub(Duration::from_secs(86_400)).unwrap_or(now)
+    })
+}
+
+/// `at` rounded up to the 60 Hz grid counted from `origin`.
+pub fn snap_to_slot(origin: Instant, at: Instant) -> Instant {
+    let since = at.saturating_duration_since(origin).as_nanos();
     let slot = FRAME_SLOT.as_nanos();
     let k = since.div_ceil(slot);
-    epoch + Duration::from_nanos((k * slot) as u64)
+    origin + Duration::from_nanos((k * slot) as u64)
 }
 
 /// When the next redraw is due, or `None` when nothing will change.
@@ -212,7 +225,7 @@ pub fn next_redraw_in(
             }
         }
     };
-    let at = snap_to_slot(epoch, now + wait);
+    let at = snap_to_slot(grid_origin(), now + wait);
     // Never ask for the current instant again (a redraw loop).
     Some(if at <= now { now + FRAME_SLOT } else { at })
 }
@@ -451,9 +464,10 @@ mod tests {
         let b = anim_ms(&[37, 41]);
         let t0 = Instant::now();
         let now = t0 + Duration::from_millis(5);
-        for x in [&a, &b] {
-            let at = next_redraw(x, t0, now, true).unwrap();
-            let since = (at - t0).as_nanos();
+        // Different epochs (app, popout, hover) share the same grid.
+        for (x, epoch) in [(&a, t0), (&b, t0 + Duration::from_millis(7))] {
+            let at = next_redraw(x, epoch, now, true).unwrap();
+            let since = (at - grid_origin()).as_nanos();
             assert_eq!(since % FRAME_SLOT.as_nanos(), 0, "{since}");
         }
         // Many animations together never cause more than 60 redraws a
