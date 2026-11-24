@@ -172,7 +172,22 @@ fn flow<'a>(ctx: &Ctx<'a>, v: &[Inline], style: Style) -> El<'a> {
                     );
                     continue;
                 }
-                match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
+                if let Some((a, epoch, playing)) = ctx.app.emoji_hover_anim(*id, *animated, ctx.msg)
+                {
+                    line.push(
+                        super::anim_image::anim_image(
+                            a.clone(),
+                            epoch,
+                            playing,
+                            emoji_size,
+                            emoji_size,
+                        )
+                        .content_fit(iced::ContentFit::Contain)
+                        .into(),
+                    );
+                    continue;
+                }
+                match ctx.app.emoji_frame(*id) {
                     Some(h) => line.push(
                         iced::widget::image(h.clone())
                             .width(emoji_size)
@@ -442,7 +457,14 @@ fn jumbo<'a>(ctx: &Ctx<'a>, blocks: &[Block]) -> El<'a> {
                 );
                 continue;
             }
-            let el: El<'a> = match ctx.app.emoji_frame(*id, *animated, ctx.msg) {
+            if let Some((a, epoch, playing)) = ctx.app.emoji_hover_anim(*id, *animated, ctx.msg) {
+                r = r.push(
+                    super::anim_image::anim_image(a.clone(), epoch, playing, 48.0, 48.0)
+                        .content_fit(iced::ContentFit::Contain),
+                );
+                continue;
+            }
+            let el: El<'a> = match ctx.app.emoji_frame(*id) {
                 Some(h) => iced::widget::image(h.clone()).width(48).height(48).into(),
                 None => container(text(format!(":{name}:")).size(16).color(p.text_secondary))
                     .padding(Padding::from([10, 6]))

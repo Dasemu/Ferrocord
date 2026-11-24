@@ -10,8 +10,9 @@
 //!   keeps its duration);
 //! * the cache is an LRU with a total byte budget, and whole classes
 //!   (profile effects, banners) are dropped when the popout closes;
-//! * the app ticks only while something animated is hovered or the popout
-//!   is open (see [`AnimState::active`]).
+//! * nothing ticks: every animation is drawn by the self-playing
+//!   `ui::anim_image` widget, which asks for a redraw only when its own
+//!   next frame is due (on a shared 60 Hz grid) and only while on screen.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -25,14 +26,15 @@ use crate::net::model::{MessageId, UserId};
 
 /// Total decoded-frame budget of the cache (cosmetics plus the GIFs,
 /// stickers and emoji of the open conversation).
-pub const CACHE_BUDGET: usize = 48 * 1024 * 1024;
+pub const CACHE_BUDGET: usize = 80 * 1024 * 1024;
 /// A failed fetch / decode is retried after this long.
 pub const RETRY_AFTER: Duration = Duration::from_secs(300);
-/// Frames are never shown for less than this (GIF delay 0 means "default").
-pub const MIN_DELAY: Duration = Duration::from_millis(20);
+/// Fallback wait when a frame lookup falls off the end (rounding).
+pub const MIN_DELAY: Duration = Duration::from_millis(10);
+/// Delays of 10 ms or less mean "as fast as possible" in old GIFs; like
+/// Chromium (the official client) they are shown for 100 ms.
 const DEFAULT_DELAY: Duration = Duration::from_millis(100);
-/// Tick period while animating (about 15 fps).
-pub const TICK: Duration = Duration::from_millis(66);
+const FAST_DELAY: Duration = Duration::from_millis(10);
 /// Larger sources are refused before decoding.
 pub const MAX_SOURCE_DIM: u32 = 2048;
 
@@ -57,6 +59,8 @@ pub enum Class {
     /// `gifv` embeds (Tenor / Giphy MP4s), decoded by the video helper's
     /// frames mode (`media::gifv`).
     Gifv,
+    /// GIF-picker tiles (kept in the picker's own cache, `gifs::PickerAnims`).
+    Picker,
 }
 
 impl Class {
@@ -67,21 +71,35 @@ impl Class {
 
     pub fn limits(self) -> Limits {
         match self {
-            Self::Avatar => Limits::new(160, 48, 3 * MB, 160).round(),
-            Self::AvatarList => Limits::new(160, 32, MB, 80).round(),
-            Self::Decoration => Limits::new(160, 48, 4 * MB, 192),
-            Self::DecorationList => Limits::new(160, 48, 2 * MB, 96),
-            Self::Banner => Limits::new(80, 48, 8 * MB, 340),
+            // Frames are decoded at about 1.5-2x the size they are drawn
+            // at (enough for 125-200 % scaling) and every source frame is
+            // read: a typical asset keeps all of its frames, so it plays at
+            // its own frame rate. Only unusually long or large ones are
+            // decimated (evenly, keeping their duration).
+            // Drawn at 80 px in the popout.
+            Self::Avatar => Limits::new(600, 150, 6 * MB, 120).round(),
+            // Drawn at 32-40 px.
+            Self::AvatarList => Limits::new(600, 150, 3 * MB, 80).round(),
+            // Drawn at 96 px (80 px avatar x 1.2).
+            Self::Decoration => Limits::new(600, 240, 12 * MB, 128),
+            // Drawn at 38-48 px.
+            Self::DecorationList => Limits::new(600, 240, 4 * MB, 72),
+            // Drawn 340 px wide; popout only.
+            Self::Banner => Limits::new(600, 150, 12 * MB, 340),
             // Effect canvases are large: decode at a reduced width, the
-            // view scales them to the card.
-            Self::Effect => Limits::new(120, 40, 10 * MB, 256),
-            Self::Emoji => Limits::new(80, 32, MB, 96),
+            // view scales them to the card. Popout only.
+            Self::Effect => Limits::new(600, 150, 10 * MB, 200),
+            // Drawn at 22 px inline, 48 px jumbo.
+            Self::Emoji => Limits::new(600, 150, 2 * MB, 64),
             // Shown at most 400 px wide (the chat's media box).
-            Self::Media => Limits::new(240, 64, 16 * MB, 400),
-            Self::Sticker => Limits::new(160, 48, 4 * MB, 160),
-            // Fitted to the 400 x 300 media box by the helper; a smaller
-            // budget than GIFs because a clip has more frames to spread.
-            Self::Gifv => Limits::new(0, 48, 6 * MB, 400),
+            Self::Media => Limits::new(600, 150, 16 * MB, 400),
+            Self::Sticker => Limits::new(600, 150, 8 * MB, 160),
+            // A GIF-picker tile (about 200 px wide). Picker only.
+            Self::Picker => Limits::new(600, 150, 6 * MB, 220),
+            // Fitted by the helper to 90 % of the 400 x 300 media box (a
+            // 498 x 280 Tenor clip keeps about 34 frames instead of 17):
+            // a clip has many frames to spread over its budget.
+            Self::Gifv => Limits::new(0, 150, 10 * MB, 360),
         }
     }
 }
@@ -233,15 +251,17 @@ struct Raw {
     delay: Duration,
 }
 
-fn delay_of(d: image::Delay) -> Duration {
+/// A frame's delay, exactly (APNG and WebP delays are fractions: 1/60 s is
+/// 16.67 ms, not 16 or 20). Only "as fast as possible" delays (10 ms or
+/// less) are changed, to the browser default.
+pub fn delay_of(d: image::Delay) -> Duration {
     let (n, den) = d.numer_denom_ms();
-    let ms = n.checked_div(den).unwrap_or(0);
-    let d = Duration::from_millis(u64::from(ms));
-    if d <= Duration::from_millis(10) {
-        DEFAULT_DELAY
+    let d = if den == 0 {
+        Duration::ZERO
     } else {
-        d.max(MIN_DELAY)
-    }
+        Duration::from_nanos(u64::from(n) * 1_000_000 / u64::from(den))
+    };
+    if d <= FAST_DELAY { DEFAULT_DELAY } else { d }
 }
 
 /// Merges neighbouring frames (dropping every second one, adding its delay
@@ -531,6 +551,20 @@ impl AnimCache {
         }
     }
 
+    /// Keeps only the entries whose key passes `keep`.
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        let gone: Vec<String> = self.entries.keys().filter(|k| !keep(k)).cloned().collect();
+        for k in gone {
+            self.remove(&k);
+        }
+    }
+
+    /// Forgets an in-flight request whose result is not wanted any more
+    /// (it may be asked for again).
+    pub fn forget(&mut self, key: &str) {
+        self.pending.remove(key);
+    }
+
     /// Drops every entry of the classes held only while the popout is open
     /// (and forgets their in-flight requests).
     pub fn drop_popout_only(&mut self) {
@@ -574,14 +608,9 @@ pub struct AnimState {
     pub cache: AnimCache,
     pub hover: Option<Hover>,
     hover_since: Instant,
-    /// Hovered thing has something animated (cached or loading).
-    pub hover_hot: bool,
     popout_since: Option<Instant>,
-    /// The open popout has something animated.
-    pub popout_hot: bool,
-    now: Instant,
-    /// Shared start of the self-playing message animations
-    /// (`ui::anim_image`), so they stay in step across view rebuilds.
+    /// Shared start of the self-playing animations (`ui::anim_image`), so
+    /// they stay in step across view rebuilds.
     pub epoch: Instant,
 }
 
@@ -592,24 +621,19 @@ impl Default for AnimState {
             cache: AnimCache::default(),
             hover: None,
             hover_since: now,
-            hover_hot: false,
             popout_since: None,
-            popout_hot: false,
-            now,
             epoch: now,
         }
     }
 }
 
 impl AnimState {
-    /// Pointer entered `h`. `hot`: it has animated assets.
-    pub fn enter(&mut self, h: Hover, hot: bool, now: Instant) {
+    /// Pointer entered `h`; the hover clock restarts on a new target.
+    pub fn enter(&mut self, h: Hover, now: Instant) {
         if self.hover != Some(h) {
             self.hover_since = now;
         }
         self.hover = Some(h);
-        self.hover_hot = hot;
-        self.now = now;
     }
 
     /// Pointer left `h`. Leaves are ignored when the pointer has already
@@ -618,41 +642,26 @@ impl AnimState {
     pub fn leave(&mut self, h: Hover) {
         if self.hover == Some(h) {
             self.hover = None;
-            self.hover_hot = false;
         }
     }
 
-    pub fn open_popout(&mut self, hot: bool, now: Instant) {
+    pub fn open_popout(&mut self, now: Instant) {
         self.popout_since = Some(now);
-        self.popout_hot = hot;
-        self.now = now;
     }
 
     pub fn close_popout(&mut self) {
         self.popout_since = None;
-        self.popout_hot = false;
         self.cache.drop_popout_only();
     }
 
-    pub fn tick(&mut self, now: Instant) {
-        self.now = now;
+    /// Start of the hovered target's animations.
+    pub fn hover_epoch(&self) -> Instant {
+        self.hover_since
     }
 
-    /// Whether a tick subscription is needed. `reduce_motion` turns every
-    /// animation off.
-    pub fn active(&self, reduce_motion: bool) -> bool {
-        !reduce_motion
-            && ((self.hover.is_some() && self.hover_hot)
-                || (self.popout_since.is_some() && self.popout_hot))
-    }
-
-    pub fn hover_elapsed(&self) -> Duration {
-        self.now.saturating_duration_since(self.hover_since)
-    }
-
-    pub fn popout_elapsed(&self) -> Duration {
+    /// Start of the open popout's animations.
+    pub fn popout_epoch(&self) -> Option<Instant> {
         self.popout_since
-            .map_or(Duration::ZERO, |s| self.now.saturating_duration_since(s))
     }
 
     pub fn is_hovering_user(&self, user: UserId) -> bool {
@@ -895,7 +904,7 @@ mod tests {
         s.cache.insert("ef".into(), mk(10), Class::Effect);
         s.cache.insert("bn".into(), mk(10), Class::Banner);
         s.cache.insert("dc".into(), mk(10), Class::Decoration);
-        s.open_popout(true, Instant::now());
+        s.open_popout(Instant::now());
         s.close_popout();
         assert!(s.cache.contains("av") && s.cache.contains("dc"));
         assert!(!s.cache.contains("ef") && !s.cache.contains("bn"));
@@ -914,42 +923,6 @@ mod tests {
     }
 
     #[test]
-    fn ticking_starts_and_stops_with_hover_and_popout() {
-        let mut s = AnimState::default();
-        let t0 = Instant::now();
-        let h = Hover {
-            user: Snowflake(1),
-            message: None,
-        };
-        let other = Hover {
-            user: Snowflake(2),
-            message: None,
-        };
-        assert!(!s.active(false));
-        // Hovering something static never ticks.
-        s.enter(h, false, t0);
-        assert!(!s.active(false));
-        s.enter(h, true, t0);
-        assert!(s.active(false));
-        // Reduce motion overrides everything.
-        assert!(!s.active(true));
-        // A late leave of another row does not cancel the hover...
-        s.leave(other);
-        assert!(s.active(false));
-        // ...but leaving the hovered row does.
-        s.leave(h);
-        assert!(!s.active(false));
-        // Popout.
-        s.open_popout(false, t0);
-        assert!(!s.active(false));
-        s.close_popout();
-        s.open_popout(true, t0);
-        assert!(s.active(false));
-        s.close_popout();
-        assert!(!s.active(false));
-    }
-
-    #[test]
     fn hover_restarts_the_clock_only_on_a_new_target() {
         let mut s = AnimState::default();
         let t0 = Instant::now();
@@ -957,19 +930,96 @@ mod tests {
             user: Snowflake(1),
             message: Some(Snowflake(9)),
         };
-        s.enter(h, true, t0);
-        s.tick(t0 + Duration::from_millis(500));
-        assert_eq!(s.hover_elapsed(), Duration::from_millis(500));
+        s.enter(h, t0);
+        assert_eq!(s.hover_epoch(), t0);
         // Re-entering the same target keeps the phase.
-        s.enter(h, true, t0 + Duration::from_millis(500));
-        assert_eq!(s.hover_elapsed(), Duration::from_millis(500));
+        s.enter(h, t0 + Duration::from_millis(500));
+        assert_eq!(s.hover_epoch(), t0);
         let h2 = Hover {
             user: Snowflake(2),
             message: None,
         };
-        s.enter(h2, true, t0 + Duration::from_millis(600));
-        assert_eq!(s.hover_elapsed(), Duration::ZERO);
+        let t1 = t0 + Duration::from_millis(600);
+        s.enter(h2, t1);
+        assert_eq!(s.hover_epoch(), t1);
         assert!(s.is_hovering_user(Snowflake(2)) && !s.is_hovering_user(Snowflake(1)));
         assert!(!s.is_hovering_message(Snowflake(9)));
+        // A late leave of another row does not cancel the hover.
+        s.leave(h);
+        assert!(s.is_hovering_user(Snowflake(2)));
+        s.leave(h2);
+        assert!(s.hover.is_none());
+        // Popout clock.
+        assert_eq!(s.popout_epoch(), None);
+        s.open_popout(t1);
+        assert_eq!(s.popout_epoch(), Some(t1));
+        s.close_popout();
+        assert_eq!(s.popout_epoch(), None);
+    }
+
+    #[test]
+    fn delays_are_exact_and_only_instant_ones_are_slowed() {
+        let ms = |n, d| delay_of(image::Delay::from_numer_denom_ms(n, d));
+        // APNG 1/60 s: 16.67 ms, not truncated to 16 or clamped to 20.
+        let d = ms(1000, 60);
+        assert!(d > Duration::from_micros(16_660) && d < Duration::from_micros(16_670));
+        assert_eq!(ms(15, 1), Duration::from_millis(15));
+        assert_eq!(ms(33, 1), Duration::from_millis(33));
+        // "As fast as possible" (<= 10 ms) plays at the browser default.
+        assert_eq!(ms(10, 1), DEFAULT_DELAY);
+        assert_eq!(ms(0, 1), DEFAULT_DELAY);
+    }
+
+    /// Frames of a `side` px square animation: `n` frames of `delay`.
+    fn frames(n: usize, side: u32, delay: Duration) -> Vec<(u32, u32, Vec<u8>, Duration)> {
+        (0..n)
+            .map(|i| {
+                let px = vec![(i % 256) as u8; (side * side * 4) as usize];
+                (side, side, px, delay)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn typical_cosmetics_keep_every_frame_at_their_own_rate() {
+        let sixty = Duration::from_nanos(1_000_000_000 / 60);
+        // (class, frames, CDN size, delay): what Discord serves.
+        let cases = [
+            // A 3 s decoration APNG at 60 fps, list and popout sizes.
+            (Class::DecorationList, 180, 96, sixty),
+            (Class::Decoration, 180, 240, sixty),
+            // A 2 s GIF avatar at 30 ms.
+            (Class::AvatarList, 66, 80, Duration::from_millis(30)),
+            (Class::Avatar, 66, 160, Duration::from_millis(30)),
+            // A 2 s animated emoji at 20 ms.
+            (Class::Emoji, 100, 96, Duration::from_millis(20)),
+            // A 2 s APNG sticker at 30 fps.
+            (
+                Class::Sticker,
+                60,
+                320,
+                Duration::from_nanos(1_000_000_000 / 30),
+            ),
+        ];
+        for (class, n, side, delay) in cases {
+            let a = from_frames_limited(frames(n, side, delay), &class.limits()).unwrap();
+            assert_eq!(a.frames.len(), n, "{class:?} dropped frames");
+            let fps = a.frames.len() as f64 / a.total.as_secs_f64();
+            let want = 1.0 / delay.as_secs_f64();
+            assert!(
+                (fps - want).abs() < 0.5,
+                "{class:?}: {fps:.1} fps, want {want:.1}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_assets_are_decimated_evenly_and_keep_their_duration() {
+        // A 10 s, 60 fps decoration (600 frames) exceeds the list budget.
+        let sixty = Duration::from_nanos(1_000_000_000 / 60);
+        let lim = Class::DecorationList.limits();
+        let a = from_frames_limited(frames(600, 96, sixty), &lim).unwrap();
+        assert!(a.frames.len() <= lim.max_frames && a.bytes <= lim.max_bytes);
+        assert!((a.total.as_secs_f64() - 10.0).abs() < 0.01);
     }
 }

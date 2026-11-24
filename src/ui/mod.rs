@@ -1,12 +1,12 @@
 //! Views: pure functions `&App -> Element<Message>`.
 
 pub mod anim_image;
-pub mod frame_stats;
 pub mod chat;
 pub mod context_menu;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji_font;
+pub mod frame_stats;
 pub mod icons;
 pub mod lightbox;
 pub mod login;
@@ -349,20 +349,13 @@ pub fn avatar_circle<'a>(
     } else {
         crate::app::cosmetics::AV_LIST
     };
-    if phase == crate::app::cosmetics::Phase::Live
-        && let Some(a) = app.avatar_live(user, cdn_size)
-    {
-        return anim_image::anim_image(
-            a.clone(),
-            app.anim.epoch,
-            app.cosmetics_playing(),
-            size,
-            size,
-        )
-        .border_radius(size / 2.0)
-        .into();
+    if let Some(a) = app.avatar_anim(user, cdn_size, phase) {
+        let (epoch, playing) = app.anim_clock(phase);
+        return anim_image::anim_image(a.clone(), epoch, playing, size, size)
+            .border_radius(size / 2.0)
+            .into();
     }
-    if let Some(h) = app.avatar_frame(user, cdn_size, phase) {
+    if let Some(h) = app.avatar_frame(user, cdn_size) {
         return iced::widget::image(h.clone())
             .width(size)
             .height(size)

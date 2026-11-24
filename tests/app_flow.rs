@@ -1594,3 +1594,60 @@ fn gif_picker_home_favorites_and_star() {
     let _ = ferrocord::ui::view_window(&a, iced::window::Id::unique());
     assert_eq!(a.gif_thumb(&first.url).unwrap().id(), id);
 }
+
+#[test]
+fn gif_picker_tiles_animate_near_view_and_free_their_frames() {
+    use ferrocord::app::Done;
+    use ferrocord::app::gifs::GifPage;
+    use std::sync::Arc;
+    let mut a = app();
+    let _ = a.update(Message::Ui(Ui::OpenGifPicker));
+    let _ = a.update(Message::Ui(Ui::GifPage(GifPage::Trending)));
+    let urls: Vec<String> = a
+        .gif_picker
+        .as_ref()
+        .unwrap()
+        .results
+        .iter()
+        .map(|g| g.url.clone())
+        .collect();
+    // A decoded tile (the mock decodes like a real GIF, through the
+    // picker limits) lands in the picker cache and the view draws it.
+    let anim = mock::gif_anim(1).map(Arc::new);
+    assert!(anim.as_ref().is_some_and(|x| x.frames.len() == 32));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim: anim.clone(),
+    }));
+    let got = a.gif_anim(&urls[0]).expect("tile animation cached").clone();
+    // Same frames (same handles) on every view rebuild.
+    let _ = ferrocord::ui::view(&a);
+    let _ = ferrocord::ui::view(&a);
+    assert!(Arc::ptr_eq(&got, a.gif_anim(&urls[0]).unwrap()));
+    // A result for a GIF the picker does not show is not kept.
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: "https://tenor.example/view/elsewhere".into(),
+        anim: anim.clone(),
+    }));
+    assert!(a.gif_anim("https://tenor.example/view/elsewhere").is_none());
+    // Scrolling far away drops the frames of tiles out of view (only 8
+    // mock tiles: scroll beyond them).
+    let _ = a.update(Message::Ui(Ui::GifScrolled(5000.0)));
+    assert!(
+        a.gif_anim(&urls[0]).is_none(),
+        "far tiles lose their frames"
+    );
+    let _ = a.update(Message::Ui(Ui::GifScrolled(0.0)));
+    let _ = a.update(Message::Done(Done::GifAnim {
+        key: urls[0].clone(),
+        anim,
+    }));
+    assert!(a.gif_anim(&urls[0]).is_some());
+    assert!(a.gif_anims.cache.bytes() <= ferrocord::app::gif_anim::PICKER_BUDGET);
+    // Closing the picker frees every frame: nothing animates when closed.
+    let _ = a.update(Message::Ui(Ui::CloseGifPicker));
+    assert!(a.gif_anims.cache.is_empty());
+    assert!(a.gif_anim(&urls[0]).is_none());
+    // Mock mode never writes a disk cache.
+    assert!(a.gif_disk.is_none());
+}

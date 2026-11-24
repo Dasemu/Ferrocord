@@ -12,7 +12,7 @@ use super::cosmetics::{self, Placed};
 use super::theme::{self, INTER_BOLD, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, with_presence};
 use crate::app::App;
-use crate::app::cosmetics::Phase;
+use crate::app::cosmetics::{EffectImage, Phase};
 use crate::app::profile::CARD_W;
 use crate::net::cosmetics::{self as cos, Activity, ActivityKind, Profile, elapsed_label};
 use crate::net::model::*;
@@ -124,26 +124,32 @@ fn body<'a>(
 
     // Banner or accent colour.
     let banner_h = banner_height(width);
-    let banner: El<'a> = match profile.and_then(|pr| app.banner_frame(pr)) {
-        // Same aspect as the card: no cropping is needed (tiny-skia does not
-        // clip a covering image to its bounds).
-        Some(h) => image(h.clone())
-            .width(Length::Fill)
-            .height(banner_h)
-            .content_fit(iced::ContentFit::Fill)
-            .into(),
-        None => {
-            let c = profile
-                .and_then(|pr| pr.accent_color)
-                .or(user.accent_color)
-                .map(theme::from_int)
-                .or(colors.map(|(a, _)| theme::from_int(a)))
-                .unwrap_or(p.accent);
-            container(Space::new())
+    let banner_anim = profile.and_then(|pr| app.banner_anim(pr));
+    let banner: El<'a> = if let Some(a) = banner_anim {
+        let (epoch, playing) = app.anim_clock(Phase::Popout);
+        super::anim_image::anim_image(a.clone(), epoch, playing, width, banner_h).into()
+    } else {
+        match profile.and_then(|pr| app.banner_frame(pr)) {
+            // Same aspect as the card: no cropping is needed (tiny-skia does not
+            // clip a covering image to its bounds).
+            Some(h) => image(h.clone())
                 .width(Length::Fill)
                 .height(banner_h)
-                .style(theme::bg(c))
-                .into()
+                .content_fit(iced::ContentFit::Fill)
+                .into(),
+            None => {
+                let c = profile
+                    .and_then(|pr| pr.accent_color)
+                    .or(user.accent_color)
+                    .map(theme::from_int)
+                    .or(colors.map(|(a, _)| theme::from_int(a)))
+                    .unwrap_or(p.accent);
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(banner_h)
+                    .style(theme::bg(c))
+                    .into()
+            }
         }
     };
     let presence = app.chat.presence_of(user.id);
@@ -524,14 +530,19 @@ fn effect_overlay<'a>(app: &'a App, width: f32) -> El<'a> {
                 l.y as f32 * scale,
             )
         };
+        let face: El<'a> = match l.image {
+            EffectImage::Still(handle) => image(handle.clone()).width(w).height(h).into(),
+            EffectImage::Anim(a, timeline) => {
+                let (epoch, playing) = app.anim_clock(Phase::Popout);
+                super::anim_image::anim_image(a.clone(), epoch, playing, w, h)
+                    .timeline(timeline)
+                    .into()
+            }
+        };
         stack = stack.push(
-            Placed::new(
-                image(l.handle.clone()).width(w).height(h),
-                Size::new(w, h),
-                Point::new(x, y),
-            )
-            .slot(Length::Fill, Length::Fill)
-            .clip(true),
+            Placed::new(face, Size::new(w, h), Point::new(x, y))
+                .slot(Length::Fill, Length::Fill)
+                .clip(true),
         );
     }
     stack.into()

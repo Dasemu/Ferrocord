@@ -68,7 +68,10 @@ mod tests {
     #[test]
     fn version_flags_print_the_package_version() {
         let want = format!("ferrocord {}", env!("CARGO_PKG_VERSION"));
-        assert_eq!(info("ferrocord", "u", &args(&["--version"])), Some(want.clone()));
+        assert_eq!(
+            info("ferrocord", "u", &args(&["--version"])),
+            Some(want.clone())
+        );
         assert_eq!(info("ferrocord", "u", &args(&["-V"])), Some(want));
         assert_eq!(
             info("ferrocord-player", "u", &args(&["-V"])).as_deref(),
@@ -90,7 +93,10 @@ mod tests {
         assert_eq!(info("ferrocord", "u", &args(&["--mock"])), None);
         // Only the first argument is a flag: a file called `--version`
         // after another argument is not.
-        assert_eq!(info("ferrocord", "u", &args(&["--mock", "--version"])), None);
+        assert_eq!(
+            info("ferrocord", "u", &args(&["--mock", "--version"])),
+            None
+        );
         assert_eq!(info("ferrocord", "u", &args(&["-v"])), None);
     }
 }

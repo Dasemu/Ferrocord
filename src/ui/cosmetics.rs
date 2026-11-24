@@ -164,14 +164,11 @@ pub fn decoration<'a>(app: &'a App, user: &User, size: f32, phase: Phase) -> Opt
     let off = -(big - size) / 2.0;
     // Until the image arrives the slot stays (an empty one) so the widget
     // tree keeps its shape.
-    let live = (phase == Phase::Live)
-        .then(|| app.decoration_live(deco, cdn_size))
-        .flatten();
-    let img: El<'a> = if let Some(a) = live {
-        super::anim_image::anim_image(a.clone(), app.anim.epoch, app.cosmetics_playing(), big, big)
-            .into()
+    let img: El<'a> = if let Some(a) = app.decoration_anim(deco, cdn_size, phase) {
+        let (epoch, playing) = app.anim_clock(phase);
+        super::anim_image::anim_image(a.clone(), epoch, playing, big, big).into()
     } else {
-        match app.decoration_frame(deco, cdn_size, phase) {
+        match app.decoration_frame(deco, cdn_size) {
             Some(h) => iced::widget::image(h.clone()).width(big).height(big).into(),
             None => Space::new().width(big).height(big).into(),
         }

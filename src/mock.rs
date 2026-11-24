@@ -1151,6 +1151,35 @@ pub fn gif_page_url(n: usize) -> String {
     format!("https://tenor.example/view/mock-{n}")
 }
 
+/// Number of the mock GIF with this page URL.
+pub fn gif_number(url: &str) -> Option<usize> {
+    let n: usize = url
+        .strip_prefix("https://tenor.example/view/mock-")?
+        .parse()
+        .ok()?;
+    (1..=MOCK_GIF_SIZES.len()).contains(&n).then_some(n)
+}
+
+/// The animation of mock GIF `n` (a slow pan across its landscape, 32
+/// frames at 50 ms), run through the picker's decode limits. Called off the
+/// UI thread, like a real decode.
+pub fn gif_anim(n: usize) -> Option<crate::app::anim::Anim> {
+    let (w, h) = *MOCK_GIF_SIZES.get(n.checked_sub(1)?)?;
+    let (bw, _, base) = mock_image(w * 2, h);
+    let frames = (0..32u32)
+        .map(|f| {
+            let off = (f * w / 32) as usize;
+            let mut px = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h as usize {
+                let row = (y * bw as usize + off) * 4;
+                px.extend_from_slice(&base[row..row + w as usize * 4]);
+            }
+            (w, h, px, std::time::Duration::from_millis(50))
+        })
+        .collect();
+    crate::app::anim::from_frames_limited(frames, &crate::app::anim::Class::Picker.limits()).ok()
+}
+
 /// Saved GIFs of the mock account: mock GIFs 3 and 6, newest first.
 pub fn gif_favorites() -> Vec<crate::net::frecency::FavoriteGif> {
     [(3usize, 2u32), (6, 1)]

@@ -11,7 +11,8 @@ use ferrocord::tray::instance::{self, Role};
 use tracing_subscriber::EnvFilter;
 
 /// Usage line shown by `ferrocord --help`.
-const USAGE: &str = "ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <screen> <out.png>]";
+const USAGE: &str =
+    "ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <screen> <out.png>]";
 
 fn main() -> iced::Result {
     ferrocord::cli::handle_info_flags("ferrocord", USAGE);

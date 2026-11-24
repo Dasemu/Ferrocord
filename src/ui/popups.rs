@@ -116,7 +116,7 @@ pub fn layers(app: &App) -> Vec<El<'_>> {
     ]
 }
 
-const GIF_PICKER_W: f32 = 424.0;
+const GIF_PICKER_W: f32 = crate::app::gif_anim::PICKER_W;
 const GIF_PICKER_H: f32 = 440.0;
 
 fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
@@ -151,14 +151,16 @@ fn gif_picker<'a>(app: &'a App, gp: &'a crate::app::gifs::GifPicker) -> El<'a> {
         Some(GifPage::Trending) => Some("Trending GIFs"),
     };
 
-    const GAP: f32 = 6.0;
-    let tile_w = (GIF_PICKER_W - 16.0 - GAP) / 2.0;
+    use crate::app::gif_anim::{GAP, GRID_ID, TILE_W};
+    let tile_w = TILE_W;
     let scroll = |content: El<'a>| -> El<'a> {
         super::smooth_scroll::smooth(
             scrollable(container(content).padding(Padding::from([0, 8])))
+                .id(iced::widget::Id::new(GRID_ID))
                 .direction(scrollable::Direction::Vertical(
                     scrollable::Scrollbar::new().width(4).scroller_width(4),
                 ))
+                .on_scroll(|v| Message::Ui(Ui::GifScrolled(v.absolute_offset().y)))
                 .style(theme::thin_scrollbar(p, false))
                 .height(Length::Fill),
         )
@@ -270,16 +272,28 @@ fn gif_home_tile<'a>(
 fn gif_grid<'a>(app: &'a App, gifs: &[Gif], tile_w: f32, gap: f32) -> El<'a> {
     let p = app.theme.palette;
     let mut cols: [Vec<El<'a>>; 2] = [Vec::new(), Vec::new()];
-    let mut heights = [0.0f32; 2];
-    for g in gifs {
-        let h = (tile_w * g.height as f32 / g.width.max(1) as f32).clamp(60.0, 320.0);
-        let face: El<'a> = match app.gif_thumb(&g.url) {
-            Some(handle) => image(handle.clone())
+    let tiles = crate::app::gif_anim::masonry(gifs, tile_w, gap);
+    for (g, t) in gifs.iter().zip(tiles) {
+        let h = t.h;
+        // The animation once decoded (frames made in `update`, played by
+        // the widget itself), the still until then.
+        let anim = app.gif_anim(&g.url);
+        let face: El<'a> = match (anim, app.gif_thumb(&g.url)) {
+            (Some(a), _) => super::anim_image::anim_image(
+                a.clone(),
+                app.anim.epoch,
+                app.picker_playing(),
+                tile_w,
+                h,
+            )
+            .content_fit(iced::ContentFit::Cover)
+            .into(),
+            (None, Some(handle)) => image(handle.clone())
                 .width(tile_w)
                 .height(h)
                 .content_fit(iced::ContentFit::Cover)
                 .into(),
-            None => container(icon(Icon::Image, 24.0, p.text_muted))
+            (None, None) => container(icon(Icon::Image, 24.0, p.text_muted))
                 .center_x(tile_w)
                 .center_y(h)
                 .style(theme::rounded_bg(p.bg_app, 4.0))
@@ -309,9 +323,7 @@ fn gif_grid<'a>(app: &'a App, gifs: &[Gif], tile_w: f32, gap: f32) -> El<'a> {
                 .align_x(iced::alignment::Horizontal::Right)
                 .padding(4),
         ];
-        let i = usize::from(heights[1] < heights[0]);
-        heights[i] += h + gap;
-        cols[i].push(cell.into());
+        cols[t.col].push(cell.into());
     }
     let [left, right] = cols;
     row![

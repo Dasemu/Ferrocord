@@ -4,10 +4,7 @@
 use std::process::Command;
 
 fn run(exe: &str, arg: &str) -> (bool, String) {
-    let out = Command::new(exe)
-        .arg(arg)
-        .output()
-        .expect("run the binary");
+    let out = Command::new(exe).arg(arg).output().expect("run the binary");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).trim().to_owned(),
