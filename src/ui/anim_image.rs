@@ -79,6 +79,8 @@ impl AnimImage {
 struct State {
     /// Time of the last redraw: the frame shown is picked from it.
     now: Option<Instant>,
+    /// The redraw time this image asked for last (frame statistics).
+    asked: Option<Instant>,
 }
 
 /// Frame index to draw: the first frame while paused.
@@ -135,11 +137,17 @@ where
         viewport: &Rectangle,
     ) {
         if let Event::Window(window::Event::RedrawRequested(now)) = event {
-            tree.state.downcast_mut::<State>().now = Some(*now);
+            let state = tree.state.downcast_mut::<State>();
+            let visible = layout.bounds().intersects(viewport);
+            if super::frame_stats::enabled() && visible && self.playing {
+                let before = shown_index(&self.anim, self.epoch, state.now, self.playing);
+                let after = shown_index(&self.anim, self.epoch, Some(*now), self.playing);
+                super::frame_stats::record(*now, state.asked.take(), before != after);
+            }
+            state.now = Some(*now);
             // Off-screen images stop asking; scrolling back redraws them.
-            if layout.bounds().intersects(viewport)
-                && let Some(at) = next_redraw(&self.anim, self.epoch, *now, self.playing)
-            {
+            if visible && let Some(at) = next_redraw(&self.anim, self.epoch, *now, self.playing) {
+                state.asked = Some(at);
                 shell.request_redraw_at(at);
             }
         }

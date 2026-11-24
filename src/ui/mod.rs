@@ -1,6 +1,7 @@
 //! Views: pure functions `&App -> Element<Message>`.
 
 pub mod anim_image;
+pub mod frame_stats;
 pub mod chat;
 pub mod context_menu;
 pub mod cosmetics;
@@ -37,6 +38,7 @@ pub type El<'a> = Element<'a, Message>;
 
 /// View of the (only) main window, in the shape `iced::daemon` expects.
 pub fn view_window(app: &App, _window: iced::window::Id) -> El<'_> {
+    frame_stats::view_built();
     view(app)
 }
 

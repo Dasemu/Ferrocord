@@ -1743,31 +1743,48 @@ pub mod cosmetics {
             [255, 220, 120],
             [160, 255, 190],
         ];
-        let face = |n: u32| {
-            anim::from_rgba_frames(
-                colors
-                    .iter()
-                    .map(|c| (n, n, dot_face(n, *c), Duration::from_millis(150)))
-                    .collect(),
-            )
+        // Like a real animated avatar: a 60-frame GIF at 30 ms, run
+        // through the same limits as a downloaded one.
+        let face = |n: u32, class: Class| {
+            let frames = (0..60)
+                .map(|i| {
+                    (
+                        n,
+                        n,
+                        dot_face(n, colors[(i / 15) % colors.len()]),
+                        Duration::from_millis(30),
+                    )
+                })
+                .collect();
+            anim::from_frames_limited(frames, &class.limits()).ok()
         };
-        for size in [anim_sizes::AV_POP, 80] {
-            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, size) {
-                out.push((url, Class::Avatar, face(48)));
+        for (size, class) in [(anim_sizes::AV_POP, Class::Avatar), (80, Class::AvatarList)] {
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, &u, size)
+                && let Some(a) = face(48, class)
+            {
+                out.push((url, class, a));
             }
         }
+        // Like a real decoration: a 3 s APNG at 60 fps (180 frames).
         if let Some(d) = &u.avatar_decoration {
-            for size in [anim_sizes::DEC_LIST, anim_sizes::DEC_POP] {
+            for (size, class) in [
+                (anim_sizes::DEC_LIST, Class::DecorationList),
+                (anim_sizes::DEC_POP, Class::Decoration),
+            ] {
                 let n = size.min(96);
-                out.push((
-                    d.url(cdn, size, true),
-                    Class::Decoration,
-                    anim::from_rgba_frames(
-                        (0..12)
-                            .map(|i| (n, n, ring(n, i as f32 * 0.52), Duration::from_millis(80)))
-                            .collect(),
-                    ),
-                ));
+                let frames = (0..180)
+                    .map(|i| {
+                        (
+                            n,
+                            n,
+                            ring(n, i as f32 * std::f32::consts::TAU / 180.0),
+                            Duration::from_nanos(1_000_000_000 / 60),
+                        )
+                    })
+                    .collect();
+                if let Ok(a) = anim::from_frames_limited(frames, &class.limits()) {
+                    out.push((d.url(cdn, size, true), class, a));
+                }
             }
         }
         out

@@ -383,6 +383,31 @@ fn build(raws: Vec<Raw>) -> Anim {
     }
 }
 
+/// Runs ready RGBA frames through the same limits as a decoded file
+/// (frame / byte caps, downscaling, rounding): mock mode uses it so its
+/// cosmetics behave like real ones, and tests use it to measure pacing.
+pub fn from_frames_limited(
+    frames: Vec<(u32, u32, Vec<u8>, Duration)>,
+    lim: &Limits,
+) -> Result<Anim, AnimError> {
+    let it = frames.into_iter().map(|(w, h, px, d)| {
+        let buf = image::RgbaImage::from_raw(w, h, px).ok_or(image::ImageError::Limits(
+            image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
+        ))?;
+        Ok(image::Frame::from_parts(
+            buf,
+            0,
+            0,
+            image::Delay::from_saturating_duration(d),
+        ))
+    });
+    let raws = collect(image::Frames::new(Box::new(it)), lim)?;
+    if raws.len() < 2 {
+        return Err(AnimError::NotAnimated);
+    }
+    Ok(build(raws))
+}
+
 /// Builds an animation from ready RGBA frames (mock data and tests).
 pub fn from_rgba_frames(frames: Vec<(u32, u32, Vec<u8>, Duration)>) -> Anim {
     build(
