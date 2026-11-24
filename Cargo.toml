@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.16.0"
+version = "0.16.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
@@ -25,6 +25,11 @@ video = [
     "dep:openh264", "dep:symphonia", "dep:matroska-demuxer",
     "dep:rusty_vp9", "dep:vp8-decoder", "dep:libloading", "dep:windows",
 ]
+
+[workspace]
+members = [".", "crates/ferrocord-plugin-sdk"]
+# The example plugins build for wasm32-unknown-unknown in their own workspace.
+exclude = ["examples/plugins"]
 
 [[bin]]
 name = "ferrocord"
@@ -72,8 +77,8 @@ qrcode = { version = "0.14", default-features = false }
 # Grapheme clusters, so keycaps, flags and ZWJ emoji are never split (already in the tree via iced).
 unicode-segmentation = "1"
 emojis = "0.9"
-# Reads font tables to tell a drawable (CBDT) system emoji font from a COLRv1 one (already in the tree via fontdb).
-ttf-parser = "0.25"
+# Script type of cosmic-text's font fallback trait (Twemoji first); already in the tree via cosmic-text.
+unicode-script = "0.5"
 # System UI language for X-Discord-Locale / IDENTIFY (already in the tree via iced).
 sys-locale = "0.3"
 # IANA time zone for X-Discord-Timezone (already in the tree via chrono).
@@ -94,6 +99,17 @@ audiopus_sys = { version = "0.2", features = ["static"] }
 # Microphone capture and speaker output (ALSA/PulseAudio/PipeWire via ALSA, WASAPI, CoreAudio);
 # also the video helper's sound output.
 cpal = "0.16"
+# Plugins (`src/plugins/`): pure-Rust WebAssembly interpreter (no JIT, small,
+# fuel-metered); the engine is created only when a plugin is enabled.
+# `auto-dispatch` is required: without it debug builds use tail-call dispatch
+# without the tail-call optimisation and a long wasm loop overflows the stack.
+wasmi = { version = "2.0.2", default-features = false, features = ["std", "validate", "auto-dispatch"] }
+# ABI types shared with plugins (workspace member; no guest code).
+ferrocord-plugin-sdk = { path = "crates/ferrocord-plugin-sdk", default-features = false }
+# plugin.toml manifests (reuses the toml_parser already in the tree).
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+# `.ferroplug` packages (zip, deflate through the flate2 already in the tree).
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
 
 # Login helper (`ferrocord-login` only): Discord's login page in the OS
 # webview (WebView2 on Windows, WebKitGTK 4.1 on Linux); the app links neither.
@@ -119,9 +135,10 @@ vp8-decoder = { version = "0.1", optional = true }
 libloading = { version = "0.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# Registers the toast AppUserModelID (else toasts show as "PowerShell");
-# same version already in the tree via the notification backend.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_Shell"] }
+# Registers the toast AppUserModelID (else toasts show as "PowerShell") and
+# attaches `--version` / `--help` output to the parent console; same version
+# already in the tree via the notification backend.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Registry", "Win32_UI_Shell"] }
 # Video helper only: Media Foundation decoder transforms (H.264, H.265, AV1, AAC)
 # through COM; same version already in the tree (iced_winit, wry, tao).
 windows = { version = "0.62", optional = true, features = [
@@ -143,9 +160,18 @@ openmls_rust_crypto = "0.5"
 # Fake StatusNotifierWatcher for the tray integration test (same zbus as ksni).
 zbus = "5"
 tempfile = "3"
+# Hostile test plugins written as WebAssembly text (sandbox tests).
+wat = "1"
+# Reads the bundled Twemoji's tables in tests (already in the tree via fontdb).
+ttf-parser = "0.25"
 # Encodes an APNG fixture in the animation tests (already compiled for `image`).
 png = "0.18"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "net", "time"] }
+# Renders scenes with the software renderer iced already uses (ferroiced's
+# iced_tiny_skia and its tiny-skia, both already in the tree) to compare
+# partial and full redraws pixel by pixel.
+iced_tiny_skia = { version = "0.14", default-features = false, features = ["image"] }
+tiny-skia = "0.11"
 
 [profile.release]
 opt-level = 3

@@ -11,6 +11,7 @@ pub mod embeds;
 pub mod emoji;
 pub mod features;
 pub mod folders;
+pub mod gif_anim;
 pub mod gifs;
 pub mod images;
 pub mod input;
@@ -20,11 +21,14 @@ pub mod markdown;
 pub mod media_anim;
 pub mod members;
 pub mod message;
+pub mod nitro;
 pub mod panels;
+pub mod plugins;
 pub mod profile;
 pub mod rail;
 pub mod search;
 pub mod servers;
+pub mod settings;
 pub mod state;
 pub mod stickers;
 pub mod upload;
@@ -138,6 +142,13 @@ pub struct App {
     pub gif_thumbs: images::ImageCache,
     /// Saved GIFs (frecency settings).
     pub gif_favorites: gifs::Favorites,
+    /// Decoded animations of the picker tiles near view (freed on close).
+    pub gif_anims: gif_anim::PickerAnims,
+    /// On-disk cache of picker media (`None` in mock mode / without a
+    /// cache directory).
+    pub gif_disk: Option<crate::media::disk_cache::DiskCache>,
+    /// The saved GIFs were prefetched this session.
+    pub gif_prefetched: bool,
     /// Serialises favourite saves (each is a read-modify-write).
     gif_favorites_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub sticker_picker: Option<stickers::StickerPicker>,
@@ -183,6 +194,8 @@ pub struct App {
     /// "Open at login" (the autostart file exists).
     pub autostart: bool,
     pub settings_open: bool,
+    /// User Settings screen: categories, synced and local settings.
+    pub settings: settings::SettingsState,
     /// Animation clock, hover target and decoded frames.
     pub anim: anim::AnimState,
     /// Profile popout, fetched profiles and effect configs.
@@ -194,6 +207,8 @@ pub struct App {
     /// The one video that is downloading or playing.
     pub video: Option<video::Playback>,
     video_session: u32,
+    /// Plugins: no engine or thread until one is enabled.
+    pub plugins: crate::plugins::Plugins,
 }
 
 pub fn now_ms() -> u64 {
@@ -232,6 +247,7 @@ impl App {
         });
 
         let prefs = Prefs::load(&store);
+        let local_settings = settings::LocalSettings::load(&store);
         let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
         let start_hidden = cfg.minimized || prefs.start_minimized;
         let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
@@ -270,6 +286,14 @@ impl App {
             gif_picker: None,
             gif_thumbs: images::ImageCache::new(gifs::THUMB_BUDGET),
             gif_favorites: gifs::Favorites::default(),
+            gif_anims: gif_anim::PickerAnims::default(),
+            gif_disk: cfg.cache_dir.as_ref().filter(|_| !cfg.mock).map(|d| {
+                crate::media::disk_cache::DiskCache::new(
+                    d.join("gifs"),
+                    crate::media::disk_cache::GIF_CACHE_CAP,
+                )
+            }),
+            gif_prefetched: false,
             gif_favorites_lock: Default::default(),
             sticker_picker: None,
             draft: Vec::new(),
@@ -301,15 +325,28 @@ impl App {
             prefs,
             autostart: false,
             settings_open: false,
+            settings: settings::SettingsState::new(local_settings),
             anim: anim::AnimState::default(),
             profiles: profile::ProfileState::default(),
             tray_control: None,
             voice,
             video: None,
             video_session: 0,
+            plugins: crate::plugins::Plugins::new(
+                cfg.plugins_dir.clone(),
+                cfg.plugin_store_path(),
+                !cfg.mock,
+            ),
             cfg,
         };
         app.window_focused = app.win.visible;
+        // "Play GIFs automatically" is synced; the local copy holds until
+        // Discord's value arrives.
+        app.settings.synced.seed(
+            crate::net::user_settings::Synced::GifAutoPlay,
+            crate::net::user_settings::Value::Bool(app.prefs.autoplay_gifs),
+        );
+        app.apply_settings();
         let open_window = app.run_window_action(first_action);
         let autostart = if app.cfg.mock {
             Task::none()
@@ -360,9 +397,10 @@ impl App {
             })
         };
         let sweep = app.sweep_videos();
+        let plugins = app.boot_plugins();
         (
             app,
-            Task::batch([open_window, fonts, restore, autostart, sweep]),
+            Task::batch([open_window, fonts, restore, autostart, sweep, plugins]),
         )
     }
 
@@ -439,12 +477,23 @@ impl App {
         self.mock_load_cosmetics();
         self.mock_load_media_anims();
         // Mock sticker images, under the CDN URLs the views ask for.
-        for (st, rgb) in mock::mock_stickers().into_iter().zip([
-            [255u8, 140, 60],
-            [230, 70, 70],
-            [90, 200, 120],
-            [0, 0, 0],
-        ]) {
+        let iced_sticker = Sticker {
+            id: Snowflake(1105),
+            name: String::new(),
+            format: StickerFormat::Png,
+            available: true,
+        };
+        for (st, rgb) in mock::mock_stickers()
+            .into_iter()
+            .chain([iced_sticker])
+            .zip([
+                [255u8, 140, 60],
+                [230, 70, 70],
+                [90, 200, 120],
+                [0, 0, 0],
+                [120, 190, 250],
+            ])
+        {
             if let Some(url) = st.image_url(&self.cfg.cdn_url) {
                 let (n, px) = mock::mock_emoji(rgb);
                 self.images.insert(
@@ -454,7 +503,12 @@ impl App {
                 );
             }
         }
-        for (id, rgb) in [(1001u64, [247u8, 130, 52]), (1002, [250, 200, 60])] {
+        for (id, rgb) in [
+            (1001u64, [247u8, 130, 52]),
+            (1002, [250, 200, 60]),
+            (1003, [120, 190, 250]),
+            (1004, [170, 120, 250]),
+        ] {
             let (n, px) = mock::mock_emoji(rgb);
             self.images.insert(
                 emoji_url(&self.cfg.cdn_url, Snowflake(id)),
@@ -662,7 +716,12 @@ impl App {
                 self.chat.mark_read(mock::CH_GENERAL);
             }
         }
-        self.settings_open = screen == Some(ScreenshotScreen::Settings);
+        self.settings_open = matches!(
+            screen,
+            Some(ScreenshotScreen::Settings | ScreenshotScreen::SettingsPage(_))
+        );
+        self.mock_settings(screen);
+        self.mock_plugin_screen(screen);
         let _ = self.sync_members();
         let ctx = self.ctx();
         self.chat
@@ -691,6 +750,27 @@ impl App {
             p.finish(generation, Ok(mock::gifs("")));
             p.show(page);
             self.gif_picker = Some(p);
+        }
+        if screen == Some(ScreenshotScreen::EmojiLocked) {
+            // Another server's emoji picked from the composer without Nitro.
+            let mut picker = emoji::EmojiPicker::open(
+                emoji::PickerTarget::Composer,
+                self.chat.guild(mock::GUILD_RUST),
+            );
+            picker.section = emoji::Section::Server(mock::GUILD_ICED);
+            picker.locked = emoji::find_custom(&self.chat.guilds, Snowflake(1003))
+                .map(|(_, e)| Emoji::custom(e));
+            self.emoji_picker = Some(actions::OpenPicker {
+                picker,
+                at: iced::Point::new(1000.0, 752.0),
+            });
+        }
+        if screen == Some(ScreenshotScreen::StickersLocked) {
+            self.sticker_picker = Some(stickers::StickerPicker {
+                at: iced::Point::new(960.0, 752.0),
+                query: String::new(),
+                locked: Some(Snowflake(1105)),
+            });
         }
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
@@ -816,7 +896,8 @@ impl App {
             now_ms: now_ms(),
             open_channel: self.open_channel(),
             window_focused: self.window_focused,
-            notification_preview: self.cfg.notification_preview,
+            notification_preview: self.cfg.notification_preview
+                && self.settings.local.notify_preview,
         }
     }
 
@@ -828,12 +909,19 @@ impl App {
             Message::Done(d) => self.on_done(d),
             Message::Tray(ev) => self.on_tray(ev),
             Message::Voice(ev) => self.on_voice_event(ev),
+            Message::Plugin(m) => self.on_plugin(m),
         };
         let task = match self.toast_timer(toast_before) {
             Some(t) => Task::batch([task, t]),
             None => task,
         };
         self.sync_tray();
+        // However the picker closed, its tile frames go with it.
+        if self.gif_picker.is_none()
+            && (self.gif_anims.scroll_y != 0.0 || !self.gif_anims.cache.is_empty())
+        {
+            self.gif_anims.clear();
+        }
         let task = if self.video.is_some() {
             Task::batch([task, self.stop_video_if_left()])
         } else {
@@ -1019,6 +1107,7 @@ impl App {
             }
             Ui::Logout => self.logout(),
             Ui::Voice(v) => self.update_voice(v),
+            Ui::Settings(s) => self.update_settings(s),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -1055,7 +1144,6 @@ impl App {
             | Ui::CloseProfile
             | Ui::HoverEnter(_)
             | Ui::HoverLeave(_)
-            | Ui::AnimTick(_)
             | Ui::ToggleReduceMotion
             | Ui::ToggleAutoplayGifs => self.update_cosmetics(u),
             other => self.update_action(other),
@@ -1126,6 +1214,7 @@ impl App {
             },
             |_| Message::Done(Done::Ignored),
         );
+        self.plugin_channel_switch();
         let Some(c) = c else {
             return Task::batch([persist, members]);
         };
@@ -1247,7 +1336,14 @@ impl App {
     }
 
     fn send(&mut self) -> Task<Message> {
-        let content = self.composer.text().trim().to_owned();
+        let mut content = self.composer.text().trim().to_owned();
+        if self
+            .settings
+            .synced
+            .bool(crate::net::user_settings::Synced::ConvertEmoticons)
+        {
+            content = settings::convert_emoticons(&content);
+        }
         let Some(c) = self.open_channel() else {
             return Task::none();
         };
@@ -1261,6 +1357,9 @@ impl App {
         }
         if content.is_empty() {
             return Task::none();
+        }
+        if let Some(t) = self.plugin_intercept_send(c, &content) {
+            return t;
         }
         self.composer.clear();
         self.send_text(c, content)
@@ -1331,6 +1430,10 @@ impl App {
 
     fn logout(&mut self) -> Task<Message> {
         self.settings_open = false;
+        // Account settings belong to the account; local ones stay.
+        self.settings = settings::SettingsState::new(self.settings.local.clone());
+        self.gateway.set_custom_status(None);
+        self.apply_settings();
         let me = self.chat.me_id();
         let _ = self.voice.leave(me);
         self.voice = voice::Voice::with_prefs(self.voice.prefs.clone());
@@ -1460,6 +1563,7 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        self.plugin_observe(&ev);
         tasks.push(self.voice_on_gateway(&ev));
         if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
             self.cache_folders();
@@ -1481,6 +1585,7 @@ impl App {
             }
             tasks.push(self.request_images());
             tasks.push(self.sync_members());
+            tasks.push(self.load_user_settings());
         }
         if matches!(ev, Event::MessageCreate(_) | Event::MemberList(_)) {
             tasks.push(self.request_images());
@@ -1488,7 +1593,10 @@ impl App {
         for fx in effects {
             match fx {
                 Effect::Notify(_) if self.prefs.muted => {}
-                Effect::Notify(n) => tasks.push(notify(n, self.cfg.mock)),
+                Effect::Notify(n) => {
+                    tasks.push(notify(n, self.cfg.mock, self.settings.local.notify_sound));
+                    tasks.push(self.flash_taskbar());
+                }
                 Effect::Ack(c, m) if !self.cfg.mock => {
                     let rest = self.rest.clone();
                     tasks.push(Task::perform(async move { rest.ack(c, m).await }, |_| {
@@ -1551,6 +1659,7 @@ impl App {
                 Task::none()
             }
             Done::Voice(d) => self.on_voice_done(d),
+            Done::Settings(d) => self.on_settings_done(*d),
             Done::ScreenshotReady => iced::window::latest()
                 .and_then(iced::window::screenshot)
                 .map(|s| Message::Done(Done::Screenshot(s))),
@@ -1647,6 +1756,7 @@ impl App {
                     if let Some(w) = self.chat.messages.get_mut(&channel) {
                         w.synced = true;
                     }
+                    self.plugin_history(channel);
                     Task::batch([
                         Task::perform(
                             async move { store.blocking(move |s| s.upsert_messages(&to_store)).await },
@@ -1745,6 +1855,11 @@ impl App {
                 self.on_files_ready(files)
             }
             Done::Upload { id, event } => self.on_upload_event(id, event),
+            Done::ImageCopy {
+                channel,
+                reply,
+                result,
+            } => self.on_image_copy(channel, reply, result),
             Done::Around {
                 channel,
                 target,
@@ -1757,7 +1872,21 @@ impl App {
                 if let Some(p) = self.gif_picker.as_mut() {
                     p.finish(generation, result);
                 }
-                self.request_gif_thumbs()
+                // New results start at the top.
+                self.gif_anims.scroll_y = 0.0;
+                Task::batch([
+                    iced::widget::operation::snap_to(
+                        iced::widget::Id::new(gif_anim::GRID_ID),
+                        iced::widget::operation::RelativeOffset::START,
+                    ),
+                    self.request_gif_thumbs(),
+                    self.request_gif_anims(),
+                ])
+            }
+            Done::GifAnim { key, anim } => self.on_gif_anim(key, anim),
+            Done::GifPrefetched(n) => {
+                tracing::debug!(files = n, "saved GIFs prefetched");
+                Task::none()
             }
             Done::GifThumb { key, image } => {
                 match image {
@@ -1778,7 +1907,11 @@ impl App {
                 if let Some(e) = self.gif_favorites.finish(generation, result, rollback) {
                     self.toast = Some(format!("Could not save your favorite GIFs: {e}"));
                 }
-                self.request_gif_thumbs()
+                Task::batch([
+                    self.request_gif_thumbs(),
+                    self.request_gif_anims(),
+                    self.prefetch_gif_favorites(),
+                ])
             }
             Done::ScrollToMessage(m) => jump::scroll_to_message(m),
             Done::ClearHighlight(m) => {
@@ -1998,15 +2131,16 @@ impl App {
                 );
             }
         }
-        if self.emoji_picker.is_some()
-            && let Some(g) = self
-                .open_channel()
-                .and_then(|c| self.chat.channels.get(&c))
-                .and_then(|c| c.guild_id)
-                .and_then(|g| self.chat.guild(g))
-        {
-            for e in g.emojis.iter().filter(|e| e.available) {
+        if let Some(open) = &self.emoji_picker {
+            let access = self.nitro_access();
+            for (_, e, _) in emoji::shown_custom(&open.picker, &self.chat.guilds, &access) {
                 urls.push(emoji_url(&self.cfg.cdn_url, e.id));
+            }
+            // Sidebar icons of the servers with emoji.
+            for g in emoji::server_sections(&self.chat.guilds, &access) {
+                if let Some(u) = self.rest.guild_icon_url(g, 96) {
+                    urls.push(u);
+                }
             }
         }
         if let Some(l) = &self.chat.member_list {
@@ -2157,10 +2291,8 @@ impl App {
                     .map(|()| Message::Ui(Ui::ShowWindow)),
             );
         }
-        // Ticks exist only while something animated is hovered or the
-        // popout shows one: idle CPU stays flat otherwise.
-        if self.anim.active(self.prefs.reduce_motion) {
-            subs.push(iced::time::every(anim::TICK).map(|at| Message::Ui(Ui::AnimTick(at))));
+        if let Some(p) = self.plugin_subscription() {
+            subs.push(p);
         }
         if self.cfg.mock {
             return Subscription::batch(subs);
@@ -2222,8 +2354,12 @@ impl App {
         if let Some(v) = self.voice_subscription() {
             subs.push(v);
         }
-        // Live microphone meter in the voice settings while connected.
-        if self.settings_open && self.voice.conn.is_some() && !self.cfg.mock {
+        // Live microphone meter in the voice settings while connected or
+        // testing the microphone.
+        if self.settings_open
+            && (self.voice.conn.is_some() || self.settings.mic_test.is_some())
+            && !self.cfg.mock
+        {
             subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Ui(Ui::Tick)));
         }
         Subscription::batch(subs)
@@ -2366,7 +2502,7 @@ pub fn escape_markup(s: &str) -> String {
     out
 }
 
-fn notify(n: state::Notification, mock: bool) -> Task<Message> {
+fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
     if mock {
         return Task::none();
     }
@@ -2379,6 +2515,21 @@ fn notify(n: state::Notification, mock: bool) -> Task<Message> {
                     .summary(&escape_markup(&n.title))
                     .body(&escape_markup(&n.body))
                     .icon("dev.ferro.ferrocord");
+                // "Enable Notification Sounds": the desktop's message sound
+                // (freedesktop sound-name / Windows default toast audio),
+                // or an explicitly silent notification.
+                #[cfg(all(unix, not(target_os = "macos")))]
+                if sound {
+                    note.sound_name("message-new-instant");
+                } else {
+                    note.hint(notify_rust::Hint::SuppressSound(true));
+                }
+                #[cfg(windows)]
+                if sound {
+                    note.sound_name("Default");
+                }
+                #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+                let _ = sound;
                 // The registered AppUserModelID (`win_app_id`): without it
                 // the toast is attributed to PowerShell.
                 #[cfg(windows)]

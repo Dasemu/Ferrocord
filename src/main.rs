@@ -10,7 +10,12 @@ use ferrocord::error::log_sink::LogSink;
 use ferrocord::tray::instance::{self, Role};
 use tracing_subscriber::EnvFilter;
 
+/// Usage line shown by `ferrocord --help`.
+const USAGE: &str =
+    "ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <screen> <out.png>]";
+
 fn main() -> iced::Result {
+    ferrocord::cli::handle_info_flags("ferrocord", USAGE);
     let _ = ferrocord::config::PROCESS_START.set(std::time::Instant::now());
     // Default to the CPU renderer: it keeps idle RSS around 50 MB, while
     // wgpu costs 100-200 MB (driver dependent) for no visible gain in a
@@ -67,7 +72,6 @@ fn main() -> iced::Result {
         ferrocord::win_app_id::register();
     }
 
-    let theme = ferrocord::ui::theme::FerroTheme::new(cfg.theme).iced_theme();
     // A daemon, not an application: hiding to the tray closes the window
     // (freeing the renderer) while the app keeps running.
     let app = iced::daemon(
@@ -77,17 +81,12 @@ fn main() -> iced::Result {
     )
     .title(|app: &App, _window: iced::window::Id| app.title())
     .subscription(App::subscription)
-    .theme(move |_: &App, _window: iced::window::Id| theme.clone())
+    // Appearance theme and zoom level change at run time.
+    .theme(|app: &App, _window: iced::window::Id| app.theme.iced_theme())
+    .scale_factor(|app: &App, _window: iced::window::Id| app.zoom())
     .default_font(ferrocord::ui::theme::INTER)
     .antialiasing(true);
-    // Colour emoji: a drawable system Noto Color Emoji, else the bundled
-    // copy under its own family name (see `ui::emoji_font`).
-    use ferrocord::ui::emoji_font::{self, EmojiFont};
-    let choice = emoji_font::pick_emoji_font();
-    emoji_font::set_emoji_font(choice);
-    tracing::info!(font = ?choice, "colour emoji font");
-    match choice {
-        EmojiFont::Bundled => app.font(ferrocord::ui::theme::NOTO_COLOR_EMOJI).run(),
-        EmojiFont::System => app.run(),
-    }
+    // Colour emoji: the bundled Twemoji (see `ui::emoji_font`).
+    ferrocord::ui::emoji_font::install();
+    app.run()
 }

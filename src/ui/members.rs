@@ -5,7 +5,7 @@ use iced::{Alignment, Color, Length, Padding};
 
 use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence, cosmetics};
-use crate::app::anim::Hover;
+use crate::app::anim::{Hover, Zone};
 use crate::app::members::MemberListState;
 use crate::app::{App, Message, Ui};
 use crate::net::model::*;
@@ -116,9 +116,10 @@ fn person_row<'a>(
     if user.bot {
         name_row = name_row.push(bot_tag(app));
     }
+    let h = Hover::row(user.id, Zone::Members);
     let content: El<'a> = container(
         row![
-            avatar_with_presence(app, user, 32.0, presence, p.bg_sidebar),
+            avatar_with_presence(app, user, 32.0, presence, p.bg_sidebar, app.list_phase(h),),
             name_row,
         ]
         .spacing(12)
@@ -128,10 +129,6 @@ fn person_row<'a>(
     .width(Length::Fill)
     .into();
     let content = cosmetics::with_nameplate(app, user, content);
-    let h = Hover {
-        user: user.id,
-        message: None,
-    };
     iced::widget::mouse_area(cosmetics::clickable(content, user, guild))
         .on_enter(Message::Ui(Ui::HoverEnter(h)))
         .on_exit(Message::Ui(Ui::HoverLeave(h)))

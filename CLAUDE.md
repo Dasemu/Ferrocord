@@ -9,15 +9,18 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-- `cargo build --release`.
+- `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
+- Plugins: `examples/plugins/build.sh` (needs `rustup target add wasm32-unknown-unknown`) builds the
+  example plugins that `tests/plugins_examples.rs` loads (skipped without them unless
+  `FERROCORD_EXPECT_PLUGINS=1`); `cargo test -p ferrocord-plugin-sdk` for the SDK.
 - Shared machine: `export CARGO_BUILD_JOBS=2`.
 
 ## Architecture
 See `docs/architecture.md` (shared Ferro* skeleton) and `docs/protocol.md`
-(gateway, REST, rate limits, QR login, UI reference), `docs/voice.md` (voice). Layout: `src/app`
+(gateway, REST, rate limits, QR login, UI reference), `docs/voice.md` (voice). Plugins: `docs/plugins.md`. Layout: `src/app`
 (state + pure reducers), `src/ui` (views + theme), `src/net` (gateway, REST,
 remote auth), `src/store` (SQLite cache), `src/auth` (login + keyring).
 
@@ -63,8 +66,17 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   hCaptcha on our own page or fake an origin; never solve captchas. REST identity headers live in `net/identity.rs`.
 - Voice: static libopus (needs `cmake`), `cpal` (`libasound2-dev`); the voice subscription exists
   only in a call. DAVE is mandatory (close 4017); keep `davey` calls under `catch_unwind`.
-- Unicode emoji need the colour emoji span (`ui::emoji_font::emoji_text`/`emoji_runs`, family from `emoji_font()`); `text_editor` (composer) cannot take spans and falls back to the loaded font. The bundled TTF (OFL) is renamed "Ferrocord Color Emoji": a same-named system face (COLRv1 Noto, which swash draws blank/mono) would shadow it. A system Noto is used only if every face of it is CBDT/sbix (`pick_emoji_font`).
+- Unicode emoji are Twemoji (`assets/fonts/Twemoji.ttf`, COLRv0, CC-BY 4.0, family "Ferrocord Twemoji"): use the emoji span (`ui::emoji_font::emoji_text`/`emoji_runs`/`emoji_font()`). `emoji_font::install()` (in `main`) loads it zero-copy and puts it first in cosmic-text's common fallback, so the composer (`text_editor`, no spans) gets Twemoji too. swash draws COLRv0 and CBDT/sbix in colour, never COLRv1: do not swap in a COLRv1 or SVG-only font. No system emoji font is used.
+- Custom emoji / stickers without Nitro: `app/nitro.rs` decides (`premium_type`, the item's guild vs the open one, `available`, emoji `roles`, sticker format). Locked items stay visible with a lock; picking one shows a footer with an explicit "Send as image" (scaled PNG / animated GIF upload). Never send a locked item silently or as `<:name:id>`.
+- User Settings (`app/settings.rs`, `ui/settings.rs`, `docs/protocol.md` §14): account settings go through
+  `settings-proto/1` (`net/user_settings.rs`): PATCH only the touched top-level fields, each complete
+  (sent top-level fields REPLACE the stored ones), read-modify-write keeping unknown bytes, debounced and
+  rolled back on failure. Local ones live in `meta("pref.settings")`. Never add a switch the app does not honour.
 - `text_editor` `min_height`/`max_height` limit the text area, then the padding is added: pass `composer::text_height_limits`, never a total height (the 68 px composer bug).
+- Animated avatars/decorations: stills in lists, chat, DM list and user panel, playing only while
+  their own row is hovered (`App::list_phase`, `anim::Hover` + `Zone`), like the official client;
+  only the profile popout plays them unhovered. Never make list cosmetics play unhovered: each
+  costs 60 window redraws/s.
 - Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Container `shadow` is safe with ferroiced (tiny-skia clips it to the damage region), but
   the house style keeps the gradient header and sets no shadow (`ui/theme.rs` guard test).
 - Video helper (`ferrocord-player`): MP4/MOV is read by our own `mp4.rs` (progressive + fragmented `moof`, QuickTime);
@@ -77,3 +89,16 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   time, never imported; CI checks with dumpbin). OpenH264/VP8/VP9 stay the default; the platform decoder takes over at
   run time when they fail. `ferrocord-player --backends` lists what the system has; `FERROCORD_PLATFORM_DECODERS=0`
   turns them off, `FERROCORD_VIDEO_DECODER=platform` prefers them. Never link `ffmpeg-sys` or bundle a decoder.
+- Plugins (`src/plugins/`, `app/plugins.rs`, `ui/plugins.rs`, SDK in `crates/ferrocord-plugin-sdk`): wasmi with
+  fuel + 16 MiB memory per plugin, one worker thread, MessagePack ABI v1 (structs as named maps; additive changes only).
+  Zero cost with none enabled: no engine, thread or subscription (`tests/plugins_zero_cost.rs`). Never give plugins raw
+  gateway/REST access, a token, files or timers; account actions (`send_message`, reactions) need a user-action grant.
+  wasmi needs its `auto-dispatch` feature (else debug builds overflow the stack on long wasm loops). Plugins never draw:
+  new extension points must stay declarative and host-rendered.
+- Animations never tick the app: draw them with `ui::anim_image` (self-playing, redraws only when its own
+  next frame is due, on a shared 60 Hz grid, only while visible) with `App::anim_clock(phase)`; effect layers
+  pass a `Timeline`. Size `anim::Class::limits` to the drawn size so typical assets keep every frame (frame
+  caps decimate = lower fps). `FERROCORD_FRAME_STATS=1` logs redraws/views/lateness; under Xvfb run
+  `xdotool windowfocus` first (unfocused windows pause animations).
+- GIF picker media go through `gif_anim::picker_bytes` (100 MB disk LRU in the cache dir, 4 downloads at a
+  time); tile animations live in `App::gif_anims` (near-view tiles only, freed when the picker closes).

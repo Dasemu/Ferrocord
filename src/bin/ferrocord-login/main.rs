@@ -45,6 +45,10 @@ fn fail(code: &str, message: impl Into<String>) -> ! {
 }
 
 fn main() {
+    ferrocord::cli::handle_info_flags(
+        "ferrocord-login",
+        "ferrocord-login (started by ferrocord, with FERROCORD_LOGIN_DATA_DIR set)",
+    );
     let Some(dir) = std::env::var_os(web_login::DATA_DIR_ENV).map(PathBuf::from) else {
         fail(code::FAILED, "no data directory given");
     };

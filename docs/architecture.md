@@ -138,8 +138,8 @@ pub struct FerroTheme { pub palette: Palette, pub metrics: Metrics, pub dark: bo
   client has one; selection follows the `FERRO_THEME` env var or config, and
   defaults to dark.
 * **Typography:** Inter (SIL OFL 1.1) embedded via `include_bytes!` and
-  registered with `iced::font::load`; Noto Color Emoji is used from the system
-  if available. Font sizes follow a small scale defined in `Metrics`.
+  registered with `iced::font::load`; Unicode emoji use the embedded Twemoji
+  COLRv0 font (CC-BY 4.0, `ui::emoji_font`), as the official client does. Font sizes follow a small scale defined in `Metrics`.
 * **Icons:** Lucide (ISC licence) SVGs embedded in `ui/icons.rs`. Official
   logos, icon sets and fonts of the service are never included.
 * **(app-specific)** The palette values, metrics and layout proportions that
@@ -310,3 +310,10 @@ single-instance lock (a second launch shows the window); `tray::autostart`
 writes `~/.config/autostart/dev.ferro.ferrocord.desktop` with `--minimized`.
 Preferences live in SQLite `meta` under `pref.*` (kept on logout). Flags:
 `--minimized`, `--no-tray`.
+
+**Plugins (`src/plugins/`, `app/plugins.rs`, `ui/plugins.rs`).** Sandboxed
+WebAssembly plugins (wasmi, fuel and memory limits) on one worker thread,
+declared by a manifest, reaching the app only through a capability-checked
+host ABI; account actions need a user-action grant and go through the app's
+own REST paths. Nothing runs while no plugin is enabled. See
+`docs/plugins.md`.

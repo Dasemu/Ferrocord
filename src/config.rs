@@ -42,6 +42,8 @@ pub enum ScreenshotScreen {
     Search,
     Compose,
     Settings,
+    /// One User Settings page (`settings-<category>`).
+    SettingsPage(crate::app::settings::Category),
     /// Long display name and status in the user panel.
     Panel,
     /// Right-click menu on a message.
@@ -80,6 +82,16 @@ pub enum ScreenshotScreen {
     GifTrending,
     /// GIF picker: the saved GIFs.
     GifFavorites,
+    /// Settings → Plugins with the example plugins installed.
+    Plugins,
+    /// The permission prompt shown before a plugin is enabled.
+    PluginPrompt,
+    /// Plugin decorations (badges, a note line, a highlight) on messages.
+    PluginDecorations,
+    /// Emoji picker on another server's emoji, with the Nitro lock footer.
+    EmojiLocked,
+    /// Sticker picker with a Nitro-locked sticker picked.
+    StickersLocked,
 }
 
 impl ScreenshotScreen {
@@ -121,6 +133,10 @@ impl ScreenshotScreen {
             "search" => Some(Self::Search),
             "compose" => Some(Self::Compose),
             "settings" => Some(Self::Settings),
+            s if s.starts_with("settings-") => {
+                crate::app::settings::Category::from_slug(&s["settings-".len()..])
+                    .map(Self::SettingsPage)
+            }
             "panel" | "userpanel" => Some(Self::Panel),
             "menu" | "context-menu" => Some(Self::Menu),
             "bell" | "notifications" => Some(Self::Bell),
@@ -145,6 +161,11 @@ impl ScreenshotScreen {
             "gifs" | "gif-picker" => Some(Self::Gifs),
             "gif-trending" => Some(Self::GifTrending),
             "gif-favorites" => Some(Self::GifFavorites),
+            "plugins" => Some(Self::Plugins),
+            "plugin-prompt" => Some(Self::PluginPrompt),
+            "plugin-decorations" => Some(Self::PluginDecorations),
+            "emoji-locked" => Some(Self::EmojiLocked),
+            "stickers-locked" => Some(Self::StickersLocked),
             _ => None,
         }
     }
@@ -213,6 +234,11 @@ pub struct Config {
     pub trace_startup: bool,
     pub data_dir: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    /// `<config dir>/plugins` (`FERROCORD_PLUGINS_DIR` overrides it; in
+    /// mock mode only the override is used).
+    pub plugins_dir: Option<PathBuf>,
+    /// Disposable caches (GIF picker media).
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -239,7 +265,7 @@ impl Config {
                     screenshot = Some((screen, PathBuf::from(out)));
                 }
                 "--help" | "-h" => {
-                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]".into());
+                    return Err("usage: ferrocord [--mock] [--minimized] [--no-tray] [--screenshot <login|guild|dms|embeds|search|compose|settings> <out.png>]\n       ferrocord --version | -V".into());
                 }
                 other => return Err(format!("unknown argument: {other}")),
             }
@@ -283,6 +309,12 @@ impl Config {
             state_dir: dirs
                 .as_ref()
                 .map(|d| d.state_dir().unwrap_or(d.data_dir()).to_path_buf()),
+            plugins_dir: match env("FERROCORD_PLUGINS_DIR") {
+                Some(d) => Some(PathBuf::from(d)),
+                None if mock => None,
+                None => dirs.as_ref().map(|d| d.config_dir().join("plugins")),
+            },
+            cache_dir: dirs.as_ref().map(|d| d.cache_dir().to_path_buf()),
         })
     }
 
@@ -303,6 +335,8 @@ impl Config {
             trace_startup: false,
             data_dir: None,
             state_dir: None,
+            plugins_dir: None,
+            cache_dir: None,
         }
     }
 
@@ -312,6 +346,14 @@ impl Config {
             return None;
         }
         self.data_dir.as_ref().map(|d| d.join("cache.sqlite3"))
+    }
+
+    /// The plugins' key-value store, `None` (in memory) in mock mode.
+    pub fn plugin_store_path(&self) -> Option<PathBuf> {
+        if self.mock {
+            return None;
+        }
+        self.data_dir.as_ref().map(|d| d.join("plugins.sqlite3"))
     }
 
     pub fn log_path(&self) -> Option<PathBuf> {
@@ -356,6 +398,12 @@ mod tests {
         let c = Config::from_args(args(&["--screenshot", "settings", "/tmp/x.png"])).unwrap();
         assert!(!c.tray);
         assert_eq!(c.screenshot.unwrap().0, ScreenshotScreen::Settings);
+        let c = Config::from_args(args(&["--screenshot", "settings-voice", "/tmp/x.png"])).unwrap();
+        assert_eq!(
+            c.screenshot.unwrap().0,
+            ScreenshotScreen::SettingsPage(crate::app::settings::Category::VoiceVideo)
+        );
+        assert!(Config::from_args(args(&["--screenshot", "settings-nope", "x"])).is_err());
     }
 
     #[test]

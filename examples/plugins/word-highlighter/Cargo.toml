@@ -1,0 +1,12 @@
+[package]
+name = "word-highlighter"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ferrocord-plugin-sdk.workspace = true

@@ -39,7 +39,7 @@ states or remote auth.
 | 0 | DISPATCH | ← | Tracks `s`; parsed by `types::parse_dispatch`. |
 | 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
 | 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`; same object as `X-Super-Properties`), presence. |
-| 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`); also saved with `PATCH /users/@me/settings`. |
+| 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`) plus the custom status as an activity (`{type: 4, name: "Custom Status", state, emoji}`); also saved in the settings proto (§14). IDENTIFY carries the same presence. |
 | 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, channels: {id: [[0,99]]}}`, sent while the member sidebar is open. |
 | 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
 | 7 | RECONNECT | ← | Close with 4000 and resume. |
@@ -140,11 +140,13 @@ client's retry. Ferrocord never solves a captcha and uses no solver service.
 | Jump | `GET .../messages?around={m}` / `?after={m}` |
 | Search | `GET /guilds/{g}/messages/search?content=&offset=` or `/channels/{c}/...` (202 + `retry_after` while indexing is retried, max 4 tries) |
 | Upload | `POST .../messages` `multipart/form-data`: `payload_json` + `files[n]`, streamed from disk with an explicit `Content-Length` |
-| Status | `PATCH /users/@me/settings {status}` |
+| Status | `PATCH /users/@me/settings-proto/1` (`status.status`, `status.custom_status`; §14) |
+| User settings | `GET`/`PATCH /users/@me/settings-proto/1` (§14) |
+| Profile edit | `PATCH /users/@me {global_name}`, `PATCH /users/@me/profile {pronouns, bio}` |
 | Mark read | `POST /channels/{c}/messages/{m}/ack` `{ token: null }` |
 | QR ticket | `POST /users/@me/remote-auth/login` `{ ticket }` with `X-Fingerprint` |
 | Fingerprint | `GET /experiments` (logged out) → `fingerprint` |
-| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US` (`{url, src, gif_src, preview, width, height}`); picking sends the Tenor `url` as text (shown back as a `gifv` embed). Opens on Favorites / Trending GIFs tiles like the official picker. Stills: `preview`, else `gif_src`, from whatever HTTPS host the API names (Tenor uses several), with a plain client (no token, no Discord headers or cookies, 10 MB cap), decoded to a <= 256x400 first frame off the UI thread, own 12 MB LRU (`App::gif_thumbs`). Not animated in the picker (yet). |
+| GIF picker | `GET /gifs/trending-gifs` / `GET /gifs/search?q=` with `media_format=mp4&provider=tenor&locale=en-US` (`{url, src, gif_src, preview, width, height}`); picking sends the Tenor `url` as text (shown back as a `gifv` embed). Opens on Favorites / Trending GIFs tiles like the official picker. Stills: `preview`, else `gif_src`, from whatever HTTPS host the API names (Tenor uses several), with a plain client (no token, no Discord headers or cookies, 10 MB cap), decoded to a <= 256x400 first frame off the UI thread, own 12 MB LRU (`App::gif_thumbs`). Tiles animate (`app/gif_anim.rs`): Tenor's tile-sized `tinygif` (`AAAAM`), else `gif_src`, else Giphy's `200w.gif`, decoded in-process to tile-sized frames; an MP4-only saved GIF goes through the video helper's frames mode. With "Automatically play GIFs" off only the hovered tile plays; "Reduce motion" shows stills. Only tiles near the visible part of the grid are decoded (40 MB budget, frames of tiles a screen away dropped, all freed on close). Every picker download goes through a 100 MB on-disk LRU (`<cache dir>/gifs`, SHA-256 of the URL as file name, at most 4 downloads at a time); the saved GIFs are prefetched into it the first time the picker opens in a session. |
 | Favourite GIFs | `GET /users/@me/settings-proto/2` -> `{settings: base64}` = `FrecencyUserSettings` (discord-protos): field 2 `FavoriteGIFs { map<string, FavoriteGIF> gifs = 1; bool hide_tooltip = 2 }`, `FavoriteGIF { GIFType format = 1 (1 image, 2 video); string src = 2; uint32 width = 3, height = 4, order = 5 }`, key = Tenor page URL, `src` = the MP4 (format 2). The star does GET, changes one map entry, `PATCH /users/@me/settings-proto/2 {settings: base64}` with the whole message (every other field and unknown fields copied byte for byte, `net/frecency.rs`); saves are serialised, optimistic and rolled back on failure. Loaded once, when the picker first opens. |
 | Sticker | `POST .../messages` `{ content: "", nonce, sticker_ids: [id] }` |
 | Media | CDN `avatars/`, `icons/`, `emojis/`, `stickers/{id}.png\|.gif?size=160`, attachment `proxy_url?width=&height=`; GIF picker previews from `media.tenor.com` (HTTPS, never with the token) |
@@ -288,7 +290,7 @@ Shadows are safe with ferroiced (tiny-skia clips them to the damage region), but
 no style uses `container::Style::shadow`: header "shadows" are a gradient on the
 bar itself and popups rely on their border, as in the official client.
 
-Fonts: Inter (OFL) embedded; Noto Color Emoji from the system. Icons: Lucide
+Fonts: Inter (OFL) and Twemoji (CC-BY 4.0, COLRv0 font) embedded. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
@@ -390,24 +392,53 @@ draw; they are dropped when the popout closes.
 | profile badge | `/badge-icons/{icon}.png` (fetched from the CDN, not bundled; a neutral dot shows until loaded) |
 | activity art | application asset `/app-assets/{app}/{id}.png`, `mp:` -> `media.discordapp.net`, `spotify:` -> `i.scdn.co/image` |
 | animated emoji | `/emojis/{id}.gif?size=96` |
+| emoji "Send as image" | `/emojis/{id}.png\|.gif?size=48&quality=lossless`, scaled to fit 48 px, uploaded as an attachment |
+| sticker "Send as image" | `/stickers/{id}.png\|.gif?size=160`, scaled to fit 160 px (APNG becomes an animated GIF) |
 
 `i.scdn.co` was added to the media host allow-list for Spotify album art;
 downloads never carry the token.
+
+### When cosmetics animate (official policy)
+
+Outside profiles, animated avatars and avatar decorations are stills (the
+`.png` / `passthrough=false` URLs) and play only while their own row is
+hovered: a message row (chat), a member-list row, a DM-list row, the user
+panel's identity area (`App::list_phase`, `anim::Hover` with its `Zone`). The
+animated asset is fetched on the first hover, like the official client,
+which asks for the `a_` asset only when the component may animate. The
+profile popout (and nothing else) animates avatar, decoration, banner and
+effect without a hover. Animated emoji and GIFs in messages are unchanged
+(they follow "Play GIFs automatically"); "Reduce motion" keeps everything
+still. Sources: Discord's own client gates avatar and decoration animation
+per component (`canAnimate`, `isAvatarDecorationAnimating`,
+`onlyAnimateOnHoverOrFocus` props, visible in the client mods that patch
+them, e.g. Vencord's `AlwaysAnimate` and `Decor` plugins), and the Discord
+support community has long-standing requests to make animated avatars play
+without hovering. A still draws no animation widget, so an idle window with
+cosmetics on screen asks for no redraws.
 
 ### Animation engine (`app/anim.rs`)
 
 * GIF, APNG and animated WebP are decoded in `spawn_blocking` with the
   `image` crate; single-frame images are left to the static path.
 * Caps per asset (source frames read, frames kept, bytes kept, width) are
-  per `Class`; extra frames are merged (delay added to the kept frame) so the
-  duration is unchanged. Sources above 2048 px are refused.
-* `AnimCache` is an LRU with a 48 MB budget. Banner and effect frames are
+  per `Class`. Frames are decoded at about 1.5-2x their drawn size and every
+  source frame is read (up to 600), so a typical asset (a 3 s 60 fps
+  decoration, a 2 s GIF avatar or emoji) keeps all of its frames and plays
+  at its own rate; only unusually long or large ones are decimated (evenly:
+  merged frames add their delay, so the duration is unchanged). Delays are
+  exact (APNG / WebP fractions such as 1/60 s); only "as fast as possible"
+  delays (<= 10 ms) become 100 ms, as in Chromium. Sources above 2048 px
+  are refused.
+* `AnimCache` is an LRU with an 80 MB budget. Banner and effect frames are
   dropped when the popout closes.
-* Lists and messages show the still image; hovering a row / message starts
-  the clock for that avatar, decoration and (in messages) animated emoji.
-  The popout animates everything. A `time::every(66 ms)` subscription exists
-  only while `AnimState::active` is true (something animated is hovered or
-  the popout shows one); "Reduce motion" in Settings turns all of it off.
+* Nothing ticks. Every animation (hovered list / message avatars and
+  decorations, the popout's avatar, decoration, banner and effect layers, message media,
+  hover-played emoji, GIF-picker tiles) is an `ui::anim_image::AnimImage`
+  with a start time (`App::anim_clock`: the app epoch, the popout opening
+  or the hover start) and a playing flag (window focused, motion on).
+  Effect layers carry their `Timeline` (start, duration, loop delay).
+  "Reduce motion" in Settings turns all of it off.
 * Handles are created once when data arrives (`Handle::from_rgba` in the
   decode task), never in `view`.
 * **Message media** (`app/media_anim.rs`): GIF / animated WebP attachments
@@ -420,8 +451,12 @@ downloads never carry the token.
   `ui::anim_image::AnimImage`, which records the frame time on each redraw and
   calls `Shell::request_redraw_at` for its next frame change while it is
   inside the viewport: no `Message`, no `view()`/layout per frame, and
-  tiny-skia repaints only its rectangle. Off-screen or unfocused images ask
-  for nothing. With the setting off, emoji keep the hover behaviour above and
+  tiny-skia repaints only its rectangle. Redraw times are rounded up to a
+  60 Hz grid shared by every image, so any number of animations cost at
+  most 60 window redraws a second. Off-screen or unfocused images ask
+  for nothing (the official client also pauses GIFs while unfocused).
+  `FERROCORD_FRAME_STATS=1` logs redraws, `view()` rebuilds, frame changes
+  and redraw lateness every 5 s. With the setting off, animated emoji play while their message is hovered and
   GIFs show their first frame; "Reduce motion" stops everything.
 
 ### Display name styles
@@ -636,3 +671,94 @@ Design, DAVE and the video feasibility pass: `docs/voice.md`.
 
 Voice settings (devices, sensitivity, per-user volume, self mute/deafen)
 are stored in SQLite `meta("pref.voice")` as JSON and kept on logout.
+
+## 14. User Settings (`net/user_settings.rs`, `net/rest/settings.rs`, `app/settings.rs`, `ui/settings.rs`)
+
+The screen copies the official layout: a sidebar of categories (User
+Settings, Activity Settings, App Settings, Log Out at the bottom) and the
+page on the right; Esc or the round X closes it. Both scrollables have
+fixed ids, text fields are bound to `SettingsState::forms` (filled once when
+the screen opens) and no image handle is made in `view`.
+
+### Synced settings: the preloaded user settings proto
+
+`GET /users/@me/settings-proto/1` -> `{settings: base64}` =
+`PreloadedUserSettings` (discord-protos 1.2.429, checked against the PyPI
+package's `.proto`). Ferrocord identifies with `capabilities: 0`, so READY
+carries only the legacy JSON settings: the proto is read with one GET after
+READY and again whenever the settings screen opens (so changes made in
+another client show).
+
+| Setting | Field (top.field[.field]) | Type |
+|---|---|---|
+| Show spoiler content | 6.4 `render_spoilers` | StringValue `ON_CLICK` / `IF_MODERATOR` / `ALWAYS` |
+| Images when uploaded directly | 6.9 `inline_attachment_media` | BoolValue |
+| Images when posted as links | 6.10 `inline_embed_media` | BoolValue |
+| Play GIFs automatically | 6.11 `gif_auto_play` | BoolValue |
+| Show embeds / link previews | 6.12 `render_embeds` | BoolValue |
+| Show emoji reactions | 6.13 `render_reactions` | BoolValue |
+| Play animated emoji | 6.14 `animate_emoji` | BoolValue |
+| Animate stickers | 6.15 `animate_stickers` | UInt32Value 0 always, 1 on interaction, 2 never |
+| Compact message display | 6.17 `message_display_compact` | BoolValue |
+| Convert emoticons | 6.21 `convert_emoticons` | BoolValue |
+| DM spam filter | 6.27 `dm_spam_filter_v2` | enum 1 off, 2 non-friends, 3 all |
+| Allow DMs from server members (default) | 8.4 `default_guilds_restricted` (inverted) | bool |
+| Friend request sources | 8.11 `friend_source_flags` | UInt32Value bits 1<<1 mutual friends, 1<<2 mutual servers, 1<<3 everyone (needs both) |
+| Online status | 11.1 `status.status` | StringValue |
+| Custom status | 11.2 `custom_status {text=1, emoji_id=2 fixed64, emoji_name=3, expires_at_ms=4 fixed64, created_at_ms=5 fixed64}` | message |
+| Language | 12.1 `localization.locale` | StringValue |
+| Theme | 13.1 `appearance.theme` | enum 1 dark, 2 light, 3 darker (Ash), 4 midnight (Onyx) |
+| Developer Mode | 13.2 `developer_mode` | bool |
+| Time format | 13.9 `timestamp_hour_cycle` | enum 0 auto, 1 12-hour, 2 24-hour |
+
+A `*Value` wrapper that is absent means "not set" (the client default); an
+empty wrapper is the zero value. Writes follow Discord's PATCH rule: each
+top-level field sent *replaces* the stored one and omitted ones stay. So a
+save is GET, edit (`user_settings::apply`: every other byte, unknown fields
+included, kept), then `PATCH /users/@me/settings-proto/1 {settings: base64}`
+with only the touched top-level fields, each complete
+(`user_settings::top_level`). `out_of_date: true` counts as a failure.
+
+Changes apply at once and are queued; the queue is written after 1.5 s of
+quiet (one PATCH per batch, the endpoint is heavily rate limited) or when
+the screen closes. Saves are serialised. A failed save restores what the
+batch changed (unless a newer change of the same setting is queued) and
+shows a toast. The status menu and the tray use the same path; the gateway
+presence (op 3) changes immediately.
+
+### Profile
+
+Display name: `PATCH /users/@me {global_name}` (empty = `null`). Pronouns and
+About Me: `PATCH /users/@me/profile {pronouns, bio}`. Only changed fields
+are sent, from a Save Changes / Reset bar like the official one. The
+display name shows optimistically and is put back if Discord refuses (its
+400 message is shown).
+
+### Local settings
+
+`meta("pref.settings")` JSON (`LocalSettings`, clamped on load): chat font
+size (12-24 px; message text and author names), zoom (50-150 %; the
+daemon's `scale_factor`), saturation (palette desaturated in
+`Palette::saturated`), notification sound (freedesktop `sound-name:
+message-new-instant` or `suppress-sound`; Windows default toast audio or
+silent), unread badge (tray count), taskbar flash
+(`window::request_user_attention` on a mention while unfocused) and message
+content in notifications. The existing `pref.*` flags (minimize to tray,
+start minimized, mute notifications, reduce motion) stay where they were;
+`pref.autoplay_gifs` now mirrors the synced `gif_auto_play` until Discord
+answers. Voice & Video adds input/output volume (0-200 %, applied in the
+engine before voice activity / after mixing) and a microphone test
+(`net/voice/mic_test.rs`: opens the devices outside a call, drives the
+meter and plays the voice back).
+
+### Not implemented
+
+Email / phone / password / 2FA / username changes, account disable/delete
+(managed on discord.com); avatar, banner, profile theme and effects
+editing; explicit image filters (Ferrocord does not blur flagged media, so
+the switch would do nothing here); sticker suggestions (no suggestion UI);
+push to talk (no global shortcut); per-type notification switches beyond
+the ones above (reaction, friend and activity notifications are not
+produced); keybind editing; translating Ferrocord's own UI (English only;
+the Language page sets the account locale); `USER_SETTINGS_PROTO_UPDATE`
+is not handled (the screen re-reads the proto when it opens instead).

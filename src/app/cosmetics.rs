@@ -31,12 +31,11 @@ const MAX_EFFECT_LAYERS: usize = 6;
 /// Which clock an animated image follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Static frame.
+    /// Static frame: avatars and decorations in lists and messages while
+    /// their row is not hovered (the official client's policy).
     Still,
-    /// Lists and messages: animated images play by themselves
-    /// (`ui::anim_image`), all the time while the window is focused.
-    Live,
-    /// Animates while the pointer is over the message (custom emoji).
+    /// Animates from the start of the current hover: the hovered row's
+    /// avatar and decoration, the hovered message's custom emoji.
     Hover,
     /// Animates while the popout is open.
     Popout,
@@ -51,63 +50,68 @@ impl App {
         self.prefs.reduce_motion
     }
 
-    /// The phase an avatar of `user` is drawn in inside lists and messages.
-    pub fn phase_of(&self, _user: UserId) -> Phase {
-        if self.prefs.reduce_motion {
-            Phase::Still
+    /// The phase of an avatar and decoration drawn in the list row or
+    /// message `row`. Like the official client (lists, chat, DM list, the
+    /// user panel), they are stills and animate only while that row is
+    /// hovered; the profile popout animates them all the time
+    /// ([`Phase::Popout`]). A still draws no animation widget at all, so
+    /// an idle window with cosmetics on screen asks for no redraws.
+    pub fn list_phase(&self, row: super::anim::Hover) -> Phase {
+        if !self.prefs.reduce_motion && self.anim.hover == Some(row) {
+            Phase::Hover
         } else {
-            Phase::Live
+            Phase::Still
         }
     }
 
-    /// Whether list / message cosmetics play now (paused, on their first
-    /// frame, while the window is in the background).
+    /// Whether cosmetics play now (paused, on their first frame, while the
+    /// window is in the background).
     pub fn cosmetics_playing(&self) -> bool {
         !self.prefs.reduce_motion && self.window_focused
     }
 
-    /// The decoded animation of a list / message avatar, if cached.
-    pub fn avatar_live(&self, user: &User, size: u32) -> Option<&Arc<anim::Anim>> {
-        if self.prefs.reduce_motion {
-            return None;
-        }
-        self.anim
-            .cache
-            .get(&cosmetics::avatar_anim_url(self.cdn(), user, size)?)
-    }
-
-    /// The decoded animation of a list / message decoration, if cached.
-    pub fn decoration_live(&self, deco: &AvatarDecoration, size: u32) -> Option<&Arc<anim::Anim>> {
-        if self.prefs.reduce_motion || !deco.animated() {
-            return None;
-        }
-        self.anim.cache.get(&deco.url(self.cdn(), size, true))
-    }
-
-    fn elapsed(&self, phase: Phase) -> std::time::Duration {
+    /// The clock an animation drawn in `phase` follows: its start (the
+    /// widget's epoch) and whether it plays now. Every cosmetic is drawn by
+    /// the self-playing `ui::anim_image` widget; none needs an app tick.
+    pub fn anim_clock(&self, phase: Phase) -> (Instant, bool) {
+        let playing = self.cosmetics_playing();
         match phase {
-            Phase::Hover => self.anim.hover_elapsed(),
-            Phase::Popout => self.anim.popout_elapsed(),
-            Phase::Still | Phase::Live => std::time::Duration::ZERO,
+            Phase::Still => (self.anim.epoch, false),
+            Phase::Popout => (self.anim.popout_epoch().unwrap_or(self.anim.epoch), playing),
+            Phase::Hover => (self.anim.hover_epoch(), playing),
         }
     }
 
-    /// Animated frame for `url` in `phase`, if cached.
-    fn anim_frame(&self, url: &str, phase: Phase) -> Option<&Handle> {
-        if matches!(phase, Phase::Still | Phase::Live) || self.prefs.reduce_motion {
+    /// The decoded animation for a cosmetic `url` drawn in `phase`.
+    fn cosmetic_anim(&self, url: &str, phase: Phase) -> Option<&Arc<anim::Anim>> {
+        if phase == Phase::Still || self.prefs.reduce_motion {
             return None;
         }
-        Some(self.anim.cache.get(url)?.frame_at(self.elapsed(phase)))
+        self.anim.cache.get(url)
     }
 
-    /// The avatar image: the animated frame when `phase` allows, else the
-    /// static one (`size` is a CDN size: [`AV_LIST`] or [`AV_POP`]).
-    pub fn avatar_frame(&self, user: &User, size: u32, phase: Phase) -> Option<&Handle> {
-        if let Some(url) = cosmetics::avatar_anim_url(self.cdn(), user, size)
-            && let Some(h) = self.anim_frame(&url, phase)
-        {
-            return Some(h);
+    /// The decoded animation of an avatar (`size` is a CDN size:
+    /// [`AV_LIST`] or [`AV_POP`]), if cached and `phase` animates.
+    pub fn avatar_anim(&self, user: &User, size: u32, phase: Phase) -> Option<&Arc<anim::Anim>> {
+        self.cosmetic_anim(&cosmetics::avatar_anim_url(self.cdn(), user, size)?, phase)
+    }
+
+    /// The decoded animation of a decoration (`size`: [`DEC_LIST`] or
+    /// [`DEC_POP`]), if cached and `phase` animates.
+    pub fn decoration_anim(
+        &self,
+        deco: &AvatarDecoration,
+        size: u32,
+        phase: Phase,
+    ) -> Option<&Arc<anim::Anim>> {
+        if !deco.animated() {
+            return None;
         }
+        self.cosmetic_anim(&deco.url(self.cdn(), size, true), phase)
+    }
+
+    /// The static avatar image (`size` is a CDN size).
+    pub fn avatar_frame(&self, user: &User, size: u32) -> Option<&Handle> {
         let url = cosmetics::avatar_url(self.cdn(), user, size)?;
         self.images.get(&url).or_else(|| {
             // Fall back to any size we already have.
@@ -115,35 +119,31 @@ impl App {
         })
     }
 
-    /// The decoration image (`size`: [`DEC_LIST`] or [`DEC_POP`]).
-    pub fn decoration_frame(
-        &self,
-        deco: &AvatarDecoration,
-        size: u32,
-        phase: Phase,
-    ) -> Option<&Handle> {
-        if deco.animated()
-            && let Some(h) = self.anim_frame(&deco.url(self.cdn(), size, true), phase)
-        {
-            return Some(h);
-        }
+    /// The static decoration image (`size`: [`DEC_LIST`] or [`DEC_POP`]).
+    pub fn decoration_frame(&self, deco: &AvatarDecoration, size: u32) -> Option<&Handle> {
         self.images.get(&deco.url(self.cdn(), size, false))
     }
 
-    /// Banner: animated in the popout when the hash is `a_…`.
+    /// The animated banner of the popout (hash `a_…`), if cached.
+    pub fn banner_anim(&self, p: &cosmetics::Profile) -> Option<&Arc<anim::Anim>> {
+        let hash = p.banner.as_deref().filter(|h| h.starts_with("a_"))?;
+        let url = cosmetics::banner_url(
+            self.cdn(),
+            p.user.id,
+            p.banner_guild,
+            hash,
+            true,
+            BANNER_SIZE,
+        );
+        self.cosmetic_anim(&url, Phase::Popout)
+    }
+
+    /// The static banner.
     pub fn banner_frame(&self, p: &cosmetics::Profile) -> Option<&Handle> {
         let hash = p.banner.as_deref()?;
-        let cdn = self.cdn();
-        let id = p.user.id;
-        if hash.starts_with("a_") {
-            let url = cosmetics::banner_url(cdn, id, p.banner_guild, hash, true, BANNER_SIZE);
-            if let Some(h) = self.anim_frame(&url, Phase::Popout) {
-                return Some(h);
-            }
-        }
         self.images.get(&cosmetics::banner_url(
-            cdn,
-            id,
+            self.cdn(),
+            p.user.id,
             p.banner_guild,
             hash,
             false,
@@ -169,17 +169,26 @@ impl App {
         self.images.get(&url)
     }
 
-    /// Custom emoji image: the animated frame while its message is
-    /// hovered, else the static PNG.
-    pub fn emoji_frame(&self, id: Snowflake, animated: bool, msg: MessageId) -> Option<&Handle> {
-        if animated
-            && !self.prefs.reduce_motion
-            && self.anim.is_hovering_message(msg)
-            && let Some(h) = self.anim_frame(&emoji_anim_url(self.cdn(), id), Phase::Hover)
-        {
-            return Some(h);
-        }
+    /// Custom emoji still (the static PNG).
+    pub fn emoji_frame(&self, id: Snowflake) -> Option<&Handle> {
         self.image(&super::emoji_url(&self.cdn_url_owned(), id))
+    }
+
+    /// With autoplay off, an animated custom emoji plays while its message
+    /// is hovered: its animation (when cached) and whether it plays now,
+    /// from the start of the hover.
+    pub fn emoji_hover_anim(
+        &self,
+        id: Snowflake,
+        animated: bool,
+        msg: MessageId,
+    ) -> Option<(&Arc<anim::Anim>, Instant, bool)> {
+        if !animated || self.prefs.reduce_motion {
+            return None;
+        }
+        let a = self.anim.cache.get(&emoji_anim_url(self.cdn(), id))?;
+        let (epoch, playing) = self.anim_clock(Phase::Hover);
+        Some((a, epoch, playing && self.anim.is_hovering_message(msg)))
     }
 
     fn cdn_url_owned(&self) -> String {
@@ -209,59 +218,10 @@ impl App {
         ids
     }
 
-    /// Animated avatars and decorations of the users on screen (message
-    /// authors, member list, DM list, yourself). They play all the time, so
-    /// their number is capped to keep the cache from thrashing.
-    fn live_assets(&self) -> Vec<(String, Class)> {
-        const MAX_LIVE: usize = 32;
-        let mut v: Vec<(String, Class)> = Vec::new();
-        if self.prefs.reduce_motion {
-            return v;
-        }
-        let cdn = self.cdn();
-        let mut users: Vec<&User> = Vec::new();
-        if let Some(me) = &self.chat.me {
-            users.push(me);
-        }
-        if let Some(c) = self.open_channel()
-            && let Some(w) = self.chat.messages.get(&c)
-        {
-            users.extend(w.messages.iter().rev().take(40).map(|m| &m.author));
-        }
-        if let Some(l) = &self.chat.member_list {
-            users.extend(l.loaded().take(60).filter_map(|i| match i {
-                MemberItem::Member(m) => Some(&m.user),
-                _ => None,
-            }));
-        }
-        if let super::View::Home(_) = self.view {
-            users.extend(
-                self.chat
-                    .dm_list()
-                    .into_iter()
-                    .take(30)
-                    .filter_map(|c| c.recipients.first().and_then(|u| self.chat.users.get(u))),
-            );
-        }
-        let mut seen = std::collections::HashSet::new();
-        for u in users {
-            if v.len() >= MAX_LIVE {
-                break;
-            }
-            if !seen.insert(u.id) {
-                continue;
-            }
-            if let Some(url) = cosmetics::avatar_anim_url(cdn, u, AV_LIST) {
-                v.push((url, Class::AvatarList));
-            }
-            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
-                v.push((d.url(cdn, DEC_LIST, true), Class::DecorationList));
-            }
-        }
-        v
-    }
-
-    /// Animations the hovered message could show (its custom emoji).
+    /// Animations the hovered row could show: the user's animated avatar
+    /// and decoration (fetched on the first hover, like the official
+    /// client, which asks for the animated asset only when it animates),
+    /// and the hovered message's custom emoji.
     fn hover_assets(&self) -> Vec<(String, Class)> {
         let mut v = Vec::new();
         let Some(h) = self.anim.hover else {
@@ -271,6 +231,23 @@ impl App {
             return v;
         }
         let cdn = self.cdn();
+        let user = match h.zone {
+            super::anim::Zone::Panel => self.chat.me.as_ref(),
+            _ => self.chat.users.get(&h.user),
+        };
+        let user = user.or_else(|| {
+            let c = self.open_channel()?;
+            let m = self.chat.message(c, h.message?)?;
+            Some(&m.author)
+        });
+        if let Some(u) = user {
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, u, AV_LIST) {
+                v.push((url, Class::AvatarList));
+            }
+            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
+                v.push((d.url(cdn, DEC_LIST, true), Class::DecorationList));
+            }
+        }
         if let Some(m) = h.message {
             for id in self.message_emoji_animates(m) {
                 v.push((emoji_anim_url(cdn, id), Class::Emoji));
@@ -318,15 +295,6 @@ impl App {
             }
         }
         v
-    }
-
-    /// Whether the popout has anything that animates (drives the tick).
-    fn popout_animates(&self) -> bool {
-        !self.prefs.reduce_motion && !self.popout_assets().is_empty()
-    }
-
-    fn hover_animates(&self) -> bool {
-        !self.prefs.reduce_motion && !self.hover_assets().is_empty()
     }
 
     /// Static cosmetic images wanted now: decorations, nameplates, server
@@ -451,7 +419,6 @@ impl App {
         let wanted: Vec<(String, Class)> = self
             .hover_assets()
             .into_iter()
-            .chain(self.live_assets())
             .chain(self.popout_assets())
             .chain(messages)
             .collect();
@@ -540,14 +507,7 @@ impl App {
         if self.cfg.mock {
             self.mock_fill_popout();
         }
-        self.refresh_hot();
         Task::batch(tasks)
-    }
-
-    /// Recomputes the "has something animated" flags behind the tick.
-    pub(super) fn refresh_hot(&mut self) {
-        self.anim.hover_hot = self.anim.hover.is_some() && self.hover_animates();
-        self.anim.popout_hot = self.profiles.popout.is_some() && self.popout_animates();
     }
 
     pub(super) fn update_cosmetics(&mut self, u: Ui) -> Task<Message> {
@@ -559,13 +519,8 @@ impl App {
                 Task::none()
             }
             Ui::HoverEnter(h) => {
-                // A popup being open freezes hover (the backdrop is idle).
-                let hot = !self.prefs.reduce_motion && {
-                    self.anim.hover = Some(h);
-                    self.hover_animates()
-                };
-                self.anim.enter(h, hot, Instant::now());
-                if hot {
+                self.anim.enter(h, Instant::now());
+                if !self.prefs.reduce_motion && !self.hover_assets().is_empty() {
                     self.request_anims()
                 } else {
                     Task::none()
@@ -575,20 +530,19 @@ impl App {
                 self.anim.leave(h);
                 Task::none()
             }
-            Ui::AnimTick(at) => {
-                self.anim.tick(at);
-                Task::none()
-            }
             Ui::ToggleReduceMotion => {
                 self.prefs.reduce_motion = !self.prefs.reduce_motion;
-                self.refresh_hot();
                 let t = self.save_pref(super::window::KEY_REDUCE_MOTION, self.prefs.reduce_motion);
                 Task::batch([t, self.request_images()])
             }
             Ui::ToggleAutoplayGifs => {
-                self.prefs.autoplay_gifs = !self.prefs.autoplay_gifs;
-                let t = self.save_pref(super::window::KEY_AUTOPLAY_GIFS, self.prefs.autoplay_gifs);
-                Task::batch([t, self.request_images()])
+                // Synced as `gif_auto_play`; the local pref mirrors it so the
+                // last value is known before Discord answers.
+                use crate::net::user_settings::{Edit, Synced, Value};
+                let on = !self.settings.synced.bool(Synced::GifAutoPlay);
+                let t = self.edit_synced(Edit::Set(Synced::GifAutoPlay, Value::Bool(on)));
+                let save = self.save_pref(super::window::KEY_AUTOPLAY_GIFS, on);
+                Task::batch([t, save, self.request_images()])
             }
             _ => Task::none(),
         }
@@ -614,9 +568,8 @@ impl App {
             window,
         );
         self.profiles.popout = Some(Popout { user, guild, at });
-        self.anim.open_popout(false, Instant::now());
+        self.anim.open_popout(Instant::now());
         let t = self.request_profiles();
-        self.refresh_hot();
         Task::batch([t, self.request_images(), self.request_anims()])
     }
 
@@ -653,7 +606,7 @@ impl App {
                 .and_then(|u| self.images.get(u))
                 .map(|h| {
                     vec![EffectDraw {
-                        handle: h,
+                        image: EffectImage::Still(h),
                         x: 0,
                         y: 0,
                         w: 0,
@@ -662,15 +615,20 @@ impl App {
                 })
                 .unwrap_or_default();
         }
-        let t_ms = self.anim.popout_elapsed().as_millis() as u64;
+        let ms = |v: u32| std::time::Duration::from_millis(u64::from(v));
         e.layers
             .iter()
             .take(MAX_EFFECT_LAYERS)
             .filter_map(|l| {
-                let local = cosmetics::layer_time(l, t_ms)?;
                 let a = self.anim.cache.get(l.source_for(p.user.id))?;
+                let timeline = crate::ui::anim_image::Timeline {
+                    start: ms(l.start_ms),
+                    duration: ms(l.duration_ms),
+                    looped: l.looped,
+                    loop_delay: ms(l.loop_delay_ms),
+                };
                 Some(EffectDraw {
-                    handle: a.frame_at(std::time::Duration::from_millis(local)),
+                    image: EffectImage::Anim(a, timeline),
                     x: l.x,
                     y: l.y,
                     w: l.width,
@@ -730,11 +688,21 @@ impl App {
 /// One effect layer to draw.
 #[derive(Debug)]
 pub struct EffectDraw<'a> {
-    pub handle: &'a Handle,
+    pub image: EffectImage<'a>,
     pub x: i32,
     pub y: i32,
     pub w: u32,
     pub h: u32,
+}
+
+/// What an effect layer shows.
+#[derive(Debug)]
+pub enum EffectImage<'a> {
+    /// The static frame (reduced motion).
+    Still(&'a Handle),
+    /// An animated layer, shown during its timeline (counted from the
+    /// popout opening).
+    Anim(&'a Arc<anim::Anim>, crate::ui::anim_image::Timeline),
 }
 
 /// Static cosmetic images of one user (decoration, nameplate, tag badge).

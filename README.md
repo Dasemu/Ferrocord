@@ -75,8 +75,14 @@ run `cargo build --release`.
   code, code blocks, spoilers, quotes, headings, lists, links, mentions,
   custom emoji, timestamps), embeds, image and file attachments, GIF and
   image links shown as bare media, stickers.
-- GIF picker (Tenor, via Discord) and sticker picker in the composer; a
+- GIF picker (Tenor, via Discord; tiles animate, saved GIFs are cached on
+  disk) and sticker picker in the composer; a
   participants/profile panel in DMs.
+- Unicode emoji drawn with Twemoji, like the official client. The emoji and
+  sticker pickers show every server's items; without Nitro the ones you
+  cannot use in the current channel are locked, and picking one offers
+  "Send as image" (a small scaled copy uploaded as a normal attachment;
+  animated ones stay animated) instead of the Nitro upsell.
 - Send messages, typing indicators, unread and mention state (synced with
   read states / `MESSAGE_ACK`), desktop notifications for mentions and DMs.
 - Local SQLite cache so the window opens instantly with your last state.
@@ -98,6 +104,12 @@ run `cargo build --release`.
   Media Foundation on Windows (H.265 needs "HEVC Video Extensions from Device
   Manufacturer", AV1 "AV1 Video Extension" from the Microsoft Store). Without
   them the player says what to install, or offers "Open externally".
+- Plugins: community add-ons as small sandboxed WebAssembly modules (no
+  JavaScript, CSS or webview). They can rewrite what you send, add `/commands`
+  and message menu items, and put badges or notes under messages; they run on
+  their own thread with time and memory limits and only get the permissions
+  you grant. Off by default and free when unused. See
+  [Plugins](#plugins) and [`docs/plugins.md`](docs/plugins.md).
 
 ## Build and run
 
@@ -137,6 +149,8 @@ Useful environment variables:
 | `FERROCORD_NOTIFY_PREVIEW=0` | Notifications show only the sender. |
 | `FERROCORD_ZLIB=0` | Disable gateway transport compression. |
 | `FERRO_TRACE_STARTUP=1` | Log `first_frame_ms`. |
+| `FERROCORD_PLUGINS_DIR` | Plugins folder (also enables plugins in `--mock` mode). |
+| `FERROCORD_PLUGIN_LOG=1` | Show plugin log output (it may contain message text). |
 | `ICED_BACKEND=wgpu` | Use the GPU renderer (default is the `tiny-skia` CPU renderer, which keeps idle memory around 50 MB). |
 
 Screenshots of every main screen with mock data:
@@ -145,6 +159,31 @@ Screenshots of every main screen with mock data:
 ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" \
   cargo run -- --mock --screenshot guild docs/screenshots/guild.png
 ```
+
+## Plugins
+
+> [!WARNING]
+> **Plugins are third-party code.** Ferrocord runs them in a sandbox and
+> limits each one to the permissions you grant (shown before you enable it),
+> but only install plugins you trust. **Automating your account breaks
+> Discord's Terms of Service:** a plugin that sends messages, reacts or
+> replies on its own (a "selfbot") can get your account banned. Ferrocord only
+> lets plugins send when you explicitly run their command or menu item, and
+> never ships such a plugin.
+
+Copy a plugin folder (or a `.ferroplug` file) into the plugins folder
+(`~/.config/ferrocord/plugins/` on Linux,
+`%APPDATA%\ferro\ferrocord\config\plugins\` on Windows), then open
+User Settings → Plugins (in the sidebar), press **Reload plugins** and enable it. There is
+no plugin store. Three examples live in [`examples/plugins/`](examples/plugins)
+(text replacements and `/shrug`, a word highlighter, "Copy as Quote"); writing
+your own is a few lines of Rust with the SDK in
+[`crates/ferrocord-plugin-sdk`](crates/ferrocord-plugin-sdk), or any language
+that compiles to WebAssembly. Everything else (the ABI, permissions, limits)
+is in [`docs/plugins.md`](docs/plugins.md).
+
+With no plugin enabled nothing of the plugin system runs (no engine, no
+thread). Each enabled plugin costs about 1-2 MB of memory.
 
 ## Development
 
@@ -161,3 +200,7 @@ cargo test
 
 MIT, see [LICENSE](LICENSE). Bundled fonts: Inter (SIL OFL 1.1, see
 `assets/fonts/OFL.txt`). Icons: Lucide (ISC, see `assets/icons/LICENSE`).
+Emoji: [Twemoji](https://github.com/jdecked/twemoji) by Twitter, jdecked and
+contributors, licensed [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+(COLRv0 font build, converted and renamed; see `assets/fonts/Twemoji-LICENSE.txt`).
+See [THIRD_PARTY.md](THIRD_PARTY.md).
