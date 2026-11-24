@@ -1565,10 +1565,9 @@ mod app_tests {
             Value::U32(StickerAnim::OnInteraction.wire()),
         );
         assert!(!a.sticker_animates(Some(Snowflake(1))));
-        let _ = a.update(Message::Ui(Ui::HoverEnter(crate::app::anim::Hover {
-            user: Snowflake(2),
-            message: Some(Snowflake(1)),
-        })));
+        let _ = a.update(Message::Ui(Ui::HoverEnter(
+            crate::app::anim::Hover::message(Snowflake(2), Snowflake(1)),
+        )));
         assert!(a.sticker_animates(Some(Snowflake(1))));
         // GIF autoplay is synced and drives the media player.
         assert!(a.autoplay_media());

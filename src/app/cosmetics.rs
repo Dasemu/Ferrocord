@@ -31,12 +31,11 @@ const MAX_EFFECT_LAYERS: usize = 6;
 /// Which clock an animated image follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Static frame.
+    /// Static frame: avatars and decorations in lists and messages while
+    /// their row is not hovered (the official client's policy).
     Still,
-    /// Lists and messages: animated images play by themselves
-    /// (`ui::anim_image`), all the time while the window is focused.
-    Live,
-    /// Animates while the pointer is over the message (custom emoji).
+    /// Animates from the start of the current hover: the hovered row's
+    /// avatar and decoration, the hovered message's custom emoji.
     Hover,
     /// Animates while the popout is open.
     Popout,
@@ -51,17 +50,22 @@ impl App {
         self.prefs.reduce_motion
     }
 
-    /// The phase an avatar of `user` is drawn in inside lists and messages.
-    pub fn phase_of(&self, _user: UserId) -> Phase {
-        if self.prefs.reduce_motion {
-            Phase::Still
+    /// The phase of an avatar and decoration drawn in the list row or
+    /// message `row`. Like the official client (lists, chat, DM list, the
+    /// user panel), they are stills and animate only while that row is
+    /// hovered; the profile popout animates them all the time
+    /// ([`Phase::Popout`]). A still draws no animation widget at all, so
+    /// an idle window with cosmetics on screen asks for no redraws.
+    pub fn list_phase(&self, row: super::anim::Hover) -> Phase {
+        if !self.prefs.reduce_motion && self.anim.hover == Some(row) {
+            Phase::Hover
         } else {
-            Phase::Live
+            Phase::Still
         }
     }
 
-    /// Whether list / message cosmetics play now (paused, on their first
-    /// frame, while the window is in the background).
+    /// Whether cosmetics play now (paused, on their first frame, while the
+    /// window is in the background).
     pub fn cosmetics_playing(&self) -> bool {
         !self.prefs.reduce_motion && self.window_focused
     }
@@ -73,7 +77,6 @@ impl App {
         let playing = self.cosmetics_playing();
         match phase {
             Phase::Still => (self.anim.epoch, false),
-            Phase::Live => (self.anim.epoch, playing),
             Phase::Popout => (self.anim.popout_epoch().unwrap_or(self.anim.epoch), playing),
             Phase::Hover => (self.anim.hover_epoch(), playing),
         }
@@ -215,59 +218,10 @@ impl App {
         ids
     }
 
-    /// Animated avatars and decorations of the users on screen (message
-    /// authors, member list, DM list, yourself). They play all the time, so
-    /// their number is capped to keep the cache from thrashing.
-    fn live_assets(&self) -> Vec<(String, Class)> {
-        const MAX_LIVE: usize = 32;
-        let mut v: Vec<(String, Class)> = Vec::new();
-        if self.prefs.reduce_motion {
-            return v;
-        }
-        let cdn = self.cdn();
-        let mut users: Vec<&User> = Vec::new();
-        if let Some(me) = &self.chat.me {
-            users.push(me);
-        }
-        if let Some(c) = self.open_channel()
-            && let Some(w) = self.chat.messages.get(&c)
-        {
-            users.extend(w.messages.iter().rev().take(40).map(|m| &m.author));
-        }
-        if let Some(l) = &self.chat.member_list {
-            users.extend(l.loaded().take(60).filter_map(|i| match i {
-                MemberItem::Member(m) => Some(&m.user),
-                _ => None,
-            }));
-        }
-        if let super::View::Home(_) = self.view {
-            users.extend(
-                self.chat
-                    .dm_list()
-                    .into_iter()
-                    .take(30)
-                    .filter_map(|c| c.recipients.first().and_then(|u| self.chat.users.get(u))),
-            );
-        }
-        let mut seen = std::collections::HashSet::new();
-        for u in users {
-            if v.len() >= MAX_LIVE {
-                break;
-            }
-            if !seen.insert(u.id) {
-                continue;
-            }
-            if let Some(url) = cosmetics::avatar_anim_url(cdn, u, AV_LIST) {
-                v.push((url, Class::AvatarList));
-            }
-            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
-                v.push((d.url(cdn, DEC_LIST, true), Class::DecorationList));
-            }
-        }
-        v
-    }
-
-    /// Animations the hovered message could show (its custom emoji).
+    /// Animations the hovered row could show: the user's animated avatar
+    /// and decoration (fetched on the first hover, like the official
+    /// client, which asks for the animated asset only when it animates),
+    /// and the hovered message's custom emoji.
     fn hover_assets(&self) -> Vec<(String, Class)> {
         let mut v = Vec::new();
         let Some(h) = self.anim.hover else {
@@ -277,6 +231,23 @@ impl App {
             return v;
         }
         let cdn = self.cdn();
+        let user = match h.zone {
+            super::anim::Zone::Panel => self.chat.me.as_ref(),
+            _ => self.chat.users.get(&h.user),
+        };
+        let user = user.or_else(|| {
+            let c = self.open_channel()?;
+            let m = self.chat.message(c, h.message?)?;
+            Some(&m.author)
+        });
+        if let Some(u) = user {
+            if let Some(url) = cosmetics::avatar_anim_url(cdn, u, AV_LIST) {
+                v.push((url, Class::AvatarList));
+            }
+            if let Some(d) = u.avatar_decoration.as_ref().filter(|d| d.animated()) {
+                v.push((d.url(cdn, DEC_LIST, true), Class::DecorationList));
+            }
+        }
         if let Some(m) = h.message {
             for id in self.message_emoji_animates(m) {
                 v.push((emoji_anim_url(cdn, id), Class::Emoji));
@@ -448,7 +419,6 @@ impl App {
         let wanted: Vec<(String, Class)> = self
             .hover_assets()
             .into_iter()
-            .chain(self.live_assets())
             .chain(self.popout_assets())
             .chain(messages)
             .collect();

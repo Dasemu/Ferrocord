@@ -70,6 +70,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   (sent top-level fields REPLACE the stored ones), read-modify-write keeping unknown bytes, debounced and
   rolled back on failure. Local ones live in `meta("pref.settings")`. Never add a switch the app does not honour.
 - `text_editor` `min_height`/`max_height` limit the text area, then the padding is added: pass `composer::text_height_limits`, never a total height (the 68 px composer bug).
+- Animated avatars/decorations: stills in lists, chat, DM list and user panel, playing only while
+  their own row is hovered (`App::list_phase`, `anim::Hover` + `Zone`), like the official client;
+  only the profile popout plays them unhovered. Never make list cosmetics play unhovered: each
+  costs 60 window redraws/s.
 - Composer is a `text_editor` (`app/composer.rs`): Enter sends, Shift+Enter newline; cursor columns are bytes. Container `shadow` is safe with ferroiced (tiny-skia clips it to the damage region), but
   the house style keeps the gradient header and sets no shadow (`ui/theme.rs` guard test).
 - Video helper (`ferrocord-player`): MP4/MOV is read by our own `mp4.rs` (progressive + fragmented `moof`, QuickTime);

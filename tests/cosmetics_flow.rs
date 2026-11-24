@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ferrocord::app::anim::{self, Class, Hover};
+use ferrocord::app::anim::{self, Class, Hover, Zone};
 use ferrocord::app::cosmetics::Phase;
 use ferrocord::app::{App, Done, Message, Ui, View};
 use ferrocord::config::Config;
@@ -115,23 +115,52 @@ fn failed_profile_requests_show_loading_and_never_panic() {
     let _ = ferrocord::ui::view(&a);
 }
 
+/// Self-playing animation widgets in the whole window.
+fn animations_on_screen(a: &App) -> usize {
+    let view = ferrocord::ui::view(a);
+    ferrocord::ui::anim_image::count_in(&iced::advanced::widget::Tree::new(&view))
+}
+
 #[test]
-fn list_avatars_play_by_themselves_without_ticking() {
+fn list_avatars_are_stills_until_their_row_is_hovered() {
     let mut a = app();
-    // Every list / message avatar is live, hovered or not...
-    assert_eq!(a.phase_of(ALICE), Phase::Live);
-    assert_eq!(a.phase_of(BOB), Phase::Live);
-    // ...and hovering a user row never ticks the app: animated avatars and
-    // decorations redraw themselves (`ui::anim_image`).
-    let h = Hover {
-        user: ALICE,
-        message: None,
-    };
-    ui(&mut a, Ui::HoverEnter(h));
-    assert_eq!(a.anim_clock(Phase::Live), (a.anim.epoch, true));
-    ui(&mut a, Ui::HoverLeave(h));
-    assert!(a.cosmetics_playing());
-    let _ = ferrocord::ui::view(&a);
+    let row = Hover::row(ALICE, Zone::Members);
+    // Like the official client: lists and messages show stills...
+    assert_eq!(a.list_phase(row), Phase::Still);
+    assert_eq!(a.list_phase(Hover::row(BOB, Zone::Members)), Phase::Still);
+    let idle = animations_on_screen(&a);
+    // ...and hovering a row animates that row's avatar and decoration
+    // (two self-playing widgets, no app tick), from the start of the hover.
+    let before = Instant::now();
+    ui(&mut a, Ui::HoverEnter(row));
+    assert_eq!(a.list_phase(row), Phase::Hover);
+    let (epoch, playing) = a.anim_clock(Phase::Hover);
+    assert!(playing && epoch >= before);
+    assert_eq!(animations_on_screen(&a), idle + 2);
+    // The same user elsewhere (DM list, a message) stays still.
+    assert_eq!(a.list_phase(Hover::row(ALICE, Zone::DmList)), Phase::Still);
+    assert_eq!(
+        a.list_phase(Hover::message(ALICE, Snowflake(1))),
+        Phase::Still
+    );
+    // Leaving the row stops it again.
+    ui(&mut a, Ui::HoverLeave(row));
+    assert_eq!(a.list_phase(row), Phase::Still);
+    assert_eq!(animations_on_screen(&a), idle);
+}
+
+#[test]
+fn the_popout_animates_without_a_hover() {
+    let mut a = app();
+    let idle = animations_on_screen(&a);
+    open(&mut a, ALICE);
+    assert_eq!(a.anim.hover, None);
+    // Avatar, decoration, banner and the effect layers all play.
+    let layers = a.effect_layers().len();
+    assert!(layers > 0);
+    assert_eq!(animations_on_screen(&a), idle + 3 + layers);
+    ui(&mut a, Ui::CloseProfile);
+    assert_eq!(animations_on_screen(&a), idle);
 }
 
 #[test]
@@ -139,12 +168,9 @@ fn reduce_motion_stops_every_animation() {
     let mut a = app();
     ui(&mut a, Ui::ToggleReduceMotion);
     assert!(a.prefs.reduce_motion);
-    let h = Hover {
-        user: ALICE,
-        message: None,
-    };
+    let h = Hover::row(ALICE, Zone::Members);
     ui(&mut a, Ui::HoverEnter(h));
-    assert_eq!(a.phase_of(ALICE), Phase::Still);
+    assert_eq!(a.list_phase(h), Phase::Still);
     assert!(!a.cosmetics_playing());
     open(&mut a, ALICE);
     let alice = mock::user(2);
@@ -167,13 +193,13 @@ fn animation_handles_keep_their_identity_across_view_calls() {
     // The views get the same decoded animation (and so the same frame
     // handles, never re-uploaded) on every rebuild.
     let first = a
-        .avatar_anim(&u, 80, Phase::Live)
+        .avatar_anim(&u, 80, Phase::Hover)
         .expect("mock avatar anim")
         .clone();
     let ids: Vec<_> = first.frames.iter().map(|f| f.handle.id()).collect();
     let _ = ferrocord::ui::view(&a);
     let _ = ferrocord::ui::view(&a);
-    let again = a.avatar_anim(&u, 80, Phase::Live).unwrap();
+    let again = a.avatar_anim(&u, 80, Phase::Hover).unwrap();
     assert!(Arc::ptr_eq(&first, again));
     let ids2: Vec<_> = again.frames.iter().map(|f| f.handle.id()).collect();
     assert_eq!(ids, ids2);
@@ -190,7 +216,7 @@ fn animation_handles_keep_their_identity_across_view_calls() {
             .all(|f| f.delay == Duration::from_millis(30))
     );
     let deco = u.avatar_decoration.as_ref().unwrap();
-    let d = a.decoration_anim(deco, 96, Phase::Live).unwrap();
+    let d = a.decoration_anim(deco, 96, Phase::Hover).unwrap();
     assert_eq!(d.frames.len(), 180, "60 fps decoration kept whole");
     // Exact APNG-style delays (1/60 s), not 16 or 20 ms per frame.
     let total = d.total.as_secs_f64();
