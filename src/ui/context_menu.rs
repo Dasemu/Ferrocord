@@ -111,6 +111,11 @@ pub fn view(app: &App) -> Option<(El<'_>, Point)> {
     Some(card(app, rows, m.at))
 }
 
+#[cfg(test)]
+pub(super) fn user_rows_for_tests(app: &App, user: UserId) -> Vec<Row> {
+    user_rows(app, user, None)
+}
+
 fn user_rows(app: &App, user: UserId, guild: Option<GuildId>) -> Vec<Row> {
     let mut rows = vec![Row::item(
         Icon::UserRound,

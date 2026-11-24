@@ -446,7 +446,7 @@ fn decode_value(f: &RawField<'_>, kind: Kind) -> Option<Value> {
             }
             // Wrapper message: field 1 is the value (absent = zero).
             let inner = fields(f.payload).ok()?;
-            let v = inner.iter().filter(|i| i.number == 1).last();
+            let v = inner.iter().rfind(|i| i.number == 1);
             Some(match kind {
                 Kind::WrapString => Value::Str(
                     v.filter(|i| i.wire == WT_LEN)

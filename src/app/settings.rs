@@ -462,6 +462,19 @@ impl Forms {
     }
 }
 
+/// "Who can send you a friend request": the flags after clicking the
+/// switch of `bit`. "Everyone" needs the two others, so turning it on
+/// turns them on, and turning one of them off turns "Everyone" off.
+pub fn toggle_friend_source(flags: u32, bit: u32) -> u32 {
+    if flags & bit == bit {
+        flags & !bit & !us::FRIENDS_NO_RELATION
+    } else if bit == us::FRIENDS_NO_RELATION {
+        us::FRIENDS_ALL
+    } else {
+        flags | bit
+    }
+}
+
 /// Bio limit of the official profile editor.
 pub const BIO_MAX: usize = 190;
 pub const PRONOUNS_MAX: usize = 40;
@@ -775,7 +788,7 @@ impl App {
         );
         crate::ui::clock::set_24h(uses_24h(
             s.synced.u32(Synced::HourCycle),
-            &crate::net::identity::locale(),
+            crate::net::identity::locale(),
         ));
         self.prefs.autoplay_gifs = s.synced.bool(Synced::GifAutoPlay);
     }
@@ -1017,7 +1030,12 @@ impl App {
             SettingsUi::CustomEmoji(s) => {
                 // One emoji (a grapheme cluster), like the official picker.
                 use unicode_segmentation::UnicodeSegmentation;
-                forms.custom_emoji = s.trim().graphemes(true).last().unwrap_or("").to_owned();
+                forms.custom_emoji = s
+                    .trim()
+                    .graphemes(true)
+                    .next_back()
+                    .unwrap_or("")
+                    .to_owned();
                 Task::none()
             }
             SettingsUi::CustomExpiry(e) => {
@@ -1364,5 +1382,338 @@ mod tests {
         for c in Category::ALL {
             assert_eq!(Category::from_slug(c.slug()), Some(c));
         }
+    }
+
+    #[test]
+    fn friend_sources() {
+        use us::{FRIENDS_ALL, FRIENDS_MUTUAL_FRIENDS as F, FRIENDS_MUTUAL_GUILDS as G};
+        assert_eq!(
+            toggle_friend_source(0, us::FRIENDS_NO_RELATION),
+            FRIENDS_ALL
+        );
+        assert_eq!(toggle_friend_source(FRIENDS_ALL, F), G);
+        assert_eq!(toggle_friend_source(G, F), F | G);
+        assert_eq!(
+            toggle_friend_source(FRIENDS_ALL, us::FRIENDS_NO_RELATION),
+            F | G
+        );
+    }
+}
+
+/// Every category changes what the app does: driven through `App::update`
+/// in mock mode.
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+    use crate::app::anim::Class;
+    use crate::config::Config;
+    use crate::net::model::Snowflake;
+
+    fn app() -> App {
+        App::boot(Config::for_tests()).0
+    }
+
+    fn set(a: &mut App, s: Synced, v: Value) {
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::Set(s, v))));
+    }
+
+    fn local(a: &mut App, c: LocalChange) {
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::Local(c))));
+    }
+
+    #[test]
+    fn profiles_save_display_name_and_roll_back_on_failure() {
+        let mut a = app();
+        let _ = a.update(Message::Ui(Ui::OpenSettings));
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::ProfileName(
+            "Crab".into(),
+        ))));
+        assert!(a.settings.forms.profile_dirty());
+        let edit = a.settings.forms.profile_edit();
+        let old = a.chat.me.as_ref().and_then(|u| u.global_name.clone());
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::SaveProfile)));
+        assert_eq!(
+            a.chat.me.as_ref().unwrap().global_name.as_deref(),
+            Some("Crab")
+        );
+        // Discord refuses: the name goes back and a toast explains.
+        let _ = a.update(Message::Done(Done::Settings(Box::new(
+            SettingsDone::ProfileSaved {
+                edit,
+                result: Err("Display name is not allowed".into()),
+                old_name: old.clone(),
+            },
+        ))));
+        assert_eq!(a.chat.me.as_ref().unwrap().global_name, old);
+        assert!(a.toast.as_deref().unwrap().contains("not allowed"));
+    }
+
+    #[test]
+    fn privacy_changes_are_batched_into_one_write() {
+        let mut a = app();
+        set(&mut a, Synced::DmSpamFilter, Value::U32(3));
+        set(
+            &mut a,
+            Synced::FriendSourceFlags,
+            Value::U32(toggle_friend_source(
+                us::FRIENDS_ALL,
+                us::FRIENDS_MUTUAL_GUILDS,
+            )),
+        );
+        set(&mut a, Synced::DefaultGuildsRestricted, Value::Bool(true));
+        let b = a.settings.synced.take_all().unwrap();
+        let raw = us::apply(&[], &b.edits).unwrap();
+        assert_eq!(us::touched(&b.edits), [6, 8]);
+        assert_eq!(us::get(&raw, Synced::DmSpamFilter), Ok(Some(Value::U32(3))));
+        assert_eq!(
+            us::get(&raw, Synced::FriendSourceFlags),
+            Ok(Some(Value::U32(us::FRIENDS_MUTUAL_FRIENDS)))
+        );
+    }
+
+    #[test]
+    fn status_and_custom_status_reach_the_gateway_presence() {
+        let mut a = app();
+        let _ = a.update(Message::Ui(Ui::SetStatus(Presence::Idle)));
+        assert_eq!(a.chat.my_status, Presence::Idle);
+        assert_eq!(a.gateway.status(), Presence::Idle);
+        assert_eq!(
+            a.settings.synced.get(Synced::Status),
+            Value::Str("idle".into())
+        );
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::CustomText(
+            "  heads down ".into(),
+        ))));
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::CustomEmoji(
+            "🎧".into(),
+        ))));
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::CustomExpiry(
+            Expiry::Hour1,
+        ))));
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::SaveCustomStatus)));
+        let frames = a.gateway.take_pending().join("\n");
+        assert!(frames.contains("\"type\":4"), "{frames}");
+        assert!(frames.contains("heads down") && frames.contains("🎧"));
+        assert!(frames.contains("\"idle\""));
+        let c = a.settings.synced.custom.clone().unwrap();
+        assert!(c.expires_at_ms > crate::app::now_ms());
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::ClearCustomStatus)));
+        assert!(a.gateway.custom_status().is_none());
+        let frames = a.gateway.take_pending().join("\n");
+        assert!(frames.contains("\"activities\":[]"), "{frames}");
+    }
+
+    #[test]
+    fn appearance_changes_theme_layout_font_zoom_and_clock() {
+        let mut a = app();
+        assert!(a.theme.dark);
+        set(&mut a, Synced::Theme, Value::U32(Theme::Light.wire()));
+        assert!(!a.theme.dark);
+        set(&mut a, Synced::Theme, Value::U32(Theme::Midnight.wire()));
+        assert_eq!(
+            a.theme.palette.bg_panel,
+            crate::ui::theme::Palette::ONYX.bg_panel
+        );
+        set(&mut a, Synced::MessageDisplayCompact, Value::Bool(true));
+        assert!(a.compact());
+        local(&mut a, LocalChange::ChatFont(20));
+        assert_eq!(a.chat_font(), 20.0);
+        local(&mut a, LocalChange::Zoom(125));
+        assert_eq!(a.zoom(), 1.25);
+        set(&mut a, Synced::HourCycle, Value::U32(2));
+        assert!(crate::ui::clock::is_24h());
+        assert!(crate::ui::format_time(1_700_000_000_000).len() <= 5);
+        set(&mut a, Synced::HourCycle, Value::U32(1));
+        assert!(!crate::ui::clock::is_24h());
+    }
+
+    #[test]
+    fn accessibility_stops_emoji_stickers_and_gifs() {
+        let mut a = app();
+        let c = a.open_channel().unwrap();
+        let last = a
+            .chat
+            .messages
+            .get_mut(&c)
+            .unwrap()
+            .messages
+            .back_mut()
+            .unwrap();
+        last.content = "party <a:party:1001>".into();
+        last.stickers = crate::mock::mock_stickers();
+        let classes = |a: &App| -> Vec<Class> {
+            a.message_anim_assets()
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect()
+        };
+        assert!(classes(&a).contains(&Class::Emoji));
+        assert!(classes(&a).contains(&Class::Sticker));
+        set(&mut a, Synced::AnimateEmoji, Value::Bool(false));
+        set(
+            &mut a,
+            Synced::AnimateStickers,
+            Value::U32(StickerAnim::Never.wire()),
+        );
+        assert!(!classes(&a).contains(&Class::Emoji));
+        assert!(!classes(&a).contains(&Class::Sticker));
+        assert!(a.emoji_anim(Snowflake(1001), true).is_none());
+        assert!(!a.sticker_animates(Some(Snowflake(1))));
+        set(
+            &mut a,
+            Synced::AnimateStickers,
+            Value::U32(StickerAnim::OnInteraction.wire()),
+        );
+        assert!(!a.sticker_animates(Some(Snowflake(1))));
+        let _ = a.update(Message::Ui(Ui::HoverEnter(crate::app::anim::Hover {
+            user: Snowflake(2),
+            message: Some(Snowflake(1)),
+        })));
+        assert!(a.sticker_animates(Some(Snowflake(1))));
+        // GIF autoplay is synced and drives the media player.
+        assert!(a.autoplay_media());
+        let _ = a.update(Message::Ui(Ui::ToggleAutoplayGifs));
+        assert!(!a.prefs.autoplay_gifs && !a.autoplay_media());
+        assert!(!a.settings.synced.bool(Synced::GifAutoPlay));
+        // Saturation greys the palette.
+        local(&mut a, LocalChange::Saturation(0));
+        let c = a.theme.palette.accent;
+        assert!((c.r - c.b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn voice_volumes_reach_the_engine() {
+        let mut a = app();
+        let _ = a.update(Message::Ui(Ui::Voice(
+            crate::app::voice::VoiceUi::InputVolume(150.0),
+        )));
+        let _ = a.update(Message::Ui(Ui::Voice(
+            crate::app::voice::VoiceUi::OutputVolume(40.0),
+        )));
+        assert!((a.voice.control.input_gain() - 1.5).abs() < 1e-6);
+        assert!((a.voice.control.output_gain() - 0.4).abs() < 1e-6);
+        assert_eq!(a.voice.prefs.input_volume, 150.0);
+    }
+
+    #[test]
+    fn chat_settings_change_sending_and_display() {
+        let mut a = app();
+        set(&mut a, Synced::ConvertEmoticons, Value::Bool(true));
+        let _ = a.update(Message::Ui(Ui::ComposerChanged("nice :)".into())));
+        let _ = a.update(Message::Ui(Ui::Send));
+        let c = a.open_channel().unwrap();
+        let last = a.chat.messages[&c].messages.back().unwrap();
+        assert_eq!(last.content, "nice 🙂");
+        assert!(!a.spoilers_revealed(Some(c)));
+        set(
+            &mut a,
+            Synced::RenderSpoilers,
+            Value::Str(Spoilers::Always.wire().into()),
+        );
+        assert!(a.spoilers_revealed(Some(c)));
+        for s in [
+            Synced::RenderEmbeds,
+            Synced::RenderReactions,
+            Synced::InlineAttachmentMedia,
+            Synced::InlineEmbedMedia,
+        ] {
+            set(&mut a, s, Value::Bool(false));
+        }
+        assert!(!a.show_embeds() && !a.show_reactions());
+        assert!(!a.inline_attachments() && !a.inline_embed_media());
+    }
+
+    #[test]
+    fn notifications_badge_flash_and_preview() {
+        let mut a = app();
+        a.chat
+            .read_states
+            .entry(crate::mock::DM_ALICE)
+            .or_default()
+            .mention_count = 3;
+        let before = a.tray_model().mentions;
+        assert!(before > 0);
+        local(&mut a, LocalChange::UnreadBadge(false));
+        assert_eq!(a.tray_model().mentions, 0);
+        a.window_focused = false;
+        assert!(a.wants_flash());
+        local(&mut a, LocalChange::TaskbarFlash(false));
+        assert!(!a.wants_flash());
+        assert!(a.ctx().notification_preview);
+        local(&mut a, LocalChange::NotifyPreview(false));
+        assert!(!a.ctx().notification_preview);
+    }
+
+    #[test]
+    fn keybind_escape_closes_settings_and_writes_pending_changes() {
+        let mut a = app();
+        let _ = a.update(Message::Ui(Ui::OpenSettings));
+        assert!(a.settings_open);
+        set(&mut a, Synced::RenderEmbeds, Value::Bool(false));
+        assert!(a.settings.synced.has_pending());
+        let _ = a.update(Message::Ui(Ui::Escape));
+        assert!(!a.settings_open);
+        // Flushed (mock mode has no server to write to).
+        assert!(!a.settings.synced.has_pending());
+        assert!(!a.show_embeds());
+    }
+
+    #[test]
+    fn language_is_saved_in_localization() {
+        let mut a = app();
+        set(&mut a, Synced::Locale, Value::Str("pt-BR".into()));
+        let b = a.settings.synced.take_all().unwrap();
+        let raw = us::apply(&[], &b.edits).unwrap();
+        assert_eq!(us::touched(&b.edits), [12]);
+        assert_eq!(us::get_or_default(&raw, Synced::Locale).as_str(), "pt-BR");
+    }
+
+    #[test]
+    fn advanced_developer_mode_and_failed_saves_roll_back() {
+        let mut a = app();
+        assert!(!a.developer_mode());
+        set(&mut a, Synced::DeveloperMode, Value::Bool(true));
+        assert!(a.developer_mode());
+        let gen_batch = a.settings.synced.take_all().unwrap();
+        let _ = a.update(Message::Done(Done::Settings(Box::new(
+            SettingsDone::Saved {
+                result: Err("You are being rate limited.".into()),
+                rollback: gen_batch.rollback,
+            },
+        ))));
+        assert!(!a.developer_mode());
+        assert!(a.toast.as_deref().unwrap().contains("rate limited"));
+    }
+
+    #[test]
+    fn debounce_timer_only_flushes_the_latest_change() {
+        let mut a = app();
+        set(&mut a, Synced::RenderEmbeds, Value::Bool(false));
+        set(&mut a, Synced::RenderReactions, Value::Bool(false));
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::Flush(1))));
+        assert!(a.settings.synced.has_pending());
+        let _ = a.update(Message::Ui(Ui::Settings(SettingsUi::Flush(2))));
+        assert!(!a.settings.synced.has_pending());
+    }
+
+    #[test]
+    fn server_settings_apply_on_load() {
+        let mut a = app();
+        let raw = us::apply(
+            &[],
+            &[
+                Edit::Set(Synced::Theme, Value::U32(Theme::Light.wire())),
+                Edit::Set(Synced::Status, Value::Str("dnd".into())),
+                Edit::Set(Synced::GifAutoPlay, Value::Bool(false)),
+            ],
+        )
+        .unwrap();
+        let _ = a.update(Message::Done(Done::Settings(Box::new(
+            SettingsDone::Loaded(Ok(raw)),
+        ))));
+        assert!(!a.theme.dark);
+        assert_eq!(a.chat.my_status, Presence::Dnd);
+        assert_eq!(a.gateway.status(), Presence::Dnd);
+        assert!(!a.prefs.autoplay_gifs);
     }
 }

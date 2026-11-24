@@ -845,3 +845,42 @@ fn delete_dialog(app: &App, c: ChannelId, m: MessageId) -> El<'_> {
         .on_press(ui(Ui::CancelDelete)),
     )
 }
+
+#[cfg(test)]
+mod dev_mode_tests {
+    use super::*;
+    use crate::net::user_settings::{Synced, Value};
+
+    fn labels(app: &App) -> Vec<String> {
+        let m = app
+            .open_channel()
+            .and_then(|c| app.chat.messages.get(&c))
+            .and_then(|w| w.messages.back())
+            .map(|m| m.id)
+            .unwrap();
+        let mut out: Vec<String> = menu_items(app, m)
+            .into_iter()
+            .map(|i| i.label.to_owned())
+            .collect();
+        let user = app.chat.me_id().unwrap();
+        for r in super::super::context_menu::user_rows_for_tests(app, user) {
+            if let super::super::context_menu::Row::Item { label, .. } = r {
+                out.push(label);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn developer_mode_adds_copy_id_items() {
+        let mut app = App::boot(crate::config::Config::for_tests()).0;
+        let off = labels(&app);
+        assert!(!off.iter().any(|l| l.contains("ID")), "{off:?}");
+        let _ = app.update(crate::app::Message::Ui(Ui::Settings(
+            crate::app::settings::SettingsUi::Set(Synced::DeveloperMode, Value::Bool(true)),
+        )));
+        let on = labels(&app);
+        assert!(on.contains(&"Copy Message ID".to_owned()), "{on:?}");
+        assert!(on.contains(&"Copy User ID".to_owned()), "{on:?}");
+    }
+}

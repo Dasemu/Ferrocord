@@ -110,14 +110,17 @@ impl App {
     /// (taskbar flash / urgent hint) for a new mention while unfocused.
     pub(super) fn flash_taskbar(&self) -> Task<Message> {
         match self.window_id {
-            Some(id) if self.settings.local.taskbar_flash && !self.window_focused => {
-                iced::window::request_user_attention(
-                    id,
-                    Some(iced::window::UserAttention::Informational),
-                )
-            }
+            Some(id) if self.wants_flash() => iced::window::request_user_attention(
+                id,
+                Some(iced::window::UserAttention::Informational),
+            ),
             _ => Task::none(),
         }
+    }
+
+    /// Whether a new mention flashes the taskbar now.
+    pub(super) fn wants_flash(&self) -> bool {
+        self.settings.local.taskbar_flash && !self.window_focused
     }
 
     /// Pushes the current state to the tray (a no-op when unchanged).
