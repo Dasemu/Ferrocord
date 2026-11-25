@@ -4,6 +4,7 @@
 pub mod actions;
 pub mod anim;
 mod background;
+pub mod channel_admin;
 pub mod composer;
 pub mod context;
 pub mod cosmetics;
@@ -169,6 +170,8 @@ pub struct App {
     pub server_dialog: Option<servers::ServerDialog>,
     /// Server administration dialogs and the Server Settings screen.
     pub admin: guild_admin::Admin,
+    /// Create / edit / delete channel dialog.
+    pub channel_dialog: Option<channel_admin::ChannelDialog>,
     pub discover: Option<servers::DiscoverState>,
     /// Server rail interaction (folders, drag and drop, menus).
     pub rail: rail::RailUi,
@@ -319,6 +322,7 @@ impl App {
             panels: features::Panels::default(),
             server_dialog: None,
             admin: guild_admin::Admin::default(),
+            channel_dialog: None,
             discover: None,
             rail: rail::RailUi::default(),
             pending_select: None,
@@ -925,6 +929,38 @@ impl App {
                     }
                 }
             }
+            S::ChannelMenu | S::CreateChannel | S::EditChannel => {
+                let g = mock::GUILD_GAMES;
+                let help = Snowflake(412);
+                self.view = View::Guild {
+                    guild: g,
+                    channel: Some(Snowflake(411)),
+                };
+                use channel_admin::ChannelUi;
+                match s {
+                    S::ChannelMenu => {
+                        self.ctx_menu = Some(context::CtxMenu {
+                            target: context::CtxTarget::Channel(help),
+                            at: iced::Point::new(200.0, 150.0),
+                        });
+                    }
+                    S::CreateChannel => {
+                        let _ = self.update_channel_admin(ChannelUi::OpenCreate {
+                            guild: g,
+                            parent: Some(Snowflake(410)),
+                            category: false,
+                        });
+                        let _ =
+                            self.update_channel_admin(ChannelUi::CreateName("Game Plans".into()));
+                    }
+                    _ => {
+                        let _ = self.update_channel_admin(ChannelUi::OpenEdit(help));
+                        let _ = self.update_channel_admin(ChannelUi::EditTopic(
+                            "Stuck on a level? Ask here.".into(),
+                        ));
+                    }
+                }
+            }
             S::LeaveServer => {
                 let _ = self.update_admin(guild_admin::AdminUi::AskLeave(mock::GUILD_RUST));
             }
@@ -1188,6 +1224,7 @@ impl App {
             Ui::Voice(v) => self.update_voice(v),
             Ui::Settings(s) => self.update_settings(s),
             Ui::Admin(a) => self.update_admin(a),
+            Ui::Channel(c) => self.update_channel_admin(c),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -2017,6 +2054,7 @@ impl App {
             Done::Joined { generation, result } => self.on_joined(generation, result),
             Done::Created(r) => self.on_created(r),
             Done::Admin(d) => self.on_admin_done(d),
+            Done::Channel(d) => self.on_channel_done(d),
             Done::IconPicked(r) => self.on_icon_picked(r),
             Done::DiscoverCategories(r) => {
                 if let (Some(d), Ok(c)) = (self.discover.as_mut(), r) {

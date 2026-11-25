@@ -682,6 +682,9 @@ impl App {
         if self.pending_delete.take().is_some() || self.pending_link.take().is_some() {
             return Task::none();
         }
+        if self.channel_dialog.is_some() {
+            return self.update_channel_admin(super::channel_admin::ChannelUi::Close);
+        }
         if self.admin.dialog.is_some() {
             return self.update_admin(super::guild_admin::AdminUi::CloseDialog);
         }

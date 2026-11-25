@@ -764,7 +764,7 @@ produced); keybind editing; translating Ferrocord's own UI (English only;
 the Language page sets the account locale); `USER_SETTINGS_PROTO_UPDATE`
 is not handled (the screen re-reads the proto when it opens instead).
 
-## 15. Permissions and server administration (`app/permissions.rs`, `app/guild_admin.rs`, `net/rest/guild.rs`, `ui/server_settings.rs`)
+## 15. Permissions and server administration (`app/permissions.rs`, `app/guild_admin.rs`, `app/channel_admin.rs`, `net/rest/guild.rs`, `ui/server_settings.rs`, `ui/channel_admin.rs`)
 
 **Permissions.** Computed like the official client: the owner and
 Administrator get everything; otherwise the server-wide bits are the union of
@@ -798,6 +798,18 @@ server and goes Home; the gateway's `GUILD_DELETE` removes it. A 403 reads
 "You do not have permission"; a two-factor requirement points to the official
 client (Ferrocord has no MFA prompt).
 
-Not implemented yet: roles, channel create/edit/delete, member moderation
-(kick, ban, timeout), emoji/sticker uploads, audit log, ownership transfer.
+**Channels** (`app/channel_admin.rs`, `ui/channel_admin.rs`), for users with
+Manage Channels (server-wide to create; in the channel to edit, move or
+delete):
+
+| Action | Where | Call |
+|---|---|---|
+| Create Channel / Category | server dropdown; "Create Channel" in a category's right-click menu and its "+" | `POST /guilds/{id}/channels {name, type: 0 text / 2 voice / 4 category, parent_id?, permission_overwrites: []}`. Text names are typed like the official client (lower case, spaces as dashes). The new text channel opens. |
+| Edit Channel / Category | channel or category right-click menu | `PATCH /channels/{id}` with the changed fields only: `name`, `topic` (`null` clears), `nsfw`, `parent_id` (`null` = no category). Applied locally on success; `CHANNEL_UPDATE` confirms. |
+| Move Up / Move Down | same menu | siblings (all categories, or the channels under the same category in the same text/voice group, by `(position, id)`) are renumbered 0.. in the new order and the changed ones sent as `PATCH /guilds/{id}/channels [{id, position}]`. Applied at once; a failure restores the old positions. |
+| Delete | same menu, or the Edit dialog | confirmation, then `DELETE /channels/{id}`. Removed locally at once (an open channel switches to the server's first one); deleting a category keeps its channels, uncategorised. |
+
+Not implemented yet: roles, channel permission overwrites editing,
+drag-and-drop reordering, member moderation (kick, ban, timeout),
+emoji/sticker uploads, audit log, ownership transfer.
 

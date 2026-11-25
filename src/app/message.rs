@@ -197,6 +197,8 @@ pub enum Ui {
     InboxGuildOnly(bool),
     /// Server administration (dropdown, Server Settings).
     Admin(super::guild_admin::AdminUi),
+    /// Channel administration (create, edit, delete, move).
+    Channel(super::channel_admin::ChannelUi),
     // -- add a server
     OpenAddServer,
     CloseAddServer,
@@ -415,6 +417,7 @@ pub enum Done {
     },
     Created(Result<(GuildId, String), String>),
     Admin(super::guild_admin::AdminDone),
+    Channel(super::channel_admin::ChannelDone),
     /// Server icon chosen: `(path, data URI)` or the reason it was refused;
     /// `None` when the dialog was cancelled.
     IconPicked(Option<Result<(PathBuf, String), String>>),
