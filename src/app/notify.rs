@@ -20,11 +20,16 @@ static WATCHING: AtomicUsize = AtomicUsize::new(0);
 
 /// Takes one watcher slot if one is free.
 fn take_slot() -> bool {
-    WATCHING
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-            (n < MAX_CLICK_WATCHERS).then_some(n + 1)
-        })
-        .is_ok()
+    // A compare-exchange loop: `fetch_update` is deprecated in newer Rust
+    // (renamed `try_update`), which older toolchains don't have.
+    let mut n = WATCHING.load(Ordering::Acquire);
+    while n < MAX_CLICK_WATCHERS {
+        match WATCHING.compare_exchange_weak(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(current) => n = current,
+        }
+    }
+    false
 }
 
 fn release_slot() {
