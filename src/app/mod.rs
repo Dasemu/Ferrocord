@@ -23,6 +23,7 @@ pub mod members;
 pub mod message;
 pub mod nitro;
 pub mod notify;
+mod opener;
 pub mod panels;
 pub mod plugins;
 pub mod profile;
@@ -1143,7 +1144,7 @@ impl App {
                 if !(url.starts_with("https://") || url.starts_with("http://")) || self.cfg.mock {
                     return Task::none();
                 }
-                Task::perform(open_url(url), |_| Message::Done(Done::Ignored))
+                Task::perform(opener::open(url), |_| Message::Done(Done::Ignored))
             }
             Ui::Logout => self.logout(),
             Ui::Voice(v) => self.update_voice(v),
@@ -2573,34 +2574,6 @@ fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
             }
         },
     )
-}
-
-async fn open_url(url: String) {
-    let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
-        let cmd = "xdg-open";
-        #[cfg(target_os = "macos")]
-        let cmd = "open";
-        #[cfg(target_os = "windows")]
-        let cmd = "explorer";
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        let cmd = "xdg-open";
-        // Wait for the opener so it is reaped (xdg-open/open return as soon
-        // as the browser has been handed the URL).
-        match std::process::Command::new(cmd)
-            .arg(url)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                let _ = child.wait();
-            }
-            Err(e) => tracing::warn!(error = %e, "could not launch URL opener"),
-        }
-    })
-    .await;
 }
 
 fn save_png(path: &std::path::Path, shot: &iced::window::Screenshot) -> crate::error::Result<()> {
