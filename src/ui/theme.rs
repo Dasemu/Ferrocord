@@ -771,6 +771,30 @@ pub fn reaction_pill(p: Palette, me: bool) -> impl Fn(&Theme, button::Status) ->
 }
 
 /// Text-like button (links, spoiler reveal).
+/// Outlined button on a coloured notice bar (the update banner), like the
+/// official client's notice buttons.
+pub fn notice_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: hovered.then_some(Background::Color(Color {
+                a: 0.15,
+                ..p.accent_text
+            })),
+            text_color: p.accent_text,
+            border: Border {
+                radius: Metrics::DEFAULT.radius_small.into(),
+                width: 1.0,
+                color: p.accent_text,
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// Height of the update banner's buttons and of the bar itself.
+pub const NOTICE_BUTTON_PAD: [u16; 2] = [2, 10];
+
 pub fn link_button(_p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, _| button::Style {
         background: None,

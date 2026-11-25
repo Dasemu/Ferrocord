@@ -19,6 +19,18 @@ pub struct Primary {
     listener: Option<std::os::unix::net::UnixListener>,
 }
 
+/// The socket this process owns (set once it is the primary instance).
+static OWNED_SOCKET: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Gives up the single-instance lock (before a restart spawns the new
+/// version): the socket is removed, so the next launch becomes primary.
+/// The listener thread keeps an unreachable socket until the process exits.
+pub fn release() {
+    if let Some(p) = OWNED_SOCKET.get() {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 /// Wakes the app when a second launch asked for the window.
 static SHOW_REQUESTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
@@ -80,6 +92,7 @@ mod imp {
 
     fn primary(path: &Path, listener: UnixListener) -> std::io::Result<Role> {
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let _ = super::OWNED_SOCKET.set(path.to_path_buf());
         Ok(Role::Primary(Primary {
             listener: Some(listener),
         }))

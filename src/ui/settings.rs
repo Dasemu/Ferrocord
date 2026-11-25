@@ -160,7 +160,7 @@ fn divider(app: &App) -> El<'_> {
         .into()
 }
 
-fn rule(app: &App) -> El<'_> {
+pub(crate) fn rule(app: &App) -> El<'_> {
     container(Space::new().height(1).width(Length::Fill))
         .style(theme::bg(app.theme.palette.border))
         .into()
@@ -180,13 +180,14 @@ fn page(app: &App) -> El<'_> {
         Category::Keybinds => keybinds(app),
         Category::Language => language(app),
         Category::Advanced => advanced(app),
+        Category::Updates => crate::update::view::page(app),
         Category::Plugins => super::plugins::page(app),
     }
 }
 
 // -- building blocks -----------------------------------------------------------
 
-fn title<'a>(app: &'a App, s: &'a str) -> El<'a> {
+pub(crate) fn title<'a>(app: &'a App, s: &'a str) -> El<'a> {
     text(s)
         .size(app.theme.metrics.font_l)
         .font(INTER_SEMIBOLD)
@@ -194,7 +195,7 @@ fn title<'a>(app: &'a App, s: &'a str) -> El<'a> {
         .into()
 }
 
-fn heading<'a>(app: &'a App, s: &'a str) -> El<'a> {
+pub(crate) fn heading<'a>(app: &'a App, s: &'a str) -> El<'a> {
     container(
         text(s)
             .size(app.theme.metrics.font_xs)
@@ -205,14 +206,20 @@ fn heading<'a>(app: &'a App, s: &'a str) -> El<'a> {
     .into()
 }
 
-fn note<'a>(app: &'a App, s: impl Into<String>) -> El<'a> {
+pub(crate) fn note<'a>(app: &'a App, s: impl Into<String>) -> El<'a> {
     text(s.into())
         .size(app.theme.metrics.font_s)
         .color(app.theme.palette.text_muted)
         .into()
 }
 
-fn toggle<'a>(app: &'a App, title: &'a str, hint: &'a str, on: bool, msg: Message) -> El<'a> {
+pub(crate) fn toggle<'a>(
+    app: &'a App,
+    title: &'a str,
+    hint: &'a str,
+    on: bool,
+    msg: Message,
+) -> El<'a> {
     let t = &app.theme;
     let p = t.palette;
     let mut text_col = column![text(title).size(t.metrics.font_m).color(p.text_normal)].spacing(4);
@@ -303,7 +310,7 @@ fn labelled_slider<'a>(
     .into()
 }
 
-fn page_col<'a>() -> iced::widget::Column<'a, Message> {
+pub(crate) fn page_col<'a>() -> iced::widget::Column<'a, Message> {
     column![].spacing(20).width(Length::Fill)
 }
 

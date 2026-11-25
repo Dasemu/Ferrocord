@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
 license = "MIT"
-repository = "https://github.com/Dasemu/Ferrocord"
+repository = "https://github.com/FerroApps/Ferrocord"
 publish = false
 default-run = "ferrocord"
 
@@ -150,6 +150,9 @@ windows = { version = "0.62", optional = true, features = [
 ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
 # Renders the bundled SVG icon to ARGB pixmaps; already compiled for iced's svg.
 resvg = { version = "0.45", default-features = false }
+# In-app updater: reads the release tarball (`update::extract`, our own
+# safe extraction on top of its header parser); no xattr support needed.
+tar = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 # Fake voice gateway (MLS external sender) for the DAVE loopback test; same
