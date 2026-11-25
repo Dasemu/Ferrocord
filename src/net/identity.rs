@@ -62,7 +62,7 @@ pub fn current() -> &'static ClientProperties {
 /// The honest `User-Agent` of every HTTP request.
 pub fn user_agent() -> String {
     format!(
-        "Ferrocord/{} (+https://github.com/Dasemu/Ferrocord)",
+        "Ferrocord/{} (+https://github.com/FerroApps/Ferrocord)",
         env!("CARGO_PKG_VERSION")
     )
 }

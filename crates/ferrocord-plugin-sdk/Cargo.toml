@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "SDK and ABI types for Ferrocord WebAssembly plugins"
 license = "MIT"
-repository = "https://github.com/Dasemu/Ferrocord"
+repository = "https://github.com/FerroApps/Ferrocord"
 publish = false
 
 [features]

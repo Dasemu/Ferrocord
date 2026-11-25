@@ -1,6 +1,7 @@
 # Ferrocord
 
 A lightweight, native Discord desktop client written in Rust with
+[ferroiced](https://github.com/Kartudev/ferroiced), a dedicated and optimized fork of 
 [iced](https://iced.rs). It talks to Discord's Gateway (WebSocket) and REST
 API directly and aims to look and behave like the official client while
 using a fraction of its memory.
@@ -19,17 +20,17 @@ using a fraction of its memory.
 ## Install / update
 
 Linux x86_64, no root needed. One command installs and updates (it downloads
-the latest [release](https://github.com/Dasemu/Ferrocord/releases/latest), checks
+the latest [release](https://github.com/FerroApps/Ferrocord/releases/latest), checks
 its SHA-256 and puts the binary, menu entry and icon under `~/.local`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/FerroApps/Ferrocord/main/install.sh | sh
 ```
 
 Uninstall (removes only what the installer added, never your account data):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/FerroApps/Ferrocord/main/install.sh | sh -s -- --uninstall
 ```
 
 Manual alternative: download `ferrocord-vX.Y.Z-linux-x86_64.tar.gz` and its
