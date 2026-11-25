@@ -81,7 +81,8 @@ shared `Decompress` context. The buffer is capped at 64 MiB.
 (partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
 `MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
 `GUILD_CREATE/UPDATE/DELETE`, `MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI`,
-`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`, `GUILD_STICKERS_UPDATE`. Unknown events are ignored; a malformed known
+`PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`, `GUILD_STICKERS_UPDATE`,
+`GUILD_ROLE_CREATE/UPDATE/DELETE`, `GUILD_MEMBER_UPDATE` (member roles). Unknown events are ignored; a malformed known
 event is logged (without its payload) and the connection stays up.
 
 ### User-account READY quirks
@@ -317,7 +318,7 @@ pure parsing/payloads live in `net/extras.rs`, calls in `net/rest/ext.rs`.
 | Feature | Calls |
 |---|---|
 | Bell | `PATCH /users/@me/guilds/{guild\|@me}/settings` with `channel_overrides.{id}`: `message_notifications` (0 all, 1 mentions, 2 nothing, 3 inherit), `muted` + `mute_config {selected_time_window, end_time}` (`-1`/`null` = until turned back on). READY `user_guild_settings` and `USER_GUILD_SETTINGS_UPDATE` feed `ChatState::channel_notify`; expired timed mutes are dropped. |
-| Pins | `GET /channels/{id}/pins` (array, or the paginated `{items:[{message}]}` shape); `DELETE /channels/{c}/pins/{m}`. The unpin button shows for DMs, the owner, Administrator and Manage Messages (server-wide role bits; channel overwrites are not applied, a 403 is reported). |
+| Pins | `GET /channels/{id}/pins` (array, or the paginated `{items:[{message}]}` shape); `DELETE /channels/{c}/pins/{m}`. The unpin button shows for DMs and where the user has Manage Messages in that channel (owner, Administrator, roles, channel overwrites; see §15). A 403 is still reported. |
 | Inbox | `GET /users/@me/mentions?limit=25&roles=true&everyone=true[&before=][&guild_id=]` (Mentions tab, "This Server" filter, load more). |
 | Help | opens `https://support.discord.com/` in the browser. |
 | Search | `GET /guilds/{id}/messages/search` / `/channels/{id}/messages/search`; `from:name` -> `author_id`, `has:image\|video\|sound\|file\|link\|embed\|sticker` -> `has`, `in:#channel` -> `channel_id` (servers only). Names resolve against known users/channels; an unknown one is an error shown in the panel. |
@@ -762,3 +763,41 @@ the ones above (reaction, friend and activity notifications are not
 produced); keybind editing; translating Ferrocord's own UI (English only;
 the Language page sets the account locale); `USER_SETTINGS_PROTO_UPDATE`
 is not handled (the screen re-reads the proto when it opens instead).
+
+## 15. Permissions and server administration (`app/permissions.rs`, `app/guild_admin.rs`, `net/rest/guild.rs`, `ui/server_settings.rs`)
+
+**Permissions.** Computed like the official client: the owner and
+Administrator get everything; otherwise the server-wide bits are the union of
+`@everyone` (the role whose id is the guild id) and the user's roles (READY
+`merged_members`, `GUILD_MEMBER_UPDATE`). In a channel the overwrites
+(`permission_overwrites`: `type` 0 role / 1 member, `allow`/`deny` decimal
+strings) apply in order: `@everyone`, then all of the user's roles together
+(denies, then allows), then the member overwrite. Threads use their parent's.
+Role changes arrive as `GUILD_ROLE_CREATE/UPDATE/DELETE` (and with the whole
+guild in `GUILD_UPDATE`). Channels without View Channel are left out of the
+channel list and the unread badges; a category shows while it holds a visible
+channel or is visible itself. A server whose roles lack `@everyone` (partial
+data) is shown unfiltered.
+
+**Server dropdown.** The chevron in the channel-list header opens the same
+menu as the rail's right-click, with the admin actions first:
+
+| Action | Shown when | Call |
+|---|---|---|
+| Invite People | Create Invite + View Channel in some channel (the open one first) | `POST /channels/{id}/invites {max_age: 604800, max_uses: 0, temporary: false}` -> `code`; the dialog shows `https://discord.gg/{code}` with Copy. |
+| Server Settings | Manage Server | opens the Server Settings screen. |
+| Leave Server | not the owner | confirmation, then `DELETE /users/@me/guilds/{id} {lurking: false}`. |
+
+**Server Settings** (full window, Esc closes). Overview: name (2-100
+characters) and icon (PNG/JPEG/GIF/WebP `data:` URI, 4 MB, or removed).
+"Save Changes" sends only the changed fields with `PATCH /guilds/{id}
+{name?, icon?}`; the new name shows at once, the icon when `GUILD_UPDATE`
+arrives. Delete Server (owner only) asks for the server name typed exactly,
+then `DELETE /guilds/{id}`. Leaving or deleting closes everything about the
+server and goes Home; the gateway's `GUILD_DELETE` removes it. A 403 reads
+"You do not have permission"; a two-factor requirement points to the official
+client (Ferrocord has no MFA prompt).
+
+Not implemented yet: roles, channel create/edit/delete, member moderation
+(kick, ban, timeout), emoji/sticker uploads, audit log, ownership transfer.
+

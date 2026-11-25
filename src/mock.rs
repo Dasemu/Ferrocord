@@ -115,6 +115,7 @@ fn ch(
         last_message_id: None,
         recipients: vec![],
         nsfw: false,
+        overwrites: vec![],
     }
 }
 
@@ -352,7 +353,12 @@ pub fn ready() -> ReadyData {
             )),
             iced_emoji(guild(GUILD_ICED, "Iced GUI", vec![])),
             guild(GUILD_LINUX, "Linux Desktop", vec![]),
-            guild(GUILD_GAMES, "Game Night", vec![]),
+            // Owned by the mock user: the server dropdown offers the admin
+            // actions (Server Settings, Invite People).
+            Guild {
+                owner_id: Some(ME),
+                ..guild(GUILD_GAMES, "Game Night", vec![])
+            },
             guild(GUILD_CAFE, "Open Source Café", vec![]),
         ],
         channels,

@@ -195,6 +195,8 @@ pub enum Ui {
     Unpin(ChannelId, MessageId),
     InboxMore,
     InboxGuildOnly(bool),
+    /// Server administration (dropdown, Server Settings).
+    Admin(super::guild_admin::AdminUi),
     // -- add a server
     OpenAddServer,
     CloseAddServer,
@@ -412,6 +414,7 @@ pub enum Done {
         result: Result<(GuildId, String), String>,
     },
     Created(Result<(GuildId, String), String>),
+    Admin(super::guild_admin::AdminDone),
     /// Server icon chosen: `(path, data URI)` or the reason it was refused;
     /// `None` when the dialog was cancelled.
     IconPicked(Option<Result<(PathBuf, String), String>>),
