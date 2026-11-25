@@ -198,6 +198,10 @@ fn quit_from_tray(env: &[(&str, &str)]) -> Duration {
 
         let home = tempfile::tempdir().unwrap();
         let run = tempfile::tempdir().unwrap();
+        // The child's stderr goes to a file (a pipe nobody reads could fill
+        // up and block it) and is printed when the test fails.
+        let log_path = home.path().join("stderr.log");
+        let log = std::fs::File::create(&log_path).unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_ferrocord"));
         cmd.arg("--mock")
             .env("HOME", home.path())
@@ -209,11 +213,15 @@ fn quit_from_tray(env: &[(&str, &str)]) -> Duration {
             .env("ICED_BACKEND", "tiny-skia")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(log));
         for (k, v) in env {
             cmd.env(k, v);
         }
         let mut child = cmd.spawn().unwrap();
+        let fail = |what: String| -> ! {
+            let stderr = std::fs::read_to_string(&log_path).unwrap_or_default();
+            panic!("{what}\n--- ferrocord stderr ---\n{stderr}--- end of stderr ---");
+        };
 
         // Wait for the tray icon, then give the window a moment to open.
         let start = Instant::now();
@@ -222,16 +230,19 @@ fn quit_from_tray(env: &[(&str, &str)]) -> Duration {
                 break s;
             }
             if let Ok(Some(status)) = child.try_wait() {
-                panic!("ferrocord exited early: {status}");
+                fail(format!("ferrocord exited early: {status}"));
             }
-            assert!(
-                start.elapsed() < Duration::from_secs(30),
-                "the tray never registered"
-            );
+            if start.elapsed() > Duration::from_secs(30) {
+                let _ = child.kill();
+                let _ = child.wait();
+                fail("the tray never registered".into());
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(child.try_wait().unwrap().is_none(), "still running");
+        if let Ok(Some(status)) = child.try_wait() {
+            fail(format!("ferrocord exited before Quit: {status}"));
+        }
 
         let client = zbus::Connection::session().await.unwrap();
         let menu = zbus::Proxy::new(
@@ -253,13 +264,18 @@ fn quit_from_tray(env: &[(&str, &str)]) -> Duration {
             .await
             .unwrap();
         loop {
-            if child.try_wait().unwrap().is_some() {
-                break clicked.elapsed();
+            if let Some(status) = child.try_wait().unwrap() {
+                let took = clicked.elapsed();
+                // A panic during shutdown is a failure too, not a fast exit.
+                if !status.success() {
+                    fail(format!("ferrocord failed after Quit: {status}"));
+                }
+                break took;
             }
             if clicked.elapsed() > Duration::from_secs(10) {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("ferrocord still running 10 s after Quit");
+                fail("ferrocord still running 10 s after Quit".into());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
