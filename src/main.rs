@@ -86,7 +86,8 @@ fn main() -> iced::Result {
     .scale_factor(|app: &App, _window: iced::window::Id| app.zoom())
     .default_font(ferrocord::ui::theme::INTER)
     .antialiasing(true);
-    // Colour emoji: the bundled Twemoji (see `ui::emoji_font`).
+    // UI font (Inter) and colour emoji (Twemoji), before any window exists
+    // (see `ui::emoji_font`).
     ferrocord::ui::emoji_font::install();
     app.run()
 }

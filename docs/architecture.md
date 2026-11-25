@@ -137,8 +137,10 @@ pub struct FerroTheme { pub palette: Palette, pub metrics: Metrics, pub dark: bo
 * **Dark theme is the default.** A light palette exists where the official
   client has one; selection follows the `FERRO_THEME` env var or config, and
   defaults to dark.
-* **Typography:** Inter (SIL OFL 1.1) embedded via `include_bytes!` and
-  registered with `iced::font::load`; Unicode emoji use the embedded Twemoji
+* **Typography:** Inter (SIL OFL 1.1, Regular/Medium/SemiBold/Bold/Italic)
+  embedded via `include_bytes!` and loaded zero-copy into iced's font system
+  in `main` before `run` (`ui::emoji_font::install`; `iced::font::load` is
+  dropped while a daemon has no window); Unicode emoji use the embedded Twemoji
   COLRv0 font (CC-BY 4.0, `ui::emoji_font`), as the official client does. Font sizes follow a small scale defined in `Metrics`.
 * **Icons:** Lucide (ISC licence) SVGs embedded in `ui/icons.rs`. Official
   logos, icon sets and fonts of the service are never included.
