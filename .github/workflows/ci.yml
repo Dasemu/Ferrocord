@@ -23,13 +23,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # libxkbcommon-x11-0: winit dlopens it on X11 (it is not linked, so no
+      # -dev package pulls it in) and panics without it; quit_deadline runs
+      # the real binary under Xvfb.
       - name: Install system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config cmake libssl-dev libdbus-1-dev libxkbcommon-dev \
             libwayland-dev libfontconfig1-dev libasound2-dev dbus gnome-keyring \
-            libwebkit2gtk-4.1-dev libgtk-3-dev xvfb xauth
+            libwebkit2gtk-4.1-dev libgtk-3-dev xvfb xauth libxkbcommon-x11-0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
