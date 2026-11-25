@@ -75,6 +75,14 @@ pub enum ScreenshotScreen {
     CreateChannel,
     /// Edit Channel dialog.
     EditChannel,
+    /// Server Settings → Roles, editing a role.
+    ServerRoles,
+    /// Right-click menu of a server member, with the moderation items.
+    MemberMenu,
+    /// A member's roles dialog.
+    MemberRoles,
+    /// Ban dialog for a member.
+    BanMember,
     /// Joined voice channel with users, speaking ring and the
     /// "Voice Connected" panel.
     Voice,
@@ -141,6 +149,10 @@ impl ScreenshotScreen {
                 | Self::ChannelMenu
                 | Self::CreateChannel
                 | Self::EditChannel
+                | Self::ServerRoles
+                | Self::MemberMenu
+                | Self::MemberRoles
+                | Self::BanMember
         )
     }
 
@@ -183,6 +195,10 @@ impl ScreenshotScreen {
             "channel-menu" => Some(Self::ChannelMenu),
             "create-channel" => Some(Self::CreateChannel),
             "edit-channel" => Some(Self::EditChannel),
+            "server-roles" => Some(Self::ServerRoles),
+            "member-menu" => Some(Self::MemberMenu),
+            "member-roles" => Some(Self::MemberRoles),
+            "ban-member" => Some(Self::BanMember),
             "search-filters" => Some(Self::SearchFilters),
             "voice" => Some(Self::Voice),
             "call" => Some(Self::Call),

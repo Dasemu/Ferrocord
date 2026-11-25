@@ -19,6 +19,7 @@ pub mod popovers;
 pub mod popups;
 pub mod profile;
 pub mod rail;
+pub mod roles;
 pub mod search;
 pub mod server_settings;
 pub mod servers;
@@ -111,6 +112,7 @@ pub fn view(app: &App) -> El<'_> {
     layers.push(server_settings::screen(app).unwrap_or_else(empty));
     layers.push(server_settings::dialog(app).unwrap_or_else(empty));
     layers.push(channel_admin::view(app).unwrap_or_else(empty));
+    layers.push(roles::dialog(app).unwrap_or_else(empty));
     layers.push(match &app.pending_link {
         Some(url) => leave_dialog(t, url),
         None => empty(),
@@ -126,9 +128,9 @@ pub fn view(app: &App) -> El<'_> {
 
 /// Base content + discover page + popup slots + voice user menu + incoming
 /// call + add-server dialog + folder dialog + settings + server settings +
-/// admin dialog + channel dialog + link dialog + image viewer + full-screen
+/// admin dialog + channel dialog + role/member dialog + link dialog + image viewer + full-screen
 /// video.
-pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 7 + 1 + 1;
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 8 + 1 + 1;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {

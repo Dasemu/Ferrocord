@@ -764,7 +764,7 @@ produced); keybind editing; translating Ferrocord's own UI (English only;
 the Language page sets the account locale); `USER_SETTINGS_PROTO_UPDATE`
 is not handled (the screen re-reads the proto when it opens instead).
 
-## 15. Permissions and server administration (`app/permissions.rs`, `app/guild_admin.rs`, `app/channel_admin.rs`, `net/rest/guild.rs`, `ui/server_settings.rs`, `ui/channel_admin.rs`)
+## 15. Permissions and server administration (`app/permissions.rs`, `app/guild_admin.rs`, `app/channel_admin.rs`, `app/role_admin.rs`, `net/rest/guild.rs`, `ui/server_settings.rs`, `ui/channel_admin.rs`, `ui/roles.rs`)
 
 **Permissions.** Computed like the official client: the owner and
 Administrator get everything; otherwise the server-wide bits are the union of
@@ -785,7 +785,7 @@ menu as the rail's right-click, with the admin actions first:
 | Action | Shown when | Call |
 |---|---|---|
 | Invite People | Create Invite + View Channel in some channel (the open one first) | `POST /channels/{id}/invites {max_age: 604800, max_uses: 0, temporary: false}` -> `code`; the dialog shows `https://discord.gg/{code}` with Copy. |
-| Server Settings | Manage Server | opens the Server Settings screen. |
+| Server Settings | Manage Server or Manage Roles | opens the Server Settings screen (Overview, or Roles without Manage Server). |
 | Leave Server | not the owner | confirmation, then `DELETE /users/@me/guilds/{id} {lurking: false}`. |
 
 **Server Settings** (full window, Esc closes). Overview: name (2-100
@@ -809,7 +809,33 @@ delete):
 | Move Up / Move Down | same menu | siblings (all categories, or the channels under the same category in the same text/voice group, by `(position, id)`) are renumbered 0.. in the new order and the changed ones sent as `PATCH /guilds/{id}/channels [{id, position}]`. Applied at once; a failure restores the old positions. |
 | Delete | same menu, or the Edit dialog | confirmation, then `DELETE /channels/{id}`. Removed locally at once (an open channel switches to the server's first one); deleting a category keeps its channels, uncategorised. |
 
-Not implemented yet: roles, channel permission overwrites editing,
-drag-and-drop reordering, member moderation (kick, ban, timeout),
-emoji/sticker uploads, audit log, ownership transfer.
+**Roles** (`app/role_admin.rs`, `ui/roles.rs`; Server Settings -> Roles, for
+users with Manage Roles). Hierarchy like the official client: the owner is
+above every role, everyone else ranks at their highest role's `position`;
+a role can be edited, deleted or given only when it is below the user's top
+role, and only permissions the user has can be switched on (Administrator
+can grant anything). `@everyone` is always listed and edits only its
+permissions.
+
+| Action | Call |
+|---|---|
+| Create Role | `POST /guilds/{id}/roles {name: "new role", permissions: "0"}`; the new role is selected. |
+| Save Changes (name, colour, permission switches) | `PATCH /guilds/{id}/roles/{role}` with the changed fields only: `name`, `color`, `permissions` (decimal string); applied locally, `GUILD_ROLE_UPDATE` confirms. |
+| Delete Role | confirmation, then `DELETE /guilds/{id}/roles/{role}`. |
+| Member's Roles (user right-click -> Roles, in a server) | `PUT` / `DELETE /guilds/{id}/members/{user}/roles/{role}`; applied at once, rolled back on failure. |
+
+**Member moderation** (user right-click in a server). Each item shows only
+with the permission and a higher rank than the member (never on oneself or
+the owner). The optional reason goes in `X-Audit-Log-Reason`
+(percent-encoded, 512 chars).
+
+| Action | Permission | Call |
+|---|---|---|
+| Timeout (60 s, 5 min, 10 min, 1 h, 1 day, 1 week) | Timeout Members | `PATCH /guilds/{id}/members/{user} {communication_disabled_until: ISO-8601}`; "Remove Timeout" sends `null`. |
+| Kick | Kick Members | `DELETE /guilds/{id}/members/{user}`. |
+| Ban (delete none / 1 h / 24 h / 7 days of messages) | Ban Members | `PUT /guilds/{id}/bans/{user} {delete_message_seconds}`. |
+
+Not implemented yet: channel permission overwrites editing, role
+reordering, hoist/mentionable switches, drag-and-drop channel reordering,
+unban list, emoji/sticker uploads, audit log, ownership transfer.
 
