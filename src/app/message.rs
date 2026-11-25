@@ -28,6 +28,8 @@ pub enum Message {
     Voice(crate::net::voice::VoiceEvent),
     /// Plugins: page input, plugin-thread output, task results.
     Plugin(super::plugins::PluginMsg),
+    /// In-app updater (`crate::update`).
+    Update(crate::update::UpdateMsg),
 }
 
 /// User input.
@@ -252,6 +254,8 @@ pub enum Ui {
 /// Completion of a `Task`.
 #[derive(Debug, Clone)]
 pub enum Done {
+    /// Quit: the bounded shutdown work finished (or ran out of time).
+    QuitReady,
     /// Autostart entry written or removed: the resulting state.
     AutostartChanged(Result<bool, String>),
     /// Initial autostart state read from disk.

@@ -9,7 +9,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced>|plugins|plugin-prompt|plugin-decorations> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced|updates>|plugins|plugin-prompt|plugin-decorations|update-banner> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
@@ -105,3 +105,12 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   `xdotool windowfocus` first (unfocused windows pause animations).
 - GIF picker media go through `gif_anim::picker_bytes` (100 MB disk LRU in the cache dir, 4 downloads at a
   time); tile animations live in `App::gif_anims` (near-view tiles only, freed when the picker closes).
+- Quit (`App::quit`, `src/shutdown.rs`) must leave in < 1 s: iced drops its tokio runtime at exit and that
+  WAITS FOR EVERY `spawn_blocking` TASK. Never run an unbounded wait there (notification click watches use
+  detached threads, `app/notify.rs`); shutdown work is bounded (`FLUSH_BUDGET`) and a watchdog exits at
+  `EXIT_DEADLINE`. Test: `dbus-run-session -- xvfb-run -a cargo test --test quit_deadline`.
+- In-app updater (`src/update/`, docs/architecture.md §12): GitHub `FerroApps/Ferrocord` releases only; never in
+  `--mock`/`--screenshot`/debug builds (`FERRO_UPDATE_FORCE=1` lifts the debug rule). Self-update only for the
+  `install.sh` layout and a writable Windows zip folder; cargo installs get the `cargo install` command, everything
+  else the release page. Reuse `install.sh`'s paths and file list (`update::install::SHIPPED`); stage next to the
+  target and rename, roll back on failure. Restart runs the installed path, never `current_exe()` ("(deleted)").

@@ -53,12 +53,14 @@ pub enum Category {
     Keybinds,
     Language,
     Advanced,
+    /// Version, update checks and install (`update::view::page`).
+    Updates,
     /// Community plugins (`ui::plugins::page`).
     Plugins,
 }
 
 impl Category {
-    pub const ALL: [Category; 13] = [
+    pub const ALL: [Category; 14] = [
         Self::MyAccount,
         Self::Profiles,
         Self::Privacy,
@@ -71,6 +73,7 @@ impl Category {
         Self::Keybinds,
         Self::Language,
         Self::Advanced,
+        Self::Updates,
         Self::Plugins,
     ];
 
@@ -88,6 +91,7 @@ impl Category {
             Self::Keybinds => "Keybinds",
             Self::Language => "Language",
             Self::Advanced => "Advanced",
+            Self::Updates => "Updates",
             Self::Plugins => "Plugins",
         }
     }
@@ -118,6 +122,7 @@ impl Category {
             Self::Keybinds => "keybinds",
             Self::Language => "language",
             Self::Advanced => "advanced",
+            Self::Updates => "updates",
             Self::Plugins => "plugins",
         }
     }
@@ -949,6 +954,25 @@ impl App {
         }
     }
 
+    /// Quitting: the queued changes as one request to await with a
+    /// deadline (no rollback, the app is going away).
+    pub(super) fn settings_flush_for_quit(
+        &mut self,
+    ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        if self.cfg.mock {
+            return None;
+        }
+        let Batch { edits, .. } = self.settings.synced.take_all()?;
+        let rest = self.rest.clone();
+        let lock = self.settings.lock.clone();
+        Some(async move {
+            let _guard = lock.lock().await;
+            if let Err(e) = rest.edit_user_settings(&edits).await {
+                tracing::warn!(error = %e.user_message(), "settings not saved before quitting");
+            }
+        })
+    }
+
     pub(super) fn open_settings_screen(&mut self) -> Task<Message> {
         if !self.settings.forms.profile_loaded {
             let name = self
@@ -993,6 +1017,10 @@ impl App {
                     self.settings.mic_test = None;
                     let scan = self.on_plugin(super::plugins::PluginMsg::OpenPage);
                     return Task::batch([top, scan]);
+                }
+                if c == Category::Updates {
+                    self.settings.mic_test = None;
+                    return Task::batch([top, self.updates_page_opened()]);
                 }
                 if c != Category::VoiceVideo {
                     self.settings.mic_test = None;

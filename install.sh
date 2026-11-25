@@ -1,8 +1,8 @@
 #!/bin/sh
 # Ferrocord installer / updater (Linux x86_64, no root needed).
 #
-#   curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/Dasemu/Ferrocord/main/install.sh | sh -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/FerroApps/Ferrocord/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/FerroApps/Ferrocord/main/install.sh | sh -s -- --uninstall
 #
 # The same command installs and updates: it downloads the latest GitHub
 # Release, verifies its SHA-256 checksum and installs into the user's home:
@@ -19,7 +19,7 @@
 
 set -eu
 
-REPO="Dasemu/Ferrocord"
+REPO="FerroApps/Ferrocord"
 CRATE="ferrocord"
 APP_ID="dev.ferro.ferrocord"
 APP_NAME="Ferrocord"
@@ -200,7 +200,7 @@ case ":${PATH:-}:" in
 esac
 
 say "Runtime libraries (usually already present on a desktop install):"
-say "  Linux: libssl3 (OpenSSL 3), libxkbcommon0, libwayland-client0, libfontconfig1, libx11-6; a Secret Service provider such as gnome-keyring or KWallet for the keyring."
+say "  Linux: libssl3 (OpenSSL 3), libxkbcommon0, libxkbcommon-x11-0 (X11 sessions), libwayland-client0, libfontconfig1, libx11-6; a Secret Service provider such as gnome-keyring or KWallet for the keyring."
 say "Video: videos play inside the chat with the bundled decoders (MP4 with H.264/AAC, WebM with VP8/VP9/Opus); no codec packages are needed, only ALSA's libasound2 for sound. Other formats offer 'Open externally'."
 say "Login: scan the QR code with the Discord app, or use 'Log in with Discord's page' (needs WebKitGTK 4.1)."
 if [ -f "$LOGIN_PATH" ] && command -v ldconfig >/dev/null 2>&1 \

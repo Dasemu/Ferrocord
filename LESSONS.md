@@ -86,3 +86,14 @@ Things learned while building Ferrocord that are worth remembering.
 - **Never build wasmi at a different opt-level than the crate embedding it** (e.g. `[profile.dev.package.wasmi] opt-level = 3` in a dev build): on x86_64 Windows that makes host functions fault with `STATUS_ACCESS_VIOLATION` (wasmi issue #2061, `Caller::get_export`), killing the whole process; Linux was fine. Debug builds interpret ~100x slower, so tests that burn a whole fuel budget need debug-tolerant time limits.
 - A host ABI with a pending-result slot (`host_call` returns a length, `host_take` copies it) avoids calling back into the guest allocator from inside a host function: no re-entrancy, trivially implementable from any language.
 - Plugin "selfbot" prevention is structural: plugins have no timers, events carry no grant, and `send_message` only works with a grant minted by an explicit user action (command or menu item), scoped to its channel and spent after one message.
+- **Quit hang (v0.17.0, "not responding" on tray Quit, KDE).** `iced::exit()` ends the daemon by dropping its
+  tokio runtime *inside* the winit loop (window still mapped), and `Runtime::drop` waits for every
+  `spawn_blocking` task with no timeout. Each notification watched its click with `wait_for_action` on the
+  blocking pool; Plasma keeps notifications in its history and sends `NotificationClosed` only on dismissal,
+  so one notification received earlier blocked the drop forever. gdb showed the main thread in
+  `BlockingPool::shutdown` and a `tokio-rt-worker` in `ferrocord::app::wait_for_click`. Mock mode never
+  notifies, so it only showed with a real account. Fix: unbounded waits on detached threads, bounded quit
+  work, an exit watchdog. Reproduce with a fake notification server that never closes (Python `dbus` +
+  GLib under `dbus-run-session`) and the dbusmenu `Event(id, "clicked", ...)` call a panel makes.
+- **Self-update**: on Linux `std::env::current_exe()` of a binary that was renamed over reads `/path (deleted)`; restart the path the installer wrote. Windows cannot overwrite or delete a running `.exe` but can rename it, so updates move it aside to `.old` and delete it at the next start. Stage files in the target's own folder so `rename` stays atomic (no cross-filesystem copy). Safe extraction means writing files yourself from the archive entries (never `unpack`), rejecting links and `..`, and counting the bytes actually read.
+- winit `dlopen`s `libxkbcommon-x11.so.0` on X11 (no link, so `ldd` and the `-dev` build packages never pull it in) and panics with exit 101 ("Library libxkbcommon-x11.so could not be loaded") when it is missing. Stock GitHub runners lack it: CI that starts the real binary under Xvfb must install `libxkbcommon-x11-0`. Reproduce by bind-mounting `/dev/null` over the library in `unshare -m`.
