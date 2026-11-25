@@ -2,9 +2,7 @@
 //! the DM call area, the incoming call overlay, the per-user volume menu,
 //! call service messages and the voice settings section.
 
-use iced::widget::{
-    Space, button, column, container, mouse_area, opaque, pick_list, row, slider, stack, text,
-};
+use iced::widget::{button, column, container, mouse_area, opaque, row, slider, text};
 use iced::{Alignment, Color, Length, Padding, Point, Size};
 
 use super::icons::{Icon, icon};
@@ -523,101 +521,6 @@ pub fn call_message<'a>(app: &'a App, m: &'a Message, now: u64) -> El<'a> {
         .padding(Padding::from([8, 0]).left(16))
         .width(Length::Fill)
         .into()
-}
-
-/// Voice settings section (devices, input sensitivity with a live meter).
-pub fn settings_section(app: &App) -> El<'_> {
-    let t = &app.theme;
-    let p = t.palette;
-    let default = "Default".to_owned();
-    let with_default = |v: &[String]| -> Vec<String> {
-        std::iter::once(default.clone())
-            .chain(v.iter().cloned())
-            .collect()
-    };
-    let inputs = with_default(&app.voice.devices.0);
-    let outputs = with_default(&app.voice.devices.1);
-    let sel_in = app
-        .voice
-        .prefs
-        .input
-        .clone()
-        .unwrap_or_else(|| default.clone());
-    let sel_out = app
-        .voice
-        .prefs
-        .output
-        .clone()
-        .unwrap_or_else(|| default.clone());
-    let pick = |s: String| if s == "Default" { None } else { Some(s) };
-    let threshold = app.voice.prefs.threshold_db;
-    // The microphone is only open during a call.
-    let level = if app.voice.conn.is_some() {
-        app.voice.control.input_level()
-    } else {
-        crate::net::voice::mixer::FLOOR_DB
-    };
-    // Meter: 0..1 over -100..0 dB; green when above the threshold.
-    let frac = ((level + 100.0) / 100.0).clamp(0.0, 1.0);
-    let meter_color = if level >= threshold {
-        p.success
-    } else {
-        p.status_idle
-    };
-    let filled = ((frac * 1000.0) as u16).max(1);
-    let meter = stack![
-        container(Space::new().width(Length::Fill).height(6))
-            .style(theme::rounded_bg(p.bg_app, 3.0)),
-        row![
-            container(Space::new().width(Length::Fill).height(6))
-                .width(Length::FillPortion(filled))
-                .style(theme::rounded_bg(meter_color, 3.0)),
-            Space::new()
-                .width(Length::FillPortion(1000u16.saturating_sub(filled).max(1)))
-                .height(6),
-        ],
-    ];
-    let label = |s: &'static str| text(s).size(12).font(INTER_SEMIBOLD).color(p.text_muted);
-    column![
-        text("Voice")
-            .size(t.metrics.font_s)
-            .font(INTER_SEMIBOLD)
-            .color(p.text_secondary),
-        row![
-            column![
-                label("INPUT DEVICE"),
-                pick_list(inputs, Some(sel_in), move |s| vui(VoiceUi::InputDevice(
-                    pick(s)
-                )))
-                .width(Length::Fill),
-            ]
-            .spacing(6)
-            .width(Length::Fill),
-            column![
-                label("OUTPUT DEVICE"),
-                pick_list(outputs, Some(sel_out), move |s| vui(VoiceUi::OutputDevice(
-                    pick(s)
-                )))
-                .width(Length::Fill),
-            ]
-            .spacing(6)
-            .width(Length::Fill),
-        ]
-        .spacing(16),
-        row![
-            label("INPUT SENSITIVITY").width(Length::Fill),
-            text(format!("{threshold:.0} dB"))
-                .size(12)
-                .color(p.text_muted),
-        ],
-        slider(-100.0..=0.0, threshold, |v| vui(VoiceUi::Threshold(v))).step(1.0_f32),
-        meter,
-        text("Your voice is sent when the bar is green.")
-            .size(12)
-            .color(p.text_muted),
-    ]
-    .spacing(10)
-    .into()
 }
 
 /// Mic and headphone buttons for the user panel: (icon, tooltip, message,

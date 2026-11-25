@@ -1,10 +1,18 @@
 //! The video helper against real clips (generated with ffmpeg and
 //! committed: 128x72, 2 s, H.264 High with B-frames + AAC in MP4, and VP9 /
-//! VP8 + Opus in WebM), hostile files, and the app-side `Player` against
+//! VP8 + Opus in WebM; plus the layouts real recorders write: fragmented
+//! MP4, QuickTime `.mov`, `avc3` with in-band parameter sets, faststart
+//! Baseline, H.264 with Opus or AAC in Matroska, H.265 `hvc1` + AAC, AV1;
+//! and a few frames each of formats only platform decoders handle, which
+//! play when the system has one and are named otherwise), hostile files,
+//! and the app-side `Player` against
 //! scripted fake helpers (shell scripts: Unix only). No network, no
 //! window: frames are just bytes.
 
+use std::collections::HashMap;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use ferrocord::media::gifv::{self, FrameSpec, Frames};
@@ -129,6 +137,283 @@ async fn h264_high_with_aac_in_mp4_plays() {
     play_through(&clip("high_aac.mp4")).await;
 }
 
+/// A fragmented MP4 (`moof` fragments, empty `moov` sample table), as
+/// written by browsers, OBS and other recorders that must survive a crash.
+/// It used to fail with "no picture could be decoded from the H.264
+/// stream": the sample table the old demuxer read was empty.
+#[tokio::test]
+async fn fragmented_mp4_plays() {
+    play_through(&clip("h264_frag_aac.mp4")).await;
+}
+
+/// QuickTime `.mov` (iPhone, macOS): its sound description used to make the
+/// whole file "not a playable MP4 file".
+#[tokio::test]
+async fn quicktime_mov_plays() {
+    play_through(&clip("h264_aac.mov")).await;
+}
+
+#[tokio::test]
+async fn faststart_baseline_mp4_plays() {
+    play_through(&clip("h264_baseline_faststart.mp4")).await;
+}
+
+/// `avc3`: parameter sets in band, repeated before each keyframe.
+#[tokio::test]
+async fn avc3_with_in_band_parameter_sets_plays() {
+    play_through(&clip("h264_avc3.mp4")).await;
+}
+
+/// OBS's default container: H.264 in Matroska.
+#[tokio::test]
+async fn h264_in_matroska_plays() {
+    play_through(&clip("h264_opus.mkv")).await;
+}
+
+// ---------------------------------------------------------------------
+// Platform decoders (system FFmpeg on Linux, Media Foundation on Windows)
+// ---------------------------------------------------------------------
+
+/// What `ferrocord-player --backends` reports: codec key -> decoder, for
+/// the codecs this machine has a platform decoder for.
+fn backends() -> HashMap<String, String> {
+    let out = Command::new(HELPER)
+        .arg("--backends")
+        .output()
+        .expect("run --backends");
+    assert!(out.status.success(), "--backends failed");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    eprintln!("platform decoders:\n{text}");
+    assert!(text.starts_with("platform "), "{text}");
+    text.lines()
+        .skip(1)
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(_, d)| *d != "-")
+        .map(|(k, d)| (k.to_string(), d.to_string()))
+        .collect()
+}
+
+/// CI sets this where the platform decoders must be found (Linux with
+/// libavcodec installed, Windows): a missing one then fails instead of
+/// being skipped.
+fn platform_expected() -> bool {
+    std::env::var("FERROCORD_EXPECT_PLATFORM").is_ok_and(|v| v == "1")
+}
+
+/// Frames mode with extra environment for the helper (and only for it).
+fn frames_with_env(name: &str, env: &[(&str, &str)]) -> Result<Frames, Failure> {
+    let mut cmd = Command::new(HELPER);
+    cmd.args(GIFV.to_args())
+        .arg(clip(name))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn");
+    let mut out = BufReader::new(child.stdout.take().expect("stdout"));
+    let r = gifv::read_frames(&mut out, GIFV);
+    let _ = child.kill();
+    let _ = child.wait();
+    r
+}
+
+/// Every picture is the expected size and shows the test pattern.
+fn assert_pictures(name: &str, f: &Frames, at_least: usize) {
+    assert!(f.len() >= at_least, "{name}: only {} pictures", f.len());
+    for (w, h, px, _) in f {
+        assert_eq!((*w, *h), (128, 72), "{name}");
+        assert_eq!(px.len(), 128 * 72 * 4, "{name}");
+        let bright = px.chunks(4).filter(|p| p[0] > 100 || p[1] > 100).count();
+        assert!(bright > 500, "{name}: the picture looks empty");
+    }
+}
+
+/// The streams the built-in decoders refuse, and the platform decoder
+/// (`--backends` key) that plays them.
+const PLATFORM_ONLY: [(&str, &str, &str); 7] = [
+    ("hevc_main10.mov", "hevc", "H.265 (HEVC)"),
+    ("hevc_aac.mp4", "hevc", "H.265 (HEVC)"),
+    ("av1_opus.webm", "av1", "AV1"),
+    ("av1.mp4", "av1", "AV1"),
+    ("h264_high10.mp4", "h264", "10-bit H.264"),
+    ("h264_444.mp4", "h264", "H.264 with 4:4:4 colour"),
+    ("h264_interlaced.mp4", "h264", "interlaced H.264"),
+];
+
+#[test]
+fn platform_decoders_are_reported() {
+    let b = backends();
+    if platform_expected() {
+        // Media Foundation's H.264 and AAC decoders ship with Windows;
+        // the FFmpeg CI job installs a libavcodec with all four.
+        let need: &[&str] = if cfg!(windows) {
+            &["h264", "aac"]
+        } else {
+            &["h264", "hevc", "av1", "aac"]
+        };
+        for k in need {
+            assert!(b.contains_key(*k), "no platform {k} decoder: {b:?}");
+        }
+    }
+}
+
+/// HEVC, AV1 and the H.264 variants OpenH264 refuses play through the
+/// platform decoder when the system has one, as in the official client.
+/// Without one they are named, with what to install.
+#[test]
+fn streams_the_builtin_decoders_refuse_play_with_a_platform_decoder() {
+    let b = backends();
+    for (name, key, what) in PLATFORM_ONLY {
+        let r = frames_with_env(name, &[]);
+        match (b.get(key), r) {
+            (Some(_), Ok(f)) => {
+                eprintln!(
+                    "{name}: {} pictures through the platform {key} decoder",
+                    f.len()
+                );
+                assert_pictures(name, &f, 3);
+            }
+            // Media Foundation's H.264 decoder has no High 10 / 4:4:4
+            // support, and a Store extension (HEVC from Device
+            // Manufacturer) may need a GPU: on Windows the key only says a
+            // decoder is registered.
+            (Some(_), Err(Failure::MissingCodec(m))) if cfg!(windows) => {
+                eprintln!("{name}: Media Foundation cannot decode it: {m}");
+                assert!(m.contains(what), "{name}: {m}");
+            }
+            (Some(d), Err(e)) => panic!("{name}: the platform decoder {d} failed: {e:?}"),
+            (None, Ok(_)) => panic!("{name}: played without a platform {key} decoder"),
+            (None, Err(Failure::MissingCodec(m))) => {
+                assert!(!platform_expected() || cfg!(windows), "{name}: {m}");
+                assert!(m.contains(what), "{name}: {m}");
+                let shown = Failure::MissingCodec(m).user_message();
+                assert!(shown.contains("Open externally"), "{name}: {shown}");
+            }
+            (None, Err(e)) => panic!("{name}: expected a named codec, got {e:?}"),
+        }
+    }
+}
+
+/// With no platform decoder (nothing installed, simulated here) the
+/// helper still starts, plays what the built-in decoders handle, and names
+/// both the codec and what to install for the rest.
+#[test]
+fn without_platform_decoders_the_message_names_what_to_install() {
+    let off = [("FERROCORD_PLATFORM_DECODERS", "0")];
+    assert_pictures(
+        "high_aac.mp4",
+        &frames_with_env("high_aac.mp4", &off).expect("plays"),
+        10,
+    );
+    for (name, _, what) in PLATFORM_ONLY {
+        match frames_with_env(name, &off) {
+            Err(f @ Failure::MissingCodec(_)) => {
+                let Failure::MissingCodec(text) = &f else {
+                    unreachable!()
+                };
+                assert!(text.starts_with(what), "{name}: {text}");
+                let m = f.user_message();
+                assert!(m.contains(&format!("uses {what}")), "{name}: {m}");
+                assert!(m.contains("Open externally"), "{name}: {m}");
+                if cfg!(target_os = "linux") {
+                    assert!(m.contains("Install the FFmpeg libraries"), "{name}: {m}");
+                }
+                if cfg!(windows) && what.contains("HEVC") {
+                    // Or the Media Feature Pack, where Windows has no Media
+                    // Foundation at all.
+                    assert!(
+                        m.contains("HEVC Video Extensions") || m.contains("Media Feature Pack"),
+                        "{name}: {m}"
+                    );
+                }
+            }
+            other => panic!("{name}: expected a named codec, got {other:?}"),
+        }
+    }
+    // The open-GOP clip: OpenH264 cannot start it, and the message says
+    // what would.
+    match frames_with_env("h264_no_idr.mp4", &off) {
+        Err(Failure::Broken(why)) => {
+            assert!(why.contains("IDR"), "{why}");
+            if cfg!(target_os = "linux") {
+                assert!(why.contains("FFmpeg"), "{why}");
+            }
+        }
+        other => panic!("expected a broken stream, got {other:?}"),
+    }
+}
+
+/// An open-GOP clip cut without re-encoding: no IDR picture, which
+/// OpenH264 needs to start. The platform decoder takes over; without one
+/// the message says so.
+#[test]
+fn a_stream_without_an_idr_keyframe_falls_back_or_says_so() {
+    let b = backends();
+    match (
+        b.contains_key("h264"),
+        frames_with_env("h264_no_idr.mp4", &[]),
+    ) {
+        (true, Ok(f)) => assert!(!f.is_empty()),
+        (true, Err(e)) if cfg!(windows) => eprintln!("Media Foundation: {e:?}"),
+        (false, Err(Failure::Broken(why))) => assert!(why.contains("IDR"), "{why}"),
+        (_, other) => panic!("unexpected: {other:?}"),
+    }
+}
+
+/// The platform H.264 decoder also handles what OpenH264 plays (forced
+/// here): on Windows this is Media Foundation's own decoder.
+#[test]
+fn the_platform_h264_decoder_plays_the_common_profiles() {
+    if !backends().contains_key("h264") {
+        assert!(!platform_expected(), "no platform H.264 decoder");
+        return;
+    }
+    let prefer = [("FERROCORD_VIDEO_DECODER", "platform")];
+    for name in [
+        "high_aac.mp4",
+        "h264_baseline_faststart.mp4",
+        "h264_opus.mkv",
+        "h264_avc3.mp4",
+    ] {
+        let f = frames_with_env(name, &prefer).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_pictures(name, &f, 10);
+        let total: Duration = f.iter().map(|x| x.3).sum();
+        assert!(
+            (1500..=2300).contains(&total.as_millis()),
+            "{name}: loop of {total:?}"
+        );
+    }
+}
+
+/// An iPhone-style H.265 clip (`hvc1` + AAC) plays through to the end,
+/// seeks and replays like any other.
+#[tokio::test]
+async fn hevc_with_aac_plays_through_with_a_platform_decoder() {
+    if !backends().contains_key("hevc") {
+        assert!(
+            !platform_expected() || cfg!(windows),
+            "no platform H.265 decoder"
+        );
+        return;
+    }
+    if cfg!(windows)
+        && let Err(e) = frames_with_env("hevc_aac.mp4", &[])
+    {
+        eprintln!("the registered H.265 decoder does not run here: {e:?}");
+        return;
+    }
+    play_through(&clip("hevc_aac.mp4")).await;
+}
+
+/// OBS's Matroska with AAC sound: the picture always plays; the sound
+/// needs a platform AAC decoder (checked in the helper's unit tests).
+#[tokio::test]
+async fn h264_with_aac_in_matroska_plays() {
+    play_through(&clip("h264_aac.mkv")).await;
+}
+
 #[tokio::test]
 async fn vp9_with_opus_in_webm_plays() {
     play_through(&clip("vp9_opus.webm")).await;
@@ -154,7 +439,17 @@ const GIFV: FrameSpec = FrameSpec {
 
 #[test]
 fn frames_mode_decodes_every_supported_codec() {
-    for name in ["high_aac.mp4", "vp9_opus.webm", "vp8_opus.webm"] {
+    for name in [
+        "high_aac.mp4",
+        "vp9_opus.webm",
+        "vp8_opus.webm",
+        "h264_frag_aac.mp4",
+        "h264_aac.mov",
+        "h264_baseline_faststart.mp4",
+        "h264_avc3.mp4",
+        "h264_opus.mkv",
+        "h264_aac.mkv",
+    ] {
         let f = frames_of(name, GIFV);
         assert!(f.len() >= 10, "{name}: only {} frames", f.len());
         assert!(
@@ -198,15 +493,6 @@ fn frames_mode_reports_broken_files() {
     assert!(gifv::decode_with(Path::new(HELPER), &bad, GIFV).is_err());
     assert!(gifv::decode_with(Path::new(HELPER), &dir.join("missing.mp4"), GIFV).is_err());
     let _ = std::fs::remove_dir_all(dir);
-}
-
-#[tokio::test]
-async fn an_unsupported_codec_is_named_not_crashed_on() {
-    let (_player, mut rx) = spawn_with(Path::new(HELPER), &clip("av1_opus.webm")).expect("spawn");
-    match next(&mut rx).await {
-        Some(Event::Failed(Failure::MissingCodec(what))) => assert!(what.contains("AV1"), "{what}"),
-        other => panic!("expected a named codec, got {other:?}"),
-    }
 }
 
 async fn expect_clean_failure(file: &Path) {
@@ -273,10 +559,21 @@ async fn garbage_and_empty_and_missing_files_fail_cleanly() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Clips cut and corrupted below: every decoder path, the platform
+/// decoders (H.265, AV1, AAC in Matroska) included when present.
+const TORTURE: [&str; 6] = [
+    "high_aac.mp4",
+    "vp9_opus.webm",
+    "vp8_opus.webm",
+    "hevc_aac.mp4",
+    "av1_opus.webm",
+    "h264_aac.mkv",
+];
+
 #[tokio::test]
 async fn truncated_clips_do_not_crash_the_helper() {
     let dir = tmp("trunc");
-    for name in ["high_aac.mp4", "vp9_opus.webm", "vp8_opus.webm"] {
+    for name in TORTURE {
         let bytes = std::fs::read(clip(name)).unwrap();
         for keep in [bytes.len() / 2, bytes.len() * 9 / 10, 64] {
             let f = dir.join(format!("{keep}-{name}"));
@@ -290,7 +587,7 @@ async fn truncated_clips_do_not_crash_the_helper() {
 #[tokio::test]
 async fn corrupted_clips_do_not_crash_the_helper() {
     let dir = tmp("corrupt");
-    for name in ["high_aac.mp4", "vp9_opus.webm", "vp8_opus.webm"] {
+    for name in TORTURE {
         let bytes = std::fs::read(clip(name)).unwrap();
         // Flip bytes deterministically in the middle (the coded data) and
         // at the start (the headers).

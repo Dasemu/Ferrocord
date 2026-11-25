@@ -26,6 +26,8 @@ pub enum Message {
     Tray(crate::tray::Event),
     /// Events from the running voice connection.
     Voice(crate::net::voice::VoiceEvent),
+    /// Plugins: page input, plugin-thread output, task results.
+    Plugin(super::plugins::PluginMsg),
 }
 
 /// User input.
@@ -111,6 +113,11 @@ pub enum Ui {
     EmojiSection(Section),
     PickEmoji(Emoji),
     CloseEmojiPicker,
+    /// "Send as image" on the Nitro lock footer of the emoji or sticker
+    /// picker: uploads a scaled copy of the locked item.
+    SendLockedAsImage,
+    /// Closes the Nitro lock footer of the open picker.
+    DismissLocked,
     /// Composer GIF button.
     OpenGifPicker,
     GifQuery(String),
@@ -119,6 +126,12 @@ pub enum Ui {
     CloseGifPicker,
     /// Opens a page of the GIF picker's home screen (or goes back to it).
     GifPage(super::gifs::GifPage),
+    /// The picker grid scrolled to this offset (px from the top).
+    GifScrolled(f32),
+    /// The pointer entered a picker tile (its page URL).
+    GifHoverEnter(String),
+    /// The pointer left a picker tile.
+    GifHoverLeave(String),
     /// Saves or unsaves this GIF (the star on a picker tile).
     ToggleGifFavorite(Box<crate::net::model::Gif>),
     /// Composer sticker button.
@@ -171,7 +184,6 @@ pub enum Ui {
     /// The pointer entered a row / message with an avatar to animate.
     HoverEnter(super::anim::Hover),
     HoverLeave(super::anim::Hover),
-    AnimTick(std::time::Instant),
     // -- channel header popovers
     TogglePopover(Popover),
     ClosePopover,
@@ -233,6 +245,8 @@ pub enum Ui {
     CloseFolderSettings,
     // -- voice channels and calls
     Voice(super::voice::VoiceUi),
+    /// User Settings screen.
+    Settings(super::settings::SettingsUi),
 }
 
 /// Completion of a `Task`.
@@ -307,9 +321,18 @@ pub enum Done {
         pasted: Vec<PathBuf>,
     },
     ClearHighlight(MessageId),
+    /// User Settings tasks.
+    Settings(Box<super::settings::SettingsDone>),
     Upload {
         id: u64,
         event: UploadEvent,
+    },
+    /// The scaled copy of a locked emoji or sticker ("Send as image"),
+    /// written to a temporary file, or why it could not be made.
+    ImageCopy {
+        channel: ChannelId,
+        reply: Option<crate::net::rest::ReplyTarget>,
+        result: Result<UploadFile, String>,
     },
     /// A window around a message (jump), or `None` when loading failed.
     Around {
@@ -332,6 +355,14 @@ pub enum Done {
         generation: u64,
         result: Result<Vec<crate::net::model::Gif>, String>,
     },
+    /// A GIF picker tile's animation, decoded off the UI thread (`None`:
+    /// every source failed).
+    GifAnim {
+        key: String,
+        anim: Option<std::sync::Arc<super::anim::Anim>>,
+    },
+    /// The saved GIFs were prefetched into the disk cache (files fetched).
+    GifPrefetched(usize),
     /// A GIF picker still, decoded and downscaled (`None`: every source
     /// failed).
     GifThumb {

@@ -3,6 +3,7 @@
 
 use emojis::Group;
 
+use crate::app::nitro::{Access, Usable};
 use crate::net::model::*;
 
 /// Unicode categories in the order of the official picker.
@@ -47,10 +48,13 @@ pub struct EmojiPicker {
     pub target: PickerTarget,
     pub query: String,
     pub section: Section,
+    /// A custom emoji picked that needs Nitro here: the picker shows the
+    /// lock footer with "Send as image" instead of using it.
+    pub locked: Option<Emoji>,
 }
 
 impl EmojiPicker {
-    /// Opens on the server's custom emoji when it has any, else people.
+    /// Opens on the open server's custom emoji when it has any, else people.
     pub fn open(target: PickerTarget, guild: Option<&Guild>) -> Self {
         let section = match guild {
             Some(g) if g.emojis.iter().any(|e| e.available) => Section::Server(g.id),
@@ -60,6 +64,7 @@ impl EmojiPicker {
             target,
             query: String::new(),
             section,
+            locked: None,
         }
     }
 }
@@ -113,6 +118,64 @@ pub fn custom_matching<'a>(guild: &'a Guild, query: &str) -> Vec<&'a CustomEmoji
         .iter()
         .filter(|e| e.available && (q.is_empty() || e.name.to_lowercase().contains(&q)))
         .collect()
+}
+
+/// Servers with emoji the user can see, the open one first, then the
+/// server list order (like the official picker's sidebar).
+pub fn server_sections<'a>(guilds: &'a [Guild], access: &Access<'_>) -> Vec<&'a Guild> {
+    let mut out: Vec<&Guild> = guilds
+        .iter()
+        .filter(|g| {
+            g.emojis
+                .iter()
+                .any(|e| access.emoji(g, e) != Usable::Hidden)
+        })
+        .collect();
+    out.sort_by_key(|g| Some(g.id) != access.here);
+    out
+}
+
+/// The custom emoji the picker shows: the selected server's, or the
+/// matches of every server when searching (open server first). Emoji
+/// nobody can use are left out; locked ones stay, with their state.
+pub fn shown_custom<'a>(
+    picker: &EmojiPicker,
+    guilds: &'a [Guild],
+    access: &Access<'_>,
+) -> Vec<(&'a Guild, &'a CustomEmoji, Usable)> {
+    let q = picker.query.trim().trim_matches(':').to_lowercase();
+    let sections: Vec<&Guild> = if q.is_empty() {
+        match picker.section {
+            Section::Server(id) => guilds.iter().filter(|g| g.id == id).collect(),
+            Section::Unicode(_) => vec![],
+        }
+    } else {
+        server_sections(guilds, access)
+    };
+    let mut out = Vec::new();
+    for g in sections {
+        for e in &g.emojis {
+            if !q.is_empty() && !e.name.to_lowercase().contains(&q) {
+                continue;
+            }
+            let u = access.emoji(g, e);
+            if u != Usable::Hidden {
+                out.push((g, e, u));
+            }
+        }
+        if !q.is_empty() && out.len() >= MAX_RESULTS {
+            out.truncate(MAX_RESULTS);
+            break;
+        }
+    }
+    out
+}
+
+/// Finds a custom emoji of any server by id, with its server.
+pub fn find_custom(guilds: &[Guild], id: Snowflake) -> Option<(&Guild, &CustomEmoji)> {
+    guilds
+        .iter()
+        .find_map(|g| g.emojis.iter().find(|e| e.id == id).map(|e| (g, e)))
 }
 
 #[cfg(test)]
@@ -169,6 +232,7 @@ mod tests {
             name: "blob".into(),
             animated: false,
             available: true,
+            roles: vec![],
         }]);
         let p = EmojiPicker::open(PickerTarget::Composer, Some(&g));
         assert_eq!(p.section, Section::Server(Snowflake(1)));
@@ -176,6 +240,94 @@ mod tests {
         assert_eq!(p.section, Section::Unicode(0));
         let p = EmojiPicker::open(PickerTarget::Composer, None);
         assert_eq!(p.section, Section::Unicode(0));
+    }
+
+    fn access(here: Option<GuildId>, premium_type: u8) -> Access<'static> {
+        static ROLES: std::sync::LazyLock<std::collections::HashMap<GuildId, Vec<RoleId>>> =
+            std::sync::LazyLock::new(std::collections::HashMap::new);
+        Access {
+            here,
+            premium_type,
+            my_roles: &ROLES,
+            me: None,
+        }
+    }
+
+    fn ce(id: u64, name: &str) -> CustomEmoji {
+        CustomEmoji {
+            id: Snowflake(id),
+            name: name.into(),
+            animated: false,
+            available: true,
+            roles: vec![],
+        }
+    }
+
+    fn two_servers() -> Vec<Guild> {
+        let mut a = guild_with(vec![ce(10, "wave"), ce(11, "cat")]);
+        a.id = Snowflake(1);
+        let mut b = guild_with(vec![ce(20, "wave_big"), {
+            let mut e = ce(21, "staff_only");
+            e.roles = vec![Snowflake(99)];
+            e
+        }]);
+        b.id = Snowflake(2);
+        let mut c = guild_with(vec![{
+            let mut e = ce(30, "gone");
+            e.available = false;
+            e
+        }]);
+        c.id = Snowflake(3);
+        vec![a, b, c]
+    }
+
+    #[test]
+    fn sidebar_lists_servers_with_visible_emoji_open_one_first() {
+        let g = two_servers();
+        let ids = |v: Vec<&Guild>| v.iter().map(|g| g.id.0).collect::<Vec<_>>();
+        assert_eq!(
+            ids(server_sections(&g, &access(Some(Snowflake(2)), 0))),
+            vec![2, 1]
+        );
+        assert_eq!(ids(server_sections(&g, &access(None, 0))), vec![1, 2]);
+    }
+
+    #[test]
+    fn shown_emoji_carry_their_lock_state() {
+        let g = two_servers();
+        let acc = access(Some(Snowflake(1)), 0);
+        let mut p = EmojiPicker::open(PickerTarget::Composer, g.first());
+        let shown = |p: &EmojiPicker, acc: &Access<'_>| {
+            shown_custom(p, &g, acc)
+                .iter()
+                .map(|(g, e, u)| (g.id.0, e.id.0, *u))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shown(&p, &acc),
+            vec![(1, 10, Usable::Yes), (1, 11, Usable::Yes)]
+        );
+        p.section = Section::Server(Snowflake(2));
+        // The role-limited emoji is hidden, the other one locked.
+        assert_eq!(shown(&p, &acc), vec![(2, 20, Usable::NeedsNitro)]);
+        // Search covers every server, the open one first.
+        p.query = ":wave".into();
+        assert_eq!(
+            shown(&p, &acc),
+            vec![(1, 10, Usable::Yes), (2, 20, Usable::NeedsNitro)]
+        );
+        assert_eq!(
+            shown(&p, &access(Some(Snowflake(1)), 2)),
+            vec![(1, 10, Usable::Yes), (2, 20, Usable::Yes)]
+        );
+        p.query.clear();
+        p.section = Section::Unicode(0);
+        assert!(shown(&p, &acc).is_empty());
+        assert_eq!(
+            find_custom(&g, Snowflake(20)).map(|(g, e)| (g.id.0, e.name.as_str())),
+            Some((2, "wave_big"))
+        );
+        assert!(find_custom(&g, Snowflake(404)).is_none());
     }
 
     #[test]
@@ -186,12 +338,14 @@ mod tests {
                 name: "Party_Blob".into(),
                 animated: true,
                 available: true,
+                roles: vec![],
             },
             CustomEmoji {
                 id: Snowflake(6),
                 name: "party_gone".into(),
                 animated: false,
                 available: false,
+                roles: vec![],
             },
         ]);
         assert_eq!(custom_matching(&g, "party").len(), 1);

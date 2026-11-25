@@ -8,6 +8,7 @@ use super::emoji_font::emoji_text;
 use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence, avatar_with_status, initials_circle, mention_badge, ui};
+use crate::app::anim::{Hover, Zone};
 use crate::app::{App, Message, Ui, View};
 use crate::net::model::*;
 
@@ -281,9 +282,14 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
         c.kind,
         c.recipients.first().and_then(|u| app.chat.users.get(u)),
     ) {
-        (ChannelKind::Dm, Some(u)) => {
-            avatar_with_presence(app, u, 32.0, app.chat.presence_of(u.id), p.bg_sidebar)
-        }
+        (ChannelKind::Dm, Some(u)) => avatar_with_presence(
+            app,
+            u,
+            32.0,
+            app.chat.presence_of(u.id),
+            p.bg_sidebar,
+            app.list_phase(Hover::row(u.id, Zone::DmList)),
+        ),
         _ => initials_circle(&p, &label, theme::default_avatar_color(c.id.0), 32.0),
     };
     let mut names = column![
@@ -325,10 +331,7 @@ fn dm_row<'a>(app: &'a App, c: &'a Channel, selected: bool) -> El<'a> {
         Some(u) => super::cosmetics::with_nameplate(app, u, btn),
         None => btn,
     };
-    let hover = user.map(|u| crate::app::anim::Hover {
-        user: u.id,
-        message: None,
-    });
+    let hover = user.map(|u| Hover::row(u.id, Zone::DmList));
     let mut area = iced::widget::mouse_area(btn).on_right_press(ui(Ui::ContextOpen(
         crate::app::context::CtxTarget::Channel(c.id),
     )));
@@ -423,10 +426,12 @@ fn user_panel(app: &App) -> El<'_> {
     let [mic, deaf] = super::voice::panel_buttons(app);
     let avail = panel_text_width(t.metrics.sidebar_width);
     // Clicking the avatar or name opens the status menu, like the
-    // official user panel.
+    // official user panel. The avatar animates while the panel's identity
+    // area is hovered, like every avatar outside a profile.
+    let hover = Hover::row(me.id, Zone::Panel);
     let identity = button(
         row![
-            avatar_with_status(app, &me, 32.0),
+            avatar_with_status(app, &me, 32.0, app.list_phase(hover)),
             container(column![
                 text(super::ellipsize(me.display_name(), avail, 14.0, true))
                     .size(14)
@@ -453,6 +458,9 @@ fn user_panel(app: &App) -> El<'_> {
     .width(Length::Fill)
     .on_press(ui(Ui::ToggleStatusMenu))
     .style(theme::icon_button(p));
+    let identity = iced::widget::mouse_area(identity)
+        .on_enter(Message::Ui(Ui::HoverEnter(hover)))
+        .on_exit(Message::Ui(Ui::HoverLeave(hover)));
     container(
         row![
             identity,

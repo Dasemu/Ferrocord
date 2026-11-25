@@ -159,9 +159,261 @@ pub fn to_rgba(
     Some(out)
 }
 
+/// How the samples of a platform decoder's picture are stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+    /// One byte per sample.
+    Eight,
+    /// Little-endian 16-bit words; `word >> shift` is the 8-bit value
+    /// (2 for 10-bit planar `yuv420p10le`, 8 for MSB-aligned `P010`).
+    Wide {
+        /// Right shift down to 8 bits.
+        shift: u32,
+    },
+}
+
+/// Layout of a decoded picture as platform decoders hand it out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    /// Horizontal chroma subsampling shift.
+    pub sub_x: u32,
+    /// Vertical chroma subsampling shift.
+    pub sub_y: u32,
+    /// Cb and Cr interleaved in one plane (`NV12`, `P010`).
+    pub interleaved: bool,
+    /// Sample size.
+    pub depth: Depth,
+}
+
+impl Layout {
+    /// 8-bit planar 4:2:0, the common case.
+    pub const I420: Layout = Layout {
+        sub_x: 1,
+        sub_y: 1,
+        interleaved: false,
+        depth: Depth::Eight,
+    };
+    /// 8-bit 4:2:0 with interleaved chroma.
+    pub const NV12: Layout = Layout {
+        sub_x: 1,
+        sub_y: 1,
+        interleaved: true,
+        depth: Depth::Eight,
+    };
+    /// 10-bit (MSB-aligned) 4:2:0 with interleaved chroma.
+    pub const P010: Layout = Layout {
+        sub_x: 1,
+        sub_y: 1,
+        interleaved: true,
+        depth: Depth::Wide { shift: 8 },
+    };
+}
+
+/// A picture as raw planes: `planes[1]` holds both chroma components when
+/// the layout is interleaved (`planes[2]` is then unused).
+pub struct Raw<'a> {
+    /// Luma, Cb (or CbCr), Cr.
+    pub planes: [&'a [u8]; 3],
+    /// Bytes per row of each plane.
+    pub strides: [usize; 3],
+    /// Visible picture width.
+    pub width: usize,
+    /// Visible picture height.
+    pub height: usize,
+    /// How the planes are stored.
+    pub layout: Layout,
+}
+
+/// Converts any [`Raw`] picture to RGBA like [`to_rgba`]: 8-bit planar
+/// pictures are read in place, the others are first narrowed to 8-bit
+/// planes. `None` when the planes are smaller than the layout says.
+pub fn raw_to_rgba(
+    p: &Raw<'_>,
+    rot: Rotation,
+    out_w: usize,
+    out_h: usize,
+    m: Matrix,
+) -> Option<Vec<u8>> {
+    let l = p.layout;
+    if l.sub_x > 1 || l.sub_y > 1 || p.width == 0 || p.height == 0 {
+        return None;
+    }
+    if l.depth == Depth::Eight && !l.interleaved {
+        return to_rgba(
+            &Planes {
+                y: p.planes[0],
+                u: p.planes[1],
+                v: p.planes[2],
+                strides: (p.strides[0], p.strides[1], p.strides[2]),
+                width: p.width,
+                height: p.height,
+                sub_x: l.sub_x,
+                sub_y: l.sub_y,
+            },
+            rot,
+            out_w,
+            out_h,
+            m,
+        );
+    }
+    let (w, h) = (p.width, p.height);
+    let (cw, ch) = (
+        (w + (1 << l.sub_x) - 1) >> l.sub_x,
+        (h + (1 << l.sub_y) - 1) >> l.sub_y,
+    );
+    let bytes = if l.depth == Depth::Eight { 1 } else { 2 };
+    let sample = |plane: &[u8], stride: usize, x: usize, y: usize| -> Option<u8> {
+        let at = y.checked_mul(stride)?.checked_add(x * bytes)?;
+        match l.depth {
+            Depth::Eight => plane.get(at).copied(),
+            Depth::Wide { shift } => {
+                let word = u16::from_le_bytes([*plane.get(at)?, *plane.get(at + 1)?]);
+                Some((word >> shift.min(15)).min(255) as u8)
+            }
+        }
+    };
+    let mut y = Vec::with_capacity(w * h);
+    for row in 0..h {
+        for x in 0..w {
+            y.push(sample(p.planes[0], p.strides[0], x, row)?);
+        }
+    }
+    let (mut u, mut v) = (Vec::with_capacity(cw * ch), Vec::with_capacity(cw * ch));
+    for row in 0..ch {
+        for x in 0..cw {
+            if l.interleaved {
+                u.push(sample(p.planes[1], p.strides[1], 2 * x, row)?);
+                v.push(sample(p.planes[1], p.strides[1], 2 * x + 1, row)?);
+            } else {
+                u.push(sample(p.planes[1], p.strides[1], x, row)?);
+                v.push(sample(p.planes[2], p.strides[2], x, row)?);
+            }
+        }
+    }
+    to_rgba(
+        &Planes {
+            y: &y,
+            u: &u,
+            v: &v,
+            strides: (w, cw, cw),
+            width: w,
+            height: h,
+            sub_x: l.sub_x,
+            sub_y: l.sub_y,
+        },
+        rot,
+        out_w,
+        out_h,
+        m,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 4x2 picture: luma ramp, two chroma pairs.
+    fn reference() -> Vec<u8> {
+        let p = planes(
+            &[16, 80, 160, 235, 50, 90, 130, 170],
+            &[90, 200],
+            &[240, 60],
+            4,
+            2,
+        );
+        to_rgba(&p, Rotation::None, 4, 2, Matrix::Bt601).unwrap()
+    }
+
+    #[test]
+    fn nv12_and_p010_and_10_bit_planar_match_8_bit_planar() {
+        let want = reference();
+        let y = [16u8, 80, 160, 235, 50, 90, 130, 170];
+        // NV12 with padded rows (stride 6).
+        let mut luma = Vec::new();
+        for r in y.chunks(4) {
+            luma.extend_from_slice(r);
+            luma.extend_from_slice(&[0, 0]);
+        }
+        let uv = [90u8, 240, 200, 60, 0, 0];
+        let nv12 = Raw {
+            planes: [&luma, &uv, &[]],
+            strides: [6, 6, 0],
+            width: 4,
+            height: 2,
+            layout: Layout::NV12,
+        };
+        assert_eq!(
+            raw_to_rgba(&nv12, Rotation::None, 4, 2, Matrix::Bt601).unwrap(),
+            want
+        );
+        // P010: the same values in the top 8 bits of 16-bit words.
+        let wide = |b: &[u8]| -> Vec<u8> {
+            b.iter()
+                .flat_map(|&v| ((u16::from(v) << 8) | 0x40).to_le_bytes())
+                .collect()
+        };
+        let (y16, uv16) = (wide(&y), wide(&uv[..4]));
+        let p010 = Raw {
+            planes: [&y16, &uv16, &[]],
+            strides: [8, 8, 0],
+            width: 4,
+            height: 2,
+            layout: Layout::P010,
+        };
+        assert_eq!(
+            raw_to_rgba(&p010, Rotation::None, 4, 2, Matrix::Bt601).unwrap(),
+            want
+        );
+        // yuv420p10le: low-aligned 10-bit words.
+        let ten = |b: &[u8]| -> Vec<u8> {
+            b.iter()
+                .flat_map(|&v| ((u16::from(v) << 2) | 1).to_le_bytes())
+                .collect()
+        };
+        let (y10, u10, v10) = (ten(&y), ten(&[90, 200]), ten(&[240, 60]));
+        let planar10 = Raw {
+            planes: [&y10, &u10, &v10],
+            strides: [8, 4, 4],
+            width: 4,
+            height: 2,
+            layout: Layout {
+                depth: Depth::Wide { shift: 2 },
+                ..Layout::I420
+            },
+        };
+        assert_eq!(
+            raw_to_rgba(&planar10, Rotation::None, 4, 2, Matrix::Bt601).unwrap(),
+            want
+        );
+    }
+
+    #[test]
+    fn short_raw_planes_are_rejected() {
+        let nv12 = Raw {
+            planes: [&[0; 8], &[0; 3], &[]],
+            strides: [4, 4, 0],
+            width: 4,
+            height: 2,
+            layout: Layout::NV12,
+        };
+        assert!(raw_to_rgba(&nv12, Rotation::None, 4, 2, Matrix::Bt601).is_none());
+        let p010 = Raw {
+            planes: [&[0; 15], &[0; 8], &[]],
+            strides: [8, 8, 0],
+            width: 4,
+            height: 2,
+            layout: Layout::P010,
+        };
+        assert!(raw_to_rgba(&p010, Rotation::None, 4, 2, Matrix::Bt601).is_none());
+        let huge = Raw {
+            planes: [&[0; 8], &[0; 8], &[]],
+            strides: [usize::MAX, 4, 0],
+            width: 4,
+            height: 2,
+            layout: Layout::NV12,
+        };
+        assert!(raw_to_rgba(&huge, Rotation::None, 4, 2, Matrix::Bt601).is_none());
+    }
 
     fn planes<'a>(y: &'a [u8], u: &'a [u8], v: &'a [u8], w: usize, h: usize) -> Planes<'a> {
         Planes {

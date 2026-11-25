@@ -1,7 +1,8 @@
 //! In-app video playback through the `ferrocord-player` helper process.
 //!
-//! The helper (OpenH264, VP8/VP9, AAC, Opus: no system codecs) decodes one file and
-//! streams RGBA frames; this
+//! The helper (OpenH264, VP8/VP9, AAC, Opus built in; H.265, AV1 and the
+//! rest through the system's FFmpeg / Media Foundation when present, never
+//! linked) decodes one file and streams RGBA frames; this
 //! module spawns it, parses its output on a reader thread and forwards
 //! [`Event`]s over a channel. One [`Player`] exists at a time (the app keeps
 //! it in the open viewer); dropping it ends the process, which releases the
@@ -32,32 +33,58 @@ pub enum Failure {
 
 impl Failure {
     /// The text shown in the viewer: which step failed, never a crash, never
-    /// silent. Path-like words are removed from the helper's detail.
+    /// silent. Path-like words are removed from the helper's detail. The
+    /// helper may add a second line saying what to install (a platform
+    /// decoder: FFmpeg on Linux, a Microsoft Store extension on Windows).
     pub fn user_message(&self) -> String {
+        let open = "\u{201c}Open externally\u{201d}";
         match self {
             Failure::Unavailable(d) => format!(
-                "The video player could not start ({}). Choose \u{201c}Open externally\u{201d} \
-                 to use another player.",
+                "The video player could not start ({}). Choose {open} to use another player.",
                 scrub(d)
             ),
-            Failure::MissingCodec(what) => format!(
-                "This video uses {}, which the built-in player cannot decode. Choose \
-                 \u{201c}Open externally\u{201d} to play it with another player.",
-                scrub(what)
-            ),
-            Failure::Broken(d) => format!(
-                "This video could not be played: {}. Choose \u{201c}Open externally\u{201d} \
-                 to try another player.",
-                scrub(d)
-            ),
+            Failure::MissingCodec(text) => match split_hint(text) {
+                (what, Some(hint)) => format!(
+                    "This video uses {what}, which the built-in player cannot decode. {hint} Or \
+                     choose {open} to play it with another player."
+                ),
+                (what, None) => format!(
+                    "This video uses {what}, which the built-in player cannot decode. Choose \
+                     {open} to play it with another player."
+                ),
+            },
+            Failure::Broken(text) => match split_hint(text) {
+                (d, Some(hint)) => format!(
+                    "This video could not be played: {d}. {hint} Or choose {open} to try another \
+                     player."
+                ),
+                (d, None) => format!(
+                    "This video could not be played: {d}. Choose {open} to try another player."
+                ),
+            },
         }
     }
 
     /// Short detail for logs (no paths).
     pub fn detail(&self) -> String {
         match self {
-            Failure::Unavailable(d) | Failure::MissingCodec(d) | Failure::Broken(d) => scrub(d),
+            Failure::Unavailable(d) | Failure::MissingCodec(d) | Failure::Broken(d) => {
+                scrub(split_hint(d).0.as_str())
+            }
         }
+    }
+}
+
+/// The helper's text, scrubbed, and the optional second line (what to
+/// install).
+fn split_hint(text: &str) -> (String, Option<String>) {
+    match text.split_once('\n') {
+        Some((what, hint)) if !hint.trim().is_empty() => {
+            let mut hint = scrub(hint);
+            hint.truncate(hint.char_indices().nth(200).map_or(hint.len(), |(i, _)| i));
+            (scrub(what), Some(hint))
+        }
+        _ => (scrub(text), None),
     }
 }
 
@@ -526,6 +553,24 @@ mod tests {
         assert!(m.contains("could not start (the helper exited)") && m.contains("Open externally"));
         let m = Failure::MissingCodec("H.265 (HEVC)".into()).user_message();
         assert!(m.contains("uses H.265 (HEVC)") && m.contains("cannot decode"));
+        // A second line says what to install; paths in it are dropped too.
+        let m = Failure::MissingCodec(
+            "H.265 (HEVC)\nInstall the FFmpeg libraries (package libavcodec61) /usr/lib to play it here."
+                .into(),
+        )
+        .user_message();
+        assert!(m.starts_with("This video uses H.265 (HEVC), which"), "{m}");
+        assert!(m.contains("cannot decode. Install the FFmpeg libraries (package libavcodec61) to play it here. Or choose"), "{m}");
+        assert!(m.contains("Open externally") && !m.contains("/usr"), "{m}");
+        let m = Failure::Broken("no IDR keyframe\nInstall FFmpeg.".into()).user_message();
+        assert!(
+            m.contains("played: no IDR keyframe. Install FFmpeg. Or choose"),
+            "{m}"
+        );
+        assert_eq!(
+            Failure::MissingCodec("AV1\nInstall x.".into()).detail(),
+            "AV1"
+        );
         let m = Failure::Broken("H.264 decoding failed at 1.0 s: bitstream".into()).user_message();
         assert!(m.contains("H.264 decoding failed at 1.0 s"));
         // Paths (which may name files) are never shown.

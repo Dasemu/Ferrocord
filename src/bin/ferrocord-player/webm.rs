@@ -1,4 +1,5 @@
-//! WebM / Matroska: the VP8 / VP9 video track and the Opus audio track.
+//! WebM / Matroska: the video track (VP8, VP9, H.264, H.265, AV1) and
+//! what the audio needs from the container.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackType};
 
+use super::mp4::{annexb_params, av1c_obus, avcc_to_annexb, parse_avcc, parse_hvcc};
 use super::source::{Codec, Packet, PacketSource, TrackError, VideoInfo};
 use super::yuv::Rotation;
 
@@ -37,7 +39,6 @@ pub fn describe_codec(id: &str) -> String {
     match id {
         "V_AV1" => "AV1".into(),
         "V_MPEGH/ISO/HEVC" => "H.265 (HEVC)".into(),
-        "V_MPEG4/ISO/AVC" => "H.264 in Matroska".into(),
         "V_VP8" => "VP8".into(),
         "V_VP9" => "VP9".into(),
         "A_VORBIS" => "Vorbis audio".into(),
@@ -85,6 +86,8 @@ pub struct WebmVideo {
     /// Raw keyframe timestamps, scanned on the first seek.
     keys: Option<Vec<u64>>,
     frame: Frame,
+    /// NAL length size of H.264 frames (0: the frame is passed as is).
+    len_size: usize,
     /// What the decoder needs to know.
     pub info: VideoInfo,
 }
@@ -101,9 +104,32 @@ impl WebmVideo {
         else {
             return Ok(None);
         };
-        let codec = match t.codec_id() {
-            "V_VP8" => Codec::Vp8,
-            "V_VP9" => Codec::Vp9,
+        let (codec, header, len_size) = match t.codec_id() {
+            "V_VP8" => (Codec::Vp8, Vec::new(), 0),
+            "V_VP9" => (Codec::Vp9, Vec::new(), 0),
+            // OBS records H.264 (and H.265) into Matroska: the private data
+            // is an `avcC` (`hvcC`) and the frames are length-prefixed NAL
+            // units, as in MP4.
+            id @ ("V_MPEG4/ISO/AVC" | "V_MPEGH/ISO/HEVC") => {
+                let (codec, config) = if id == "V_MPEG4/ISO/AVC" {
+                    (Codec::H264, t.codec_private().and_then(parse_avcc))
+                } else {
+                    (Codec::Hevc, t.codec_private().and_then(parse_hvcc))
+                };
+                let Some(config) = config else {
+                    return Err(TrackError::Unsupported(format!(
+                        "{} without its configuration",
+                        codec.name()
+                    )));
+                };
+                (codec, annexb_params(&config.params), config.len_size)
+            }
+            // Frames are OBUs as they are; the private data is an `av1C`.
+            "V_AV1" => (
+                Codec::Av1,
+                t.codec_private().and_then(av1c_obus).unwrap_or_default(),
+                0,
+            ),
             other => return Err(TrackError::Unsupported(describe_codec(other))),
         };
         let Some(v) = t.video() else {
@@ -136,12 +162,13 @@ impl WebmVideo {
             scale_ns,
             keys,
             frame: Frame::default(),
+            len_size,
             info: VideoInfo {
                 codec,
                 width,
                 height,
                 rotation: Rotation::None,
-                header: Vec::new(),
+                header,
                 duration_ms,
             },
         }))
@@ -197,7 +224,11 @@ impl PacketSource for WebmVideo {
             p.pts_ms = to_ms(self.frame.timestamp, self.scale_ns);
             p.key = self.frame.is_keyframe.unwrap_or(false);
             p.data.clear();
-            p.data.extend_from_slice(&self.frame.data);
+            if self.len_size == 0 {
+                p.data.extend_from_slice(&self.frame.data);
+            } else if avcc_to_annexb(&self.frame.data, self.len_size, &mut p.data).is_none() {
+                return Err(format!("malformed {} frame", self.info.codec.name()));
+            }
             return Ok(true);
         }
     }

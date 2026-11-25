@@ -46,6 +46,10 @@ pub enum VoiceUi {
     OutputDevice(Option<String>),
     /// Voice activity threshold in dB (-100..=0).
     Threshold(f32),
+    /// Microphone volume in percent (0..=200).
+    InputVolume(f32),
+    /// Speaker volume in percent (0..=200).
+    OutputVolume(f32),
     RefreshDevices,
 }
 
@@ -115,6 +119,16 @@ pub struct VoicePrefs {
     /// user -> (volume percent, locally muted).
     #[serde(default)]
     pub users: HashMap<UserId, (f32, bool)>,
+    /// "Input Volume" in percent (0..=200).
+    #[serde(default = "full_volume")]
+    pub input_volume: f32,
+    /// "Output Volume" in percent (0..=200).
+    #[serde(default = "full_volume")]
+    pub output_volume: f32,
+}
+
+fn full_volume() -> f32 {
+    100.0
 }
 
 fn default_threshold() -> f32 {
@@ -130,6 +144,8 @@ impl Default for VoicePrefs {
             self_mute: false,
             self_deaf: false,
             users: HashMap::new(),
+            input_volume: full_volume(),
+            output_volume: full_volume(),
         }
     }
 }
@@ -191,6 +207,7 @@ impl Voice {
         c.set_self_mute(self.self_mute || self.self_deaf);
         c.set_self_deaf(self.self_deaf);
         c.set_threshold_db(self.prefs.threshold_db);
+        c.set_volumes(self.prefs.input_volume, self.prefs.output_volume);
         c.set_devices(DeviceChoice {
             input: self.prefs.input.clone(),
             output: self.prefs.output.clone(),
@@ -636,6 +653,16 @@ impl App {
                 self.voice.sync_control();
                 return self.save_voice_prefs();
             }
+            VoiceUi::InputVolume(v) => {
+                self.voice.prefs.input_volume = v.clamp(0.0, 200.0);
+                self.voice.sync_control();
+                return self.save_voice_prefs();
+            }
+            VoiceUi::OutputVolume(v) => {
+                self.voice.prefs.output_volume = v.clamp(0.0, 200.0);
+                self.voice.sync_control();
+                return self.save_voice_prefs();
+            }
             VoiceUi::RefreshDevices => {
                 if self.cfg.mock {
                     self.voice.devices = (
@@ -730,6 +757,7 @@ impl App {
                             guild_id: None,
                         },
                         self.cfg.mock || self.prefs.muted,
+                        self.settings.local.notify_sound,
                     ));
                 }
                 VoiceEffect::Toast(t) => self.toast = Some(t),

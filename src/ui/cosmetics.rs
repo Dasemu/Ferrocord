@@ -21,8 +21,8 @@ use crate::net::model::User;
 /// possibly larger than the slot (decoration frames, effect layers). The
 /// slot's size is what its parent sees, so the overflow never moves
 /// neighbouring widgets.
-pub struct Placed<'a, M> {
-    content: Element<'a, M>,
+pub struct Placed<'a, M, T = iced::Theme, R = iced::Renderer> {
+    content: Element<'a, M, T, R>,
     width: Length,
     height: Length,
     child: Size,
@@ -30,8 +30,8 @@ pub struct Placed<'a, M> {
     clip: bool,
 }
 
-impl<'a, M> Placed<'a, M> {
-    pub fn new(content: impl Into<Element<'a, M>>, child: Size, offset: Point) -> Self {
+impl<'a, M, T, R> Placed<'a, M, T, R> {
+    pub fn new(content: impl Into<Element<'a, M, T, R>>, child: Size, offset: Point) -> Self {
         Self {
             content: content.into(),
             width: Length::Fixed(child.width),
@@ -55,7 +55,7 @@ impl<'a, M> Placed<'a, M> {
     }
 }
 
-impl<M> Widget<M, iced::Theme, iced::Renderer> for Placed<'_, M> {
+impl<M, T, R: renderer::Renderer> Widget<M, T, R> for Placed<'_, M, T, R> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content)]
     }
@@ -68,12 +68,7 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Placed<'_, M> {
         Size::new(self.width, self.height)
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &iced::Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &R, limits: &layout::Limits) -> layout::Node {
         let limits = limits.width(self.width).height(self.height);
         let node = self
             .content
@@ -91,14 +86,13 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Placed<'_, M> {
     fn draw(
         &self,
         tree: &Tree,
-        renderer: &mut iced::Renderer,
-        theme: &iced::Theme,
+        renderer: &mut R,
+        theme: &T,
         style: &renderer::Style,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        use iced::advanced::Renderer as _;
         let Some(child) = layout.children().next() else {
             return;
         };
@@ -128,13 +122,42 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Placed<'_, M> {
         }
     }
 
+    // Events reach the child: a self-playing animation (decoration,
+    // effect layer) needs every `RedrawRequested` to advance and to ask
+    // for its next frame. Without this the child never moves.
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &iced::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &R,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        let Some(child) = layout.children().next() else {
+            return;
+        };
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            child,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
     fn mouse_interaction(
         &self,
         _tree: &Tree,
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
-        _renderer: &iced::Renderer,
+        _renderer: &R,
     ) -> mouse::Interaction {
         mouse::Interaction::None
     }
@@ -143,14 +166,16 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Placed<'_, M> {
         &mut self,
         _tree: &mut Tree,
         _layout: Layout<'_>,
-        _renderer: &iced::Renderer,
+        _renderer: &R,
         _operation: &mut dyn widget::Operation,
     ) {
     }
 }
 
-impl<'a, M: 'a> From<Placed<'a, M>> for Element<'a, M> {
-    fn from(p: Placed<'a, M>) -> Self {
+impl<'a, M: 'a, T: 'a, R: renderer::Renderer + 'a> From<Placed<'a, M, T, R>>
+    for Element<'a, M, T, R>
+{
+    fn from(p: Placed<'a, M, T, R>) -> Self {
         Element::new(p)
     }
 }
@@ -164,14 +189,11 @@ pub fn decoration<'a>(app: &'a App, user: &User, size: f32, phase: Phase) -> Opt
     let off = -(big - size) / 2.0;
     // Until the image arrives the slot stays (an empty one) so the widget
     // tree keeps its shape.
-    let live = (phase == Phase::Live)
-        .then(|| app.decoration_live(deco, cdn_size))
-        .flatten();
-    let img: El<'a> = if let Some(a) = live {
-        super::anim_image::anim_image(a.clone(), app.anim.epoch, app.cosmetics_playing(), big, big)
-            .into()
+    let img: El<'a> = if let Some(a) = app.decoration_anim(deco, cdn_size, phase) {
+        let (epoch, playing) = app.anim_clock(phase);
+        super::anim_image::anim_image(a.clone(), epoch, playing, big, big).into()
     } else {
-        match app.decoration_frame(deco, cdn_size, phase) {
+        match app.decoration_frame(deco, cdn_size) {
             Some(h) => iced::widget::image(h.clone()).width(big).height(big).into(),
             None => Space::new().width(big).height(big).into(),
         }
@@ -295,4 +317,141 @@ pub fn clickable<'a>(
         )))
         .interaction(mouse::Interaction::Pointer)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use iced::advanced::widget::Tree;
+    use iced::advanced::{Shell, Widget, layout};
+    use iced::{Element, Event, Point, Rectangle, Size, mouse, window};
+
+    use super::Placed;
+    use crate::app::anim::from_rgba_frames;
+    use crate::ui::anim_image::anim_image;
+
+    /// Official policy: a message's avatar and decoration are stills (no
+    /// animation widget, so no redraws) until that message is hovered,
+    /// then both play; the popout plays them without a hover; reduced
+    /// motion keeps them still everywhere.
+    #[test]
+    fn message_avatars_animate_only_while_their_message_is_hovered() {
+        use crate::app::anim::{Hover, Zone};
+        use crate::app::cosmetics::Phase;
+        use crate::app::{App, Message, Ui};
+        use crate::net::model::Snowflake;
+        use crate::ui::anim_image::count_in;
+
+        let (mut a, _) = App::boot(crate::config::Config::for_tests());
+        let alice = crate::mock::user(2);
+        let mine = Hover::message(alice.id, Snowflake(41));
+        let other = Hover::message(alice.id, Snowflake(42));
+        let anims = |a: &App, h: Hover| {
+            let el = crate::ui::hover_avatar(a, &alice, 40.0, h);
+            count_in(&Tree::new(&el))
+        };
+        let popout = |a: &App| {
+            let el = super::avatar_decorated(a, &alice, 80.0, Phase::Popout);
+            count_in(&Tree::new(&el))
+        };
+        assert_eq!(anims(&a, mine), 0, "a still off-hover");
+        assert_eq!(popout(&a), 2, "the popout plays avatar and decoration");
+
+        let _ = a.update(Message::Ui(Ui::HoverEnter(mine)));
+        assert_eq!(anims(&a, mine), 2, "avatar and decoration play");
+        assert_eq!(anims(&a, other), 0, "another message by her stays still");
+        let _ = a.update(Message::Ui(Ui::HoverLeave(mine)));
+        assert_eq!(anims(&a, mine), 0);
+
+        // The user panel follows the same rule.
+        let panel = Hover::row(alice.id, Zone::Panel);
+        let _ = a.update(Message::Ui(Ui::HoverEnter(panel)));
+        assert_eq!(a.list_phase(panel), Phase::Hover);
+
+        let _ = a.update(Message::Ui(Ui::ToggleReduceMotion));
+        let _ = a.update(Message::Ui(Ui::HoverEnter(mine)));
+        assert_eq!(anims(&a, mine), 0, "reduced motion: stills");
+        assert_eq!(popout(&a), 0);
+    }
+
+    /// A paused animation (window in the background) draws its first frame
+    /// and asks for no redraw.
+    #[test]
+    fn a_paused_animation_requests_no_redraws() {
+        let anim = Arc::new(from_rgba_frames(vec![
+            (1, 1, vec![0u8; 4], Duration::from_millis(40)),
+            (1, 1, vec![9u8; 4], Duration::from_millis(40)),
+        ]));
+        let epoch = Instant::now();
+        let mut img = anim_image(anim, epoch, false, 48.0, 48.0);
+        let mut tree = Tree::new(&img as &dyn Widget<(), (), ()>);
+        let node = Widget::<(), (), ()>::layout(
+            &mut img,
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+        );
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let mut clipboard = iced::advanced::clipboard::Null;
+        Widget::<(), (), ()>::update(
+            &mut img,
+            &mut tree,
+            &Event::Window(window::Event::RedrawRequested(
+                epoch + Duration::from_secs(1),
+            )),
+            iced::advanced::Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &(),
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::new(Point::ORIGIN, Size::new(500.0, 500.0)),
+        );
+        assert_eq!(shell.redraw_request(), window::RedrawRequest::Wait);
+    }
+
+    /// Regression: `Placed` (decoration frames, effect layers) swallowed
+    /// every event, so the animation inside never saw a redraw and stayed
+    /// on its first frame. A redraw must reach it and schedule the next.
+    #[test]
+    fn placed_children_receive_redraws_and_keep_animating() {
+        let anim = Arc::new(from_rgba_frames(vec![
+            (1, 1, vec![0u8; 4], Duration::from_millis(40)),
+            (1, 1, vec![9u8; 4], Duration::from_millis(40)),
+        ]));
+        let epoch = Instant::now();
+        let child: Element<'_, (), (), ()> = anim_image(anim, epoch, true, 48.0, 48.0).into();
+        let mut placed =
+            Placed::new(child, Size::new(48.0, 48.0), Point::new(-4.0, -4.0)).slot(40.0, 40.0);
+        let mut tree = Tree::new(&placed as &dyn Widget<(), (), ()>);
+        let node = placed.layout(
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+        );
+        let lay = iced::advanced::Layout::new(&node);
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let mut clipboard = iced::advanced::clipboard::Null;
+        let now = epoch + Duration::from_millis(10);
+        placed.update(
+            &mut tree,
+            &Event::Window(window::Event::RedrawRequested(now)),
+            lay,
+            mouse::Cursor::Unavailable,
+            &(),
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::new(Point::ORIGIN, Size::new(500.0, 500.0)),
+        );
+        match shell.redraw_request() {
+            window::RedrawRequest::At(at) => {
+                assert!(at >= epoch + Duration::from_millis(40));
+                assert!(at <= epoch + Duration::from_millis(60));
+            }
+            other => panic!("the animation asked for no redraw: {other:?}"),
+        }
+    }
 }

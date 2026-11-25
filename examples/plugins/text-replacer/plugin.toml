@@ -1,0 +1,26 @@
+id = "text-replacer"
+name = "Text Replacer"
+version = "1.0.0"
+author = "Ferrocord contributors"
+description = "Rewrites what you send: /shrug, /tableflip, /unflip and your own replacement rules. Adds a /lenny command."
+api_version = 1
+permissions = ["transform_outgoing", "send_messages"]
+
+[[settings]]
+key = "shortcuts"
+type = "bool"
+label = "Shortcuts"
+description = "/shrug, /tableflip and /unflip at the start of a message."
+default = true
+
+[[settings]]
+key = "rules"
+type = "string"
+label = "Replacement rules"
+description = "Pairs like  from=>to  separated by ;"
+default = "-->=>→; <--=>←"
+max_len = 500
+
+[[commands]]
+name = "lenny"
+description = "Sends your text followed by ( ͡° ͜ʖ ͡°)"

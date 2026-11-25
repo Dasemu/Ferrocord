@@ -6,7 +6,7 @@ use iced::widget::{Space, button, column, container, rich_text, row, span, stack
 use iced::{Alignment, Background, Border, Color, ContentFit, Font, Length, Padding};
 
 use super::icons::{Icon, icon};
-use super::theme::{self, INTER_MEDIUM, INTER_SEMIBOLD};
+use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, format_timestamp, markdown, ui, video};
 use crate::app::embeds::{
     self, Group, MAX_AUTHOR, MAX_DESCRIPTION, MAX_FIELD_NAME, MAX_FIELD_VALUE, MAX_FOOTER,
@@ -208,12 +208,38 @@ fn link_span<'a>(label: String, url: Option<&str>, size: f32, font: Font, color:
 
 fn group_view<'a>(app: &'a App, m: &'a model::Message, g: &Group<'a>) -> El<'a> {
     let e = g.embed;
-    let plan = embeds::plan(g);
+    let mut plan = embeds::plan(g);
     let spoiler = e
         .url
         .as_deref()
         .is_some_and(|u| embeds::url_is_spoilered(&m.content, u))
-        && !app.revealed_spoilers.contains(&m.id);
+        && !app.revealed_spoilers.contains(&m.id)
+        && !app.spoilers_revealed(Some(m.channel_id));
+
+    // "Display images, videos and lolcats: when posted as links to chat"
+    // off: cards keep their text, media links stay links.
+    if !app.inline_embed_media() {
+        if is_bare_group(e) && plan.thumb.is_none() && e.bare_media().is_some()
+            || plan.grid.len() >= 2 && is_bare_group(e)
+        {
+            let url = e
+                .url
+                .clone()
+                .or_else(|| e.bare_media().map(|b| b.url.clone()));
+            // The message text already shows the link, unless it is a bare
+            // GIF link (hidden while its embed shows).
+            return match url {
+                Some(u) if !m.content.contains(&u) || m.content_is_gif_link() => {
+                    link_span(u.clone(), Some(&u), 16.0, INTER, app.theme.palette.link)
+                }
+                _ => Space::new().into(),
+            };
+        }
+        plan.thumb = None;
+        plan.large = None;
+        plan.video = false;
+        plan.grid.clear();
+    }
 
     // Bare media: GIF links and direct image links, without a card. A
     // `gifv` loops its MP4 once decoded (`app::media_anim`); until then it

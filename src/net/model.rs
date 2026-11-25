@@ -267,6 +267,9 @@ pub struct CustomEmoji {
     pub animated: bool,
     #[serde(default = "default_true")]
     pub available: bool,
+    /// Roles allowed to use it (empty: everyone).
+    #[serde(default)]
+    pub roles: Vec<RoleId>,
 }
 
 fn default_true() -> bool {

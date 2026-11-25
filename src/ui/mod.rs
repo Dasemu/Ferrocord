@@ -2,15 +2,18 @@
 
 pub mod anim_image;
 pub mod chat;
+pub mod clock;
 pub mod context_menu;
 pub mod cosmetics;
 pub mod embeds;
 pub mod emoji_font;
+pub mod frame_stats;
 pub mod icons;
 pub mod lightbox;
 pub mod login;
 pub mod markdown;
 pub mod members;
+pub mod plugins;
 pub mod popovers;
 pub mod popups;
 pub mod profile;
@@ -37,6 +40,7 @@ pub type El<'a> = Element<'a, Message>;
 
 /// View of the (only) main window, in the shape `iced::daemon` expects.
 pub fn view_window(app: &App, _window: iced::window::Id) -> El<'_> {
+    frame_stats::view_built();
     view(app)
 }
 
@@ -328,10 +332,22 @@ fn banner(app: &App) -> Option<El<'_>> {
     )
 }
 
-/// Round avatar with its decoration; animated ones play all the time
-/// (see `App::phase_of`).
+/// Round avatar with its decoration, as a still: like the official client,
+/// animated avatars and decorations outside profiles play only while their
+/// row is hovered ([`hover_avatar`]).
 pub fn avatar<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
-    cosmetics::avatar_decorated(app, user, size, app.phase_of(user.id))
+    cosmetics::avatar_decorated(app, user, size, crate::app::cosmetics::Phase::Still)
+}
+
+/// Round avatar with its decoration in a list row or message that animates
+/// while `hover` (that row) is hovered (see `App::list_phase`).
+pub fn hover_avatar<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    hover: crate::app::anim::Hover,
+) -> El<'a> {
+    cosmetics::avatar_decorated(app, user, size, app.list_phase(hover))
 }
 
 /// The avatar circle alone: the downloaded image (the animated frame in
@@ -347,20 +363,13 @@ pub fn avatar_circle<'a>(
     } else {
         crate::app::cosmetics::AV_LIST
     };
-    if phase == crate::app::cosmetics::Phase::Live
-        && let Some(a) = app.avatar_live(user, cdn_size)
-    {
-        return anim_image::anim_image(
-            a.clone(),
-            app.anim.epoch,
-            app.cosmetics_playing(),
-            size,
-            size,
-        )
-        .border_radius(size / 2.0)
-        .into();
+    if let Some(a) = app.avatar_anim(user, cdn_size, phase) {
+        let (epoch, playing) = app.anim_clock(phase);
+        return anim_image::anim_image(a.clone(), epoch, playing, size, size)
+            .border_radius(size / 2.0)
+            .into();
     }
-    if let Some(h) = app.avatar_frame(user, cdn_size, phase) {
+    if let Some(h) = app.avatar_frame(user, cdn_size) {
         return iced::widget::image(h.clone())
             .width(size)
             .height(size)
@@ -395,27 +404,35 @@ pub fn initials_circle<'a>(p: &Palette, name: &str, color: iced::Color, size: f3
     .into()
 }
 
-/// Avatar with its presence dot (user panel and DM list).
-pub fn avatar_with_status<'a>(app: &'a App, user: &User, size: f32) -> El<'a> {
+/// Avatar with its presence dot (user panel), drawn in `phase`.
+pub fn avatar_with_status<'a>(
+    app: &'a App,
+    user: &User,
+    size: f32,
+    phase: crate::app::cosmetics::Phase,
+) -> El<'a> {
     avatar_with_presence(
         app,
         user,
         size,
         app.chat.presence_of(user.id),
         app.theme.palette.user_panel,
+        phase,
     )
 }
 
-/// Avatar with a presence dot; `ring` is the background colour the dot is
-/// cut out of.
+/// Avatar with a presence dot, drawn in `phase`; `ring` is the background
+/// colour the dot is cut out of.
 pub fn avatar_with_presence<'a>(
     app: &'a App,
     user: &User,
     size: f32,
     status: crate::net::model::Presence,
     ring_color: iced::Color,
+    phase: crate::app::cosmetics::Phase,
 ) -> El<'a> {
-    with_presence(app, avatar(app, user, size), size, status, ring_color)
+    let base = cosmetics::avatar_decorated(app, user, size, phase);
+    with_presence(app, base, size, status, ring_color)
 }
 
 /// Puts the presence dot on `base` (an avatar slot of `size`).
@@ -499,7 +516,7 @@ pub fn format_timestamp(ms: u64, now_ms: u64) -> String {
         return String::new();
     };
     let now = local(now_ms).unwrap_or(t);
-    let time = t.format("%-I:%M %p");
+    let time = t.format(clock::hm());
     let days = now.date_naive().num_days_from_ce() - t.date_naive().num_days_from_ce();
     match days {
         0 => format!("Today at {time}"),
@@ -511,7 +528,7 @@ pub fn format_timestamp(ms: u64, now_ms: u64) -> String {
 /// Short time for continuation messages ("2:03 PM").
 pub fn format_time(ms: u64) -> String {
     local(ms)
-        .map(|t| t.format("%-I:%M %p").to_string())
+        .map(|t| t.format(clock::hm()).to_string())
         .unwrap_or_default()
 }
 
@@ -535,13 +552,13 @@ pub fn format_discord_timestamp(unix: i64, style: char, now_ms: u64) -> String {
         return format!("<t:{unix}>");
     };
     match style {
-        't' => t.format("%-I:%M %p").to_string(),
-        'T' => t.format("%-I:%M:%S %p").to_string(),
+        't' => t.format(clock::hm()).to_string(),
+        'T' => t.format(clock::hms()).to_string(),
         'd' => t.format("%m/%d/%Y").to_string(),
         'D' => t.format("%B %-d, %Y").to_string(),
-        'F' => t.format("%A, %B %-d, %Y %-I:%M %p").to_string(),
+        'F' => format!("{} {}", t.format("%A, %B %-d, %Y"), t.format(clock::hm())),
         'R' => relative(unix * 1000 - now_ms as i64),
-        _ => t.format("%B %-d, %Y %-I:%M %p").to_string(),
+        _ => format!("{} {}", t.format("%B %-d, %Y"), t.format(clock::hm())),
     }
 }
 
