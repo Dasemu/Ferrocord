@@ -92,6 +92,8 @@ pub enum ScreenshotScreen {
     EmojiLocked,
     /// Sticker picker with a Nitro-locked sticker picked.
     StickersLocked,
+    /// The "new version available" banner.
+    UpdateBanner,
 }
 
 impl ScreenshotScreen {
@@ -166,6 +168,7 @@ impl ScreenshotScreen {
             "plugin-decorations" => Some(Self::PluginDecorations),
             "emoji-locked" => Some(Self::EmojiLocked),
             "stickers-locked" => Some(Self::StickersLocked),
+            "update-banner" => Some(Self::UpdateBanner),
             _ => None,
         }
     }
