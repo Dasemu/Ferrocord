@@ -102,3 +102,7 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   `xdotool windowfocus` first (unfocused windows pause animations).
 - GIF picker media go through `gif_anim::picker_bytes` (100 MB disk LRU in the cache dir, 4 downloads at a
   time); tile animations live in `App::gif_anims` (near-view tiles only, freed when the picker closes).
+- Quit (`App::quit`, `src/shutdown.rs`) must leave in < 1 s: iced drops its tokio runtime at exit and that
+  WAITS FOR EVERY `spawn_blocking` TASK. Never run an unbounded wait there (notification click watches use
+  detached threads, `app/notify.rs`); shutdown work is bounded (`FLUSH_BUDGET`) and a watchdog exits at
+  `EXIT_DEADLINE`. Test: `dbus-run-session -- xvfb-run -a cargo test --test quit_deadline`.
