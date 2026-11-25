@@ -949,6 +949,25 @@ impl App {
         }
     }
 
+    /// Quitting: the queued changes as one request to await with a
+    /// deadline (no rollback, the app is going away).
+    pub(super) fn settings_flush_for_quit(
+        &mut self,
+    ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        if self.cfg.mock {
+            return None;
+        }
+        let Batch { edits, .. } = self.settings.synced.take_all()?;
+        let rest = self.rest.clone();
+        let lock = self.settings.lock.clone();
+        Some(async move {
+            let _guard = lock.lock().await;
+            if let Err(e) = rest.edit_user_settings(&edits).await {
+                tracing::warn!(error = %e.user_message(), "settings not saved before quitting");
+            }
+        })
+    }
+
     pub(super) fn open_settings_screen(&mut self) -> Task<Message> {
         if !self.settings.forms.profile_loaded {
             let name = self
