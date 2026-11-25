@@ -28,6 +28,8 @@ pub enum Message {
     Voice(crate::net::voice::VoiceEvent),
     /// Plugins: page input, plugin-thread output, task results.
     Plugin(super::plugins::PluginMsg),
+    /// In-app updater (`crate::update`).
+    Update(crate::update::UpdateMsg),
 }
 
 /// User input.

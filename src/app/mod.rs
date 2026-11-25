@@ -32,6 +32,7 @@ pub mod servers;
 pub mod settings;
 pub mod state;
 pub mod stickers;
+mod updates;
 pub mod upload;
 pub mod video;
 pub mod voice;
@@ -213,6 +214,8 @@ pub struct App {
     pub quitting: bool,
     /// Plugins: no engine or thread until one is enabled.
     pub plugins: crate::plugins::Plugins,
+    /// In-app updater (banner, Settings → Updates).
+    pub updater: crate::update::Updater,
 }
 
 pub fn now_ms() -> u64 {
@@ -253,6 +256,7 @@ impl App {
         let prefs = Prefs::load(&store);
         let local_settings = settings::LocalSettings::load(&store);
         let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
+        let updater = updates::new_updater(&cfg, &store);
         let start_hidden = cfg.minimized || prefs.start_minimized;
         let (win, first_action) = WindowState::boot(cfg.tray, start_hidden, prefs.close_to_tray);
         let mut app = App {
@@ -342,6 +346,7 @@ impl App {
                 cfg.plugin_store_path(),
                 !cfg.mock,
             ),
+            updater,
             cfg,
         };
         app.window_focused = app.win.visible;
@@ -421,9 +426,19 @@ impl App {
         } else {
             Task::none()
         };
+        let updater = app.boot_updater();
         (
             app,
-            Task::batch([open_window, fonts, restore, autostart, sweep, plugins, hang]),
+            Task::batch([
+                open_window,
+                fonts,
+                restore,
+                autostart,
+                sweep,
+                plugins,
+                updater,
+                hang,
+            ]),
         )
     }
 
@@ -744,6 +759,7 @@ impl App {
             Some(ScreenshotScreen::Settings | ScreenshotScreen::SettingsPage(_))
         );
         self.mock_settings(screen);
+        self.mock_update_screen(screen);
         self.mock_plugin_screen(screen);
         let _ = self.sync_members();
         let ctx = self.ctx();
@@ -933,6 +949,7 @@ impl App {
             Message::Tray(ev) => self.on_tray(ev),
             Message::Voice(ev) => self.on_voice_event(ev),
             Message::Plugin(m) => self.on_plugin(m),
+            Message::Update(m) => self.on_update(m),
         };
         let task = match self.toast_timer(toast_before) {
             Some(t) => Task::batch([task, t]),

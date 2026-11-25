@@ -273,7 +273,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-ferrocord-plugin-sdk = { git = "https://github.com/Dasemu/Ferrocord" }
+ferrocord-plugin-sdk = { git = "https://github.com/FerroApps/Ferrocord" }
 
 [profile.release]
 opt-level = "s"

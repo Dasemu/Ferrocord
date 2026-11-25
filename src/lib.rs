@@ -18,5 +18,6 @@ pub mod shutdown;
 pub mod store;
 pub mod tray;
 pub mod ui;
+pub mod update;
 #[cfg(windows)]
 pub mod win_app_id;

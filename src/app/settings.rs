@@ -53,12 +53,14 @@ pub enum Category {
     Keybinds,
     Language,
     Advanced,
+    /// Version, update checks and install (`update::view::page`).
+    Updates,
     /// Community plugins (`ui::plugins::page`).
     Plugins,
 }
 
 impl Category {
-    pub const ALL: [Category; 13] = [
+    pub const ALL: [Category; 14] = [
         Self::MyAccount,
         Self::Profiles,
         Self::Privacy,
@@ -71,6 +73,7 @@ impl Category {
         Self::Keybinds,
         Self::Language,
         Self::Advanced,
+        Self::Updates,
         Self::Plugins,
     ];
 
@@ -88,6 +91,7 @@ impl Category {
             Self::Keybinds => "Keybinds",
             Self::Language => "Language",
             Self::Advanced => "Advanced",
+            Self::Updates => "Updates",
             Self::Plugins => "Plugins",
         }
     }
@@ -118,6 +122,7 @@ impl Category {
             Self::Keybinds => "keybinds",
             Self::Language => "language",
             Self::Advanced => "advanced",
+            Self::Updates => "updates",
             Self::Plugins => "plugins",
         }
     }
@@ -1012,6 +1017,10 @@ impl App {
                     self.settings.mic_test = None;
                     let scan = self.on_plugin(super::plugins::PluginMsg::OpenPage);
                     return Task::batch([top, scan]);
+                }
+                if c == Category::Updates {
+                    self.settings.mic_test = None;
+                    return Task::batch([top, self.updates_page_opened()]);
                 }
                 if c != Category::VoiceVideo {
                     self.settings.mic_test = None;

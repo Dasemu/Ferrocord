@@ -95,3 +95,4 @@ Things learned while building Ferrocord that are worth remembering.
   notifies, so it only showed with a real account. Fix: unbounded waits on detached threads, bounded quit
   work, an exit watchdog. Reproduce with a fake notification server that never closes (Python `dbus` +
   GLib under `dbus-run-session`) and the dbusmenu `Event(id, "clicked", ...)` call a panel makes.
+- **Self-update**: on Linux `std::env::current_exe()` of a binary that was renamed over reads `/path (deleted)`; restart the path the installer wrote. Windows cannot overwrite or delete a running `.exe` but can rename it, so updates move it aside to `.old` and delete it at the next start. Stage files in the target's own folder so `rename` stays atomic (no cross-filesystem copy). Safe extraction means writing files yourself from the archive entries (never `unpack`), rejecting links and `..`, and counting the bytes actually read.

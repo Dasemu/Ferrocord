@@ -78,7 +78,14 @@ pub fn view(app: &App) -> El<'_> {
     // optional layer therefore has a fixed slot that holds an empty `Space`
     // while it is closed.
     let banner: El<'_> = banner(app).unwrap_or_else(empty);
-    let content: El<'_> = column![banner, body].into();
+    // The update banner has its own fixed slot next to the connection
+    // banner (same tree shape whether or not it shows).
+    let update_banner: El<'_> = if app.screen() == Screen::Main {
+        crate::update::view::banner(app).unwrap_or_else(empty)
+    } else {
+        empty()
+    };
+    let content: El<'_> = column![column![banner, update_banner], body].into();
     if app.screen() != Screen::Main {
         return container(content)
             .width(Length::Fill)
