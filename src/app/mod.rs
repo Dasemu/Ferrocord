@@ -1628,7 +1628,12 @@ impl App {
             tasks.push(self.sync_members());
             tasks.push(self.load_user_settings());
         }
-        if matches!(ev, Event::MessageCreate(_) | Event::MemberList(_)) {
+        // Link previews arrive in a MESSAGE_UPDATE a few seconds after the
+        // message itself (Discord unfurls the URL), so their thumbnails are
+        // fetched then rather than whenever the next message comes in.
+        if matches!(ev, Event::MessageCreate(_) | Event::MemberList(_))
+            || matches!(ev, Event::MessageUpdate(p) if update_brings_media(&p))
+        {
             tasks.push(self.request_images());
         }
         for fx in effects {
@@ -2576,6 +2581,13 @@ fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
     )
 }
 
+/// Whether a MESSAGE_UPDATE carries media to fetch: new embeds (link
+/// previews, Twitter/X photos) or attachments.
+fn update_brings_media(p: &crate::net::model::MessagePatch) -> bool {
+    p.embeds.as_ref().is_some_and(|e| !e.is_empty())
+        || p.attachments.as_ref().is_some_and(|a| !a.is_empty())
+}
+
 fn save_png(path: &std::path::Path, shot: &iced::window::Screenshot) -> crate::error::Result<()> {
     let img = image::RgbaImage::from_raw(shot.size.width, shot.size.height, shot.rgba.to_vec())
         .ok_or_else(|| crate::error::Error::Io(std::io::Error::other("bad screenshot buffer")))?;
@@ -2589,6 +2601,27 @@ fn save_png(path: &std::path::Path, shot: &iced::window::Screenshot) -> crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_preview_updates_fetch_their_media() {
+        use crate::net::model::{Embed, MessagePatch};
+        let edit = MessagePatch {
+            content: Some("edited".into()),
+            edited: true,
+            ..Default::default()
+        };
+        assert!(!update_brings_media(&edit));
+        let cleared = MessagePatch {
+            embeds: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(!update_brings_media(&cleared));
+        let unfurled = MessagePatch {
+            embeds: Some(vec![Embed::default()]),
+            ..Default::default()
+        };
+        assert!(update_brings_media(&unfurled));
+    }
 
     #[test]
     fn ctrl_q_quits() {
