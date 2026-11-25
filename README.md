@@ -1,6 +1,7 @@
 # Ferrocord
 
 A lightweight, native Discord desktop client written in Rust with
+[ferroiced](https://github.com/Kartudev/ferroiced), a dedicated and optimized fork of 
 [iced](https://iced.rs). It talks to Discord's Gateway (WebSocket) and REST
 API directly and aims to look and behave like the official client while
 using a fraction of its memory.
