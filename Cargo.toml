@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "Lightweight native Discord desktop client (unofficial)"
 license = "MIT"
-repository = "https://github.com/Dasemu/Ferrocord"
+repository = "https://github.com/FerroApps/Ferrocord"
 publish = false
 default-run = "ferrocord"
 
