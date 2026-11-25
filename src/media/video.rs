@@ -368,6 +368,13 @@ impl Drop for Player {
         }
         let child = self.child.lock().ok().and_then(|mut c| c.take());
         if let Some(mut child) = child {
+            if crate::shutdown::is_quitting() {
+                // The app is exiting: no grace period (a reaper thread
+                // would die with the process before it kills the helper).
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
             // Give it a moment to exit cleanly, then make sure it is gone;
             // reaping happens off the UI thread.
             std::thread::spawn(move || {

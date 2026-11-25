@@ -311,6 +311,18 @@ writes `~/.config/autostart/dev.ferro.ferrocord.desktop` with `--minimized`.
 Preferences live in SQLite `meta` under `pref.*` (kept on logout). Flags:
 `--minimized`, `--no-tray`.
 
+**Quitting (`App::quit`, `src/shutdown.rs`).** Tray "Quit", Ctrl+Q and a lost
+tray while hidden all end in `App::quit`: the window closes at once, the video
+helper is killed, every subscription is dropped (gateway, voice, tray, login
+helper with `kill_on_drop`), pending settings get `FLUSH_BUDGET` (350 ms), then
+`iced::exit()`. iced then drops its tokio runtime, which waits for every
+`spawn_blocking` task without a timeout, so `shutdown::begin` arms a watchdog
+that ends the process at `EXIT_DEADLINE` (600 ms) regardless. Never put a wait
+of unbounded length on the blocking pool (notification click watches run on
+their own detached threads, `app::notify`). `tests/quit_deadline.rs` clicks
+Quit in the tray menu of the real binary with a stuck blocking task
+(`FERROCORD_MOCK_HANG=1`) and asserts the exit time.
+
 **Plugins (`src/plugins/`, `app/plugins.rs`, `ui/plugins.rs`).** Sandboxed
 WebAssembly plugins (wasmi, fuel and memory limits) on one worker thread,
 declared by a manifest, reaching the app only through a capability-checked

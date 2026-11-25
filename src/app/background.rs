@@ -53,8 +53,57 @@ impl App {
                 ]),
                 None => Task::none(),
             },
-            Action::Exit => iced::exit(),
+            Action::Exit => self.quit(),
         }
+    }
+
+    /// Quit (tray menu, Ctrl+Q, tray lost while hidden). Leaves within
+    /// [`crate::shutdown::EXIT_DEADLINE`] whatever is still running: the
+    /// window closes at once, helper processes and devices stop, every
+    /// subscription (gateway, voice, tray, login helper) is dropped, pending
+    /// settings get [`crate::shutdown::FLUSH_BUDGET`], then iced exits. If
+    /// dropping iced's runtime then waits on a stuck blocking task, the
+    /// watchdog ends the process anyway.
+    pub(super) fn quit(&mut self) -> Task<Message> {
+        if self.quitting {
+            return Task::none();
+        }
+        self.quitting = true;
+        tracing::info!("quitting");
+        if self.cfg.exit_watchdog {
+            crate::shutdown::begin();
+        }
+        // Ends `ferrocord-player` (killed at once while quitting) and the
+        // microphone test's devices.
+        self.video = None;
+        self.settings.mic_test = None;
+        let close = match self.window_id.take() {
+            Some(id) => iced::window::close(id),
+            None => Task::none(),
+        };
+        let flush = self.settings_flush_for_quit();
+        let hang = self.cfg.mock_hang;
+        let last_work = Task::perform(
+            async move {
+                let work = async move {
+                    if let Some(f) = flush {
+                        f.await;
+                    }
+                    if hang {
+                        // Mock: a save that never answers.
+                        std::future::pending::<()>().await;
+                    }
+                };
+                if tokio::time::timeout(crate::shutdown::FLUSH_BUDGET, work)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("pending settings not saved before quitting (timeout)");
+                }
+            },
+            |()| Message::Done(Done::QuitReady),
+        );
+        Task::batch([close, last_work])
     }
 
     /// Drops state that only exists to speed up drawing; it is rebuilt on
@@ -158,7 +207,7 @@ impl App {
                 let a = self.win.hide();
                 self.run_window_action(a)
             }
-            Ui::Quit => iced::exit(),
+            Ui::Quit => self.quit(),
             Ui::OpenSettings => {
                 self.settings_open = true;
                 self.status_menu = false;

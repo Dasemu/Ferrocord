@@ -254,6 +254,8 @@ pub enum Ui {
 /// Completion of a `Task`.
 #[derive(Debug, Clone)]
 pub enum Done {
+    /// Quit: the bounded shutdown work finished (or ran out of time).
+    QuitReady,
     /// Autostart entry written or removed: the resulting state.
     AutostartChanged(Result<bool, String>),
     /// Initial autostart state read from disk.

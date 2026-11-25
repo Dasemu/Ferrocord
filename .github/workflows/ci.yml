@@ -23,13 +23,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # libxkbcommon-x11-0: winit dlopens it on X11 (it is not linked, so no
+      # -dev package pulls it in) and panics without it; quit_deadline runs
+      # the real binary under Xvfb.
       - name: Install system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config cmake libssl-dev libdbus-1-dev libxkbcommon-dev \
             libwayland-dev libfontconfig1-dev libasound2-dev dbus gnome-keyring \
-            libwebkit2gtk-4.1-dev libgtk-3-dev
+            libwebkit2gtk-4.1-dev libgtk-3-dev xvfb xauth libxkbcommon-x11-0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -114,6 +117,12 @@ jobs:
       # skips itself in the step above, so run it again under a private bus.
       - name: cargo test tray_sni (private session bus)
         run: dbus-run-session -- cargo test --test tray_sni
+
+      # Quit must end the process on time even with a stuck blocking task
+      # and an open notification: the real binary under Xvfb, Quit clicked
+      # through the tray menu over D-Bus.
+      - name: cargo test quit_deadline (private session bus + Xvfb)
+        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" cargo test --test quit_deadline
 
       # Real Secret Service: guards the zbus executor feature (tokio vs async-io)
       # that keyring's blocking connection depends on.
