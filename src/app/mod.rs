@@ -11,6 +11,7 @@ pub mod embeds;
 pub mod emoji;
 pub mod features;
 pub mod folders;
+pub mod friends;
 pub mod gif_anim;
 pub mod gifs;
 pub mod images;
@@ -165,6 +166,8 @@ pub struct App {
     /// Channel-header popovers (bell, pins, inbox).
     pub panels: features::Panels,
     pub server_dialog: Option<servers::ServerDialog>,
+    /// Friends page, Message Requests and the conversation switcher.
+    pub friends: friends::FriendsState,
     pub discover: Option<servers::DiscoverState>,
     /// Server rail interaction (folders, drag and drop, menus).
     pub rail: rail::RailUi,
@@ -314,6 +317,7 @@ impl App {
             search: search::SearchState::default(),
             panels: features::Panels::default(),
             server_dialog: None,
+            friends: friends::FriendsState::default(),
             discover: None,
             rail: rail::RailUi::default(),
             pending_select: None,
@@ -715,6 +719,19 @@ impl App {
                 };
                 self.mock_voice_screen(s);
             }
+            Some(
+                s @ (ScreenshotScreen::Friends
+                | ScreenshotScreen::FriendsPending
+                | ScreenshotScreen::FriendsAdd
+                | ScreenshotScreen::MessageRequests
+                | ScreenshotScreen::Switcher),
+            ) => {
+                self.auth = AuthState::LoggedIn {
+                    user: mock::user(1),
+                };
+                self.view = View::Home(None);
+                self.mock_friends_screen(s);
+            }
             Some(ScreenshotScreen::ProfileDm) => {
                 self.auth = AuthState::LoggedIn {
                     user: mock::user(1),
@@ -814,6 +831,32 @@ impl App {
         if screen == Some(ScreenshotScreen::Panel) {
             // After the member list: it carries our own (online) presence.
             self.chat.my_status = Presence::Dnd;
+        }
+    }
+
+    /// Sets up the Friends / Message Requests / switcher screenshots.
+    fn mock_friends_screen(&mut self, s: ScreenshotScreen) {
+        use friends::{AddStatus, FriendsTab, HomePage, Switcher};
+        let f = &mut self.friends;
+        match s {
+            ScreenshotScreen::FriendsPending => f.tab = FriendsTab::Pending,
+            ScreenshotScreen::FriendsAdd => {
+                f.tab = FriendsTab::AddFriend;
+                f.add_status = Some(AddStatus::Sent("zed_dev".into()));
+            }
+            ScreenshotScreen::MessageRequests => {
+                f.page = HomePage::Requests;
+                for c in [mock::DM_REQUEST, mock::DM_SPAM] {
+                    let w = self.chat.messages.entry(c).or_default();
+                    for m in mock::history(c) {
+                        w.upsert(m);
+                    }
+                }
+            }
+            ScreenshotScreen::Switcher => {
+                f.switcher = Some(Switcher { query: "a".into() });
+            }
+            _ => {}
         }
     }
 
@@ -1148,6 +1191,7 @@ impl App {
             Ui::Logout => self.logout(),
             Ui::Voice(v) => self.update_voice(v),
             Ui::Settings(s) => self.update_settings(s),
+            Ui::Friends(f) => self.update_friends(f),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -1701,6 +1745,7 @@ impl App {
             }
             Done::Voice(d) => self.on_voice_done(d),
             Done::Settings(d) => self.on_settings_done(*d),
+            Done::Friends(d) => self.on_friends_done(*d),
             Done::ScreenshotReady => iced::window::latest()
                 .and_then(iced::window::screenshot)
                 .map(|s| Message::Done(Done::Screenshot(s))),
@@ -2450,6 +2495,14 @@ fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message>
             ..
         }) if modifiers.command() && c.as_str().eq_ignore_ascii_case("v") => {
             Some(Message::Ui(Ui::Paste))
+        }
+        // Ctrl+K: "Find or start a conversation".
+        iced::Event::Keyboard(Key::KeyPressed {
+            key: K::Character(c),
+            modifiers,
+            ..
+        }) if modifiers.command() && !modifiers.shift() && c.as_str().eq_ignore_ascii_case("k") => {
+            Some(Message::Ui(Ui::Friends(friends::FriendsUi::OpenSwitcher)))
         }
         // Ctrl+Q quits, like the official client on Linux and Windows.
         iced::Event::Keyboard(Key::KeyPressed {

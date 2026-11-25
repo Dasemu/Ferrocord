@@ -36,7 +36,7 @@ pub fn discover_search_id() -> iced::widget::Id {
 
 /// Dimmed full-window backdrop with `card` in the middle; a click outside
 /// the card closes it.
-fn modal<'a>(card: El<'a>, close: Ui) -> El<'a> {
+pub(super) fn modal<'a>(card: El<'a>, close: Ui) -> El<'a> {
     opaque(
         mouse_area(
             container(opaque(card))

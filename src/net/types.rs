@@ -289,6 +289,10 @@ pub struct WireChannel {
     pub recipient_ids: Vec<Snowflake>,
     #[serde(default)]
     pub nsfw: bool,
+    #[serde(default)]
+    pub is_message_request: bool,
+    #[serde(default)]
+    pub is_spam: bool,
 }
 
 impl WireChannel {
@@ -314,6 +318,8 @@ impl WireChannel {
                 last_message_id: self.last_message_id.filter(|s| s.0 != 0),
                 recipients,
                 nsfw: self.nsfw,
+                message_request: self.is_message_request,
+                spam: self.is_spam,
             },
             users,
         )
@@ -1080,6 +1086,35 @@ pub struct WireUserSettings {
     pub guild_folders: Vec<WireGuildFolder>,
 }
 
+/// An entry of READY `relationships` / a `RELATIONSHIP_*` payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WireRelationship {
+    /// The other user's id.
+    pub id: Snowflake,
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    /// Inline user (absent with READY user deduplication).
+    #[serde(default)]
+    pub user: Option<WireUser>,
+}
+
+impl WireRelationship {
+    /// The domain relationship (`None` for an unknown type) and its user.
+    pub fn into_domain(self) -> Option<(Relationship, Option<User>)> {
+        let kind = RelationshipKind::from_wire(self.kind)?;
+        Some((
+            Relationship {
+                user_id: self.id,
+                kind,
+                nickname: self.nickname.filter(|n| !n.is_empty()),
+            },
+            self.user.map(User::from),
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WireReady {
     pub user: WireUser,
@@ -1107,6 +1142,8 @@ pub struct WireReady {
     /// member object.
     #[serde(default)]
     pub merged_members: Vec<Vec<WireMember>>,
+    #[serde(default)]
+    pub relationships: Vec<WireRelationship>,
 }
 
 impl WireReady {
@@ -1152,6 +1189,18 @@ impl WireReady {
             }
             channels.extend(chans);
             guilds.push(guild);
+        }
+        let mut relationships = Vec::new();
+        for r in self.relationships {
+            let Some((rel, user)) = r.into_domain() else {
+                continue;
+            };
+            if let Some(u) = user
+                && !users.iter().any(|x| x.id == u.id)
+            {
+                users.push(u);
+            }
+            relationships.push(rel);
         }
         for pc in self.private_channels {
             let (c, us) = pc.into_domain(None);
@@ -1248,6 +1297,7 @@ impl WireReady {
             guild_folders,
             channel_notify,
             voice_states,
+            relationships,
         }
     }
 }
@@ -1693,6 +1743,17 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
                     .collect(),
                 unavailable: c.unavailable,
             }))
+        }
+        "RELATIONSHIP_ADD" | "RELATIONSHIP_UPDATE" => {
+            let r: WireRelationship = serde_json::from_value(d)?;
+            match r.into_domain() {
+                Some((rel, user)) => Event::RelationshipUpsert(Box::new(rel), user.map(Box::new)),
+                None => return Ok(None),
+            }
+        }
+        "RELATIONSHIP_REMOVE" => {
+            let r: WireIdOnly = serde_json::from_value(d)?;
+            Event::RelationshipRemove(r.id)
         }
         "CALL_DELETE" => {
             let c: WireIdChannel = serde_json::from_value(d)?;
