@@ -22,6 +22,7 @@ pub mod media_anim;
 pub mod members;
 pub mod message;
 pub mod nitro;
+pub mod notify;
 pub mod panels;
 pub mod plugins;
 pub mod profile;
@@ -208,6 +209,9 @@ pub struct App {
     /// The one video that is downloading or playing.
     pub video: Option<video::Playback>,
     video_session: u32,
+    /// Quit was chosen: subscriptions are dropped and the process ends as
+    /// soon as the bounded shutdown work is done (`App::quit`).
+    pub quitting: bool,
     /// Plugins: no engine or thread until one is enabled.
     pub plugins: crate::plugins::Plugins,
     /// In-app updater (banner, Settings → Updates).
@@ -336,6 +340,7 @@ impl App {
             voice,
             video: None,
             video_session: 0,
+            quitting: false,
             plugins: crate::plugins::Plugins::new(
                 cfg.plugins_dir.clone(),
                 cfg.plugin_store_path(),
@@ -403,6 +408,24 @@ impl App {
         };
         let sweep = app.sweep_videos();
         let plugins = app.boot_plugins();
+        let hang = if app.cfg.mock_hang {
+            // `FERROCORD_MOCK_HANG=1`: a blocking call that never returns
+            // (a stuck network read, plugin call or notification watch),
+            // which iced's runtime would wait for at exit.
+            Task::perform(
+                async {
+                    let _ = tokio::task::spawn_blocking(|| {
+                        loop {
+                            std::thread::park();
+                        }
+                    })
+                    .await;
+                },
+                |()| Message::Done(Done::Ignored),
+            )
+        } else {
+            Task::none()
+        };
         let updater = app.boot_updater();
         (
             app,
@@ -414,6 +437,7 @@ impl App {
                 sweep,
                 plugins,
                 updater,
+                hang,
             ]),
         )
     }
@@ -1638,6 +1662,7 @@ impl App {
     fn on_done(&mut self, d: Done) -> Task<Message> {
         match d {
             Done::Ignored => Task::none(),
+            Done::QuitReady => iced::exit(),
             d @ (Done::Profile { .. } | Done::ProfileEffects(_) | Done::Anim { .. }) => {
                 self.on_cosmetics_done(d)
             }
@@ -2296,6 +2321,11 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        if self.quitting {
+            // Dropping them stops the gateway and voice connections, the
+            // tray and the login helper (killed on drop).
+            return Subscription::none();
+        }
         let mut subs = vec![iced::event::listen_with(|e, status, _| {
             input::record(&e);
             input_message(e, status)
@@ -2421,6 +2451,14 @@ fn input_message(e: iced::Event, status: iced::event::Status) -> Option<Message>
         }) if modifiers.command() && c.as_str().eq_ignore_ascii_case("v") => {
             Some(Message::Ui(Ui::Paste))
         }
+        // Ctrl+Q quits, like the official client on Linux and Windows.
+        iced::Event::Keyboard(Key::KeyPressed {
+            key: K::Character(c),
+            modifiers,
+            ..
+        }) if modifiers.command() && !modifiers.shift() && c.as_str().eq_ignore_ascii_case("q") => {
+            Some(Message::Ui(Ui::Quit))
+        }
         _ => None,
     }
 }
@@ -2523,53 +2561,10 @@ fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
         return Task::none();
     }
     let channel = n.channel_id;
+    // Shown and watched on a thread of its own (see `app::notify`).
+    let clicked = notify::show(escape_markup(&n.title), escape_markup(&n.body), sound);
     Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || {
-                let mut note = notify_rust::Notification::new();
-                note.appname(crate::config::APP_NAME)
-                    .summary(&escape_markup(&n.title))
-                    .body(&escape_markup(&n.body))
-                    .icon("dev.ferro.ferrocord");
-                // "Enable Notification Sounds": the desktop's message sound
-                // (freedesktop sound-name / Windows default toast audio),
-                // or an explicitly silent notification.
-                #[cfg(all(unix, not(target_os = "macos")))]
-                if sound {
-                    note.sound_name("message-new-instant");
-                } else {
-                    note.hint(notify_rust::Hint::SuppressSound(true));
-                }
-                #[cfg(windows)]
-                if sound {
-                    note.sound_name("Default");
-                }
-                #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
-                let _ = sound;
-                // The registered AppUserModelID (`win_app_id`): without it
-                // the toast is attributed to PowerShell.
-                #[cfg(windows)]
-                note.app_id(crate::config::APP_ID);
-                // Desktop entry and click actions are freedesktop (XDG)
-                // notification features; Windows toasts have neither.
-                #[cfg(all(unix, not(target_os = "macos")))]
-                note.hint(notify_rust::Hint::DesktopEntry(
-                    crate::config::APP_ID.into(),
-                ))
-                // "default" is the action a click on the notification
-                // body invokes (freedesktop notification spec).
-                .action("default", "Open");
-                match note.show() {
-                    Ok(handle) => wait_for_click(handle),
-                    Err(e) => {
-                        tracing::debug!(error = %e, "notification failed");
-                        false
-                    }
-                }
-            })
-            .await
-            .unwrap_or(false)
-        },
+        async move { clicked.await.unwrap_or(false) },
         move |clicked| {
             if clicked {
                 Message::Ui(Ui::OpenChannel(channel))
@@ -2578,20 +2573,6 @@ fn notify(n: state::Notification, mock: bool, sound: bool) -> Task<Message> {
             }
         },
     )
-}
-
-/// Blocks until the notification is closed or acted on; true if the user
-/// clicked it. Runs on the blocking pool.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn wait_for_click(handle: notify_rust::NotificationHandle) -> bool {
-    let mut clicked = false;
-    handle.wait_for_action(|action| clicked = action == "default");
-    clicked
-}
-
-#[cfg(not(all(unix, not(target_os = "macos"))))]
-fn wait_for_click(_handle: ()) -> bool {
-    false
 }
 
 async fn open_url(url: String) {
@@ -2635,6 +2616,27 @@ fn save_png(path: &std::path::Path, shot: &iced::window::Screenshot) -> crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_q_quits() {
+        use iced::keyboard::{Event as Key, Key as K, Location, Modifiers};
+        let press = |modifiers| {
+            iced::Event::Keyboard(Key::KeyPressed {
+                key: K::Character("q".into()),
+                modified_key: K::Character("q".into()),
+                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyQ),
+                location: Location::Standard,
+                modifiers,
+                text: None,
+                repeat: false,
+            })
+        };
+        assert!(matches!(
+            input_message(press(Modifiers::CTRL), iced::event::Status::Captured),
+            Some(Message::Ui(Ui::Quit))
+        ));
+        assert!(input_message(press(Modifiers::empty()), iced::event::Status::Ignored).is_none());
+    }
 
     #[test]
     fn notification_text_is_escaped() {

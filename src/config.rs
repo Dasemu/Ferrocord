@@ -242,6 +242,13 @@ pub struct Config {
     pub plugins_dir: Option<PathBuf>,
     /// Disposable caches (GIF picker media).
     pub cache_dir: Option<PathBuf>,
+    /// Quit arms [`crate::shutdown`]'s exit watchdog (the real process; off
+    /// in tests, where it would end the test binary).
+    pub exit_watchdog: bool,
+    /// Mock only (`FERROCORD_MOCK_HANG=1`): simulate a stuck network call
+    /// and a settings save that never answers, so tests can prove that
+    /// Quit still leaves on time.
+    pub mock_hang: bool,
 }
 
 impl Config {
@@ -318,6 +325,8 @@ impl Config {
                 None => dirs.as_ref().map(|d| d.config_dir().join("plugins")),
             },
             cache_dir: dirs.as_ref().map(|d| d.cache_dir().to_path_buf()),
+            exit_watchdog: true,
+            mock_hang: mock && env("FERROCORD_MOCK_HANG").as_deref() == Some("1"),
         })
     }
 
@@ -340,6 +349,8 @@ impl Config {
             state_dir: None,
             plugins_dir: None,
             cache_dir: None,
+            exit_watchdog: false,
+            mock_hang: false,
         }
     }
 

@@ -189,9 +189,19 @@ pub fn decode_with(helper: &Path, file: &Path, spec: FrameSpec) -> Result<Frames
     };
     // Watchdog: the reader below ends when the helper exits or is killed.
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    // It also kills the helper when the app quits.
     let watchdog = std::thread::spawn(move || {
-        if let Err(mpsc::RecvTimeoutError::Timeout) = stop_rx.recv_timeout(DECODE_TIMEOUT) {
-            let _ = child.kill();
+        let start = std::time::Instant::now();
+        loop {
+            match stop_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if crate::shutdown::is_quitting() || start.elapsed() >= DECODE_TIMEOUT {
+                        let _ = child.kill();
+                        break;
+                    }
+                }
+            }
         }
         let _ = child.wait();
     });

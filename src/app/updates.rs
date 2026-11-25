@@ -306,8 +306,10 @@ impl App {
         crate::tray::instance::release();
         match update::spawn_restart(&target, &args) {
             Ok(()) => {
+                // `spawn` has returned, so the new process exists (on Unix it
+                // has exec'd): only now may Quit arm the exit watchdog.
                 tracing::info!("update: restarting into the new version");
-                Task::done(Message::Ui(Ui::Quit))
+                self.quit()
             }
             Err(e) => {
                 tracing::warn!(error = %e, "update: could not start the new version");

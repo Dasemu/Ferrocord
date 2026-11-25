@@ -676,6 +676,18 @@ mod tray_flow {
     }
 
     #[test]
+    fn tray_quit_stops_everything_once() {
+        let (mut a, _rx) = app_with_tray();
+        assert!(!a.quitting);
+        command(&mut a, Command::Quit);
+        assert!(a.quitting, "Quit starts the shutdown");
+        // A second Quit (double click, Ctrl+Q meanwhile) starts nothing new.
+        let again = a.update(Message::Ui(Ui::Quit));
+        assert_eq!(again.units(), 0);
+        assert!(a.video.is_none());
+    }
+
+    #[test]
     fn without_a_tray_closing_does_not_hide() {
         let mut a = App::boot(Config::for_tests()).0;
         let _ = a.update(Message::Ui(Ui::CloseRequested));
