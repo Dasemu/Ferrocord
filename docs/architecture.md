@@ -317,3 +317,71 @@ declared by a manifest, reaching the app only through a capability-checked
 host ABI; account actions need a user-action grant and go through the app's
 own REST paths. Nothing runs while no plugin is enabled. See
 `docs/plugins.md`.
+
+## 12. Updates
+
+`src/update/` is the in-app updater (glue in `app/updates.rs`, views in
+`update/view.rs`). It is idle until the first check: a check is one small
+request, the HTTP client is built per check, and nothing runs in `--mock`,
+`--screenshot` or debug builds (`FERRO_UPDATE_FORCE=1` lifts only the debug
+rule; mock and screenshot mode never touch the network).
+
+- **Source**: `GET https://api.github.com/repos/FerroApps/Ferrocord/releases/latest`
+  with `Accept: application/vnd.github+json`, `User-Agent: ferrocord/<version>`
+  and `If-None-Match` (the ETag and the parsed release are cached in the
+  `meta` table: `update.etag`, `update.release`). No account data, no
+  telemetry, no machine id. 403/429 back off silently (`retry-after` /
+  `x-ratelimit-reset`, 1 h to 24 h). `FERRO_RELEASE_API` overrides the URL
+  (same meaning as in `install.sh`; HTTPS, or HTTP on loopback for tests).
+- **When**: 10–20 s after start (jitter), then every 6 h + up to 30 min,
+  also while hidden in the tray (a sleeping `Task`, generation-checked).
+  Settings → Updates → "Check for updates automatically" (`update.auto`,
+  default on) stops the timed checks; "Check for updates" always works.
+- **Compare**: strict `MAJOR.MINOR.PATCH` against `CARGO_PKG_VERSION`
+  (`update/version.rs`); drafts, pre-releases and odd tags are ignored.
+  Assets are picked by exact name: `ferrocord-v<ver>-linux-x86_64.tar.gz` or
+  `ferrocord-v<ver>-windows-x86_64.zip`, each with its `.sha256`.
+- **Banner**: a slim bar under the connection banner, in its own fixed
+  widget slot (tree shape never changes). "Ferrocord X is available"
+  [Update] [Release notes] [x]; [x] stores `update.dismissed` and hides that
+  version until a newer one appears. It also shows progress
+  (downloading with [Cancel] / verifying / installing), "Restart to finish"
+  [Restart now] [Later], and failures with "Open release page".
+- **Install method** (`update/method.rs`, pure `detect(&Facts)`):
+
+  | Method | Detected by | Update does |
+  |---|---|---|
+  | `install.sh` (Linux) | canonical exe = `${XDG_BIN_HOME:-~/.local/bin}/ferrocord` and `${XDG_DATA_HOME:-~/.local/share}/ferrocord/installed-version` exists, bin dir writable | self-update |
+  | Windows zip | Windows exe in a writable folder | self-update (rename dance) |
+  | `cargo install` | exe in `${CARGO_HOME:-~/.cargo}/bin` | shows `cargo install --git https://github.com/FerroApps/Ferrocord --locked --force` |
+  | anything else | system path, Flatpak/Snap/AppImage env, cargo `target/`, read-only folder, other OS | opens the release page |
+
+- **Install** (`perform_install`): temp folder `.ferrocord-update-<pid>-<rand>`
+  *inside* the install folder (same filesystem), download the `.sha256`
+  and the archive (HTTPS; redirects only to `github.com`,
+  `objects.githubusercontent.com`, `release-assets.githubusercontent.com`;
+  300 MB cap; timeouts; signed query strings never logged), verify the
+  SHA-256, extract safely (`update/extract.rs`: regular files and folders
+  only; absolute paths, `..`, symlinks, hard links and devices rejected;
+  600 MB / 2000 entries cap), then `update/install.rs`:
+  - `install.sh` layout: the same files `install.sh` writes (`ferrocord`,
+    `ferrocord-player`, `ferrocord-login`, the desktop entry with the
+    rewritten `Exec=`, the icon, `installed-version`), each staged as
+    `.<name>.new.<pid>` and renamed over its target, then the desktop caches
+    are refreshed like the script does.
+  - Windows: each running `.exe` is renamed to `<name>.old` (or
+    `<name>.<n>.old` while an older one is still locked) and the new one
+    moved in; `.old` files and stale temp folders are deleted at the next
+    start (`install::cleanup`, off the UI thread).
+  - All switches or none: a failure rolls the done ones back from the old
+    copies; the temp folder is always removed. The download runs in an
+    abortable task, so [Cancel] (or quitting) drops it.
+- **Restart**: runs the installed path (not `current_exe()`, which reads
+  "(deleted)" after an update on Linux) with the same arguments, plus
+  `--minimized` when the window is hidden, after `tray::instance::release()`
+  removed the single-instance socket; then quits through `Ui::Quit`.
+  [Later]: the new version runs at the next start.
+- **Integrity**: the SHA-256 comes from the same release, so it proves the
+  file arrived intact, not who built it. Releases are not signed yet;
+  signing them (minisign or cosign) needs a CI secret the maintainer must
+  add, after which the updater can verify the signature before installing.
