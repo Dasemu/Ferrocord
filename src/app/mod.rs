@@ -367,12 +367,10 @@ impl App {
             )
         };
 
-        let fonts = Task::batch(
-            crate::ui::theme::FONT_FILES
-                .iter()
-                .map(|f| iced::font::load(*f).map(|_| Message::Done(Done::Ignored))),
-        )
-        .chain(Task::done(Message::Done(Done::FontsLoaded)));
+        // The UI fonts are already in iced's font system (`emoji_font::install`
+        // in `main`): `iced::font::load` is dropped while no window exists
+        // (`--minimized`, autostart), which left the UI without Inter.
+        let fonts = Task::done(Message::Done(Done::FontsLoaded));
 
         let restore = if app.cfg.mock {
             app.boot_mock();

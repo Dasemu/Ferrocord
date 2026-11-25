@@ -340,7 +340,9 @@ impl FerroTheme {
 
 // -- typography ---------------------------------------------------------------
 
-pub const INTER: Font = Font::with_name("Inter");
+/// Family name of the bundled UI font ([`FONT_FILES`]).
+pub const UI_FAMILY: &str = "Inter";
+pub const INTER: Font = Font::with_name(UI_FAMILY);
 pub const INTER_MEDIUM: Font = Font {
     weight: font::Weight::Medium,
     ..INTER
@@ -364,12 +366,15 @@ pub const MONO: Font = Font::MONOSPACE;
 /// face can shadow it. Loaded by `emoji_font::install`.
 pub const TWEMOJI: &[u8] = include_bytes!("../../assets/fonts/Twemoji.ttf");
 
-/// Embedded font files (SIL OFL 1.1).
-pub const FONT_FILES: [&[u8]; 4] = [
+/// Embedded UI font files (Inter 4.0, SIL OFL 1.1): every weight and style
+/// the views ask for, so text never depends on the system's fonts. Loaded
+/// zero-copy, before the first frame, by `emoji_font::install`.
+pub const FONT_FILES: [&[u8]; 5] = [
     include_bytes!("../../assets/fonts/Inter-Regular.otf"),
     include_bytes!("../../assets/fonts/Inter-Medium.otf"),
     include_bytes!("../../assets/fonts/Inter-SemiBold.otf"),
     include_bytes!("../../assets/fonts/Inter-Bold.otf"),
+    include_bytes!("../../assets/fonts/Inter-Italic.otf"),
 ];
 
 // -- styles -------------------------------------------------------------------
