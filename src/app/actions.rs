@@ -213,7 +213,7 @@ impl App {
                     .and_then(|c| self.chat.channels.get(&c))
                     .and_then(|c| c.guild_id)
                     .and_then(|g| self.chat.guild(g));
-                let picker = EmojiPicker::open(target, guild);
+                let picker = EmojiPicker::open(target, guild, !self.recent_emoji.is_empty());
                 self.menu = None;
                 self.emoji_picker = Some(OpenPicker {
                     picker,
@@ -709,6 +709,9 @@ impl App {
         let Some(change) = self.chat.toggle_reaction(c, m, &emoji) else {
             return Task::none();
         };
+        if change == ReactionChange::Added {
+            self.note_emoji([emoji.clone()]);
+        }
         if self.cfg.mock {
             return Task::none();
         }
@@ -921,6 +924,24 @@ impl App {
         }
     }
 
+    /// Puts `used` first in the recently used emoji and saves the list.
+    /// The write is a single small `meta` row, done in place (like the
+    /// server folders) so two quick uses can never be saved out of order.
+    pub(super) fn note_emoji(&mut self, used: impl IntoIterator<Item = Emoji>) {
+        let mut changed = false;
+        for e in used {
+            changed |= self.recent_emoji.record(e);
+        }
+        if !changed {
+            return;
+        }
+        if let Some(json) = self.recent_emoji.to_json()
+            && let Err(e) = self.store.set_meta(super::emoji::RECENT_KEY, &json)
+        {
+            tracing::warn!(error = %e, "could not save the recent emoji");
+        }
+    }
+
     /// Whether custom emoji `id` is Nitro-locked in the open channel.
     fn emoji_locked(&self, id: Snowflake) -> bool {
         let access = self.nitro_access();
@@ -1037,6 +1058,7 @@ impl App {
         match open.picker.target {
             PickerTarget::Composer => {
                 self.composer.push_str(&format!("{} ", e.composer_text()));
+                self.note_emoji([e]);
                 focus(composer_id())
             }
             PickerTarget::Reaction { channel, message } => {

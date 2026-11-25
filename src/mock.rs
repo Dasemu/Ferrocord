@@ -1219,6 +1219,31 @@ pub fn gif_anim(n: usize) -> Option<crate::app::anim::Anim> {
     crate::app::anim::from_frames_limited(frames, &crate::app::anim::Class::Picker.limits()).ok()
 }
 
+/// Recently used emoji of the mock account, newest first: Unicode ones,
+/// the Rust server's custom emoji and a Nitro-locked one of the Iced server.
+pub fn recent_emoji() -> crate::app::emoji::Recent {
+    let mut r = crate::app::emoji::Recent::default();
+    let custom = |id: u64, name: &str| Emoji {
+        id: Some(Snowflake(id)),
+        name: name.into(),
+        animated: false,
+    };
+    for e in [
+        Emoji::unicode("🎉"),
+        custom(1003, "iced_cube"),
+        Emoji::unicode("🔥"),
+        Emoji::unicode("😂"),
+        Emoji::unicode("❤️"),
+        custom(1002, "party"),
+        Emoji::unicode("🦀"),
+        custom(1001, "ferris"),
+        Emoji::unicode("👍"),
+    ] {
+        r.record(e);
+    }
+    r
+}
+
 /// Saved GIFs of the mock account: mock GIFs 3 and 6, newest first.
 pub fn gif_favorites() -> Vec<crate::net::frecency::FavoriteGif> {
     [(3usize, 2u32), (6, 1)]
