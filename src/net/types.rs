@@ -78,14 +78,14 @@ pub struct Hello {
     pub heartbeat_interval: u64,
 }
 
-/// Client properties sent in IDENTIFY (honest: `browser = "Ferrocord"`).
+/// Client properties sent in IDENTIFY (`browser = "Chrome"`).
 /// The same object is sent as `X-Super-Properties` on REST requests.
 pub use super::identity::ClientProperties;
 
-/// Capability bits for user-account IDENTIFY. We do NOT request READY
-/// deduplication of users or the lazy "properties" layout, but the parser
-/// copes with both in case the server sends them anyway.
-pub const CAPABILITIES: u64 = 0;
+/// Capability bits for user-account IDENTIFY, matching the value the
+/// official web client sends. The parser copes with both deduplicated and
+/// non-deduplicated READY layouts.
+pub const CAPABILITIES: u64 = 30717;
 
 /// The `activities` of our own presence: the custom status (type 4), as
 /// the official client sends it, or nothing.
@@ -1824,7 +1824,8 @@ mod tests {
         assert_eq!(p.d["presence"]["status"], "dnd");
         assert_eq!(p.op, 2);
         assert_eq!(p.d["token"], "tok");
-        assert_eq!(p.d["properties"]["browser"], "Ferrocord");
+        assert_eq!(p.d["properties"]["browser"], "Chrome");
+        assert_eq!(p.d["capabilities"], super::CAPABILITIES);
     }
 
     #[test]
