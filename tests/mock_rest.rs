@@ -45,7 +45,10 @@ async fn sends_auth_header_and_parses_history_oldest_first() {
     assert_eq!(r.path, "/channels/10/messages?limit=50&before=99");
     // User tokens are sent raw (no "Bot " prefix).
     assert_eq!(r.header("authorization"), Some(TOKEN));
-    assert!(r.header("user-agent").unwrap().starts_with("Ferrocord/"));
+    assert_eq!(
+        r.header("user-agent"),
+        Some(ferrocord::net::rest::user_agent().as_str())
+    );
 }
 
 #[tokio::test]
@@ -712,7 +715,7 @@ async fn every_request_carries_the_honest_client_headers() {
         .decode(r.header("x-super-properties").unwrap())
         .unwrap();
     let sp: serde_json::Value = serde_json::from_slice(&sp).unwrap();
-    assert_eq!(sp["browser"], "Ferrocord");
+    assert_eq!(sp["browser"], "Chrome");
     assert_eq!(sp["browser_user_agent"], ferrocord::net::rest::user_agent());
     assert_eq!(
         r.header("x-discord-locale"),
