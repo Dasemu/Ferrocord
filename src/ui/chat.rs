@@ -21,7 +21,7 @@ use crate::app::emoji::PickerTarget;
 use crate::app::lightbox::{Lightbox, proxy_resized};
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
-use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
+use crate::app::{App, Message, Ui, View, jump, now_ms, preview_key};
 use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 use crate::ui::anim_image::message_anim;
@@ -651,42 +651,11 @@ fn reply_header<'a>(
 }
 
 fn reactions_row<'a>(app: &'a App, c: &'a Channel, m: &'a model::Message) -> El<'a> {
-    let p = app.theme.palette;
-    let mut pills: Vec<El<'a>> = Vec::new();
-    for re in &m.reactions {
-        let face: El<'a> = match re.emoji.id {
-            Some(id) => match (
-                app.emoji_anim(id, re.emoji.animated),
-                app.image(&emoji_url(&app.cfg.cdn_url, id)),
-            ) {
-                (Some(a), _) => message_anim(app, a, 18.0, 18.0)
-                    .content_fit(iced::ContentFit::Contain)
-                    .into(),
-                (None, Some(h)) => iced::widget::image(h.clone()).width(18).height(18).into(),
-                (None, None) => text(format!(":{}:", re.emoji.name))
-                    .size(12)
-                    .color(p.text_muted)
-                    .into(),
-            },
-            None => emoji_text(re.emoji.name.clone(), 16.0, p.text_normal, INTER, false),
-        };
-        let pill = button(
-            row![
-                face,
-                text(re.count.to_string())
-                    .size(14)
-                    .font(INTER_MEDIUM)
-                    .color(if re.me { p.link } else { p.text_secondary }),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        )
-        .padding(Padding::from([2, 6]))
-        .on_press(ui(Ui::ToggleReaction(m.id, re.emoji.clone())))
-        .style(theme::reaction_pill(p, re.me));
-        pills.push(pill.into());
-    }
-    let _ = c;
+    let pills: Vec<El<'a>> = m
+        .reactions
+        .iter()
+        .map(|re| super::reactions::pill(app, c.id, m, re))
+        .collect();
     row(pills)
         .spacing(4)
         .align_y(Alignment::Center)

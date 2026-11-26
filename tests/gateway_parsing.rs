@@ -407,6 +407,7 @@ fn own_reaction_echo_is_idempotent() {
         message_id: id,
         user_id: me,
         emoji: party.clone(),
+        burst: false,
     });
     s.apply_event(&echo, &Ctx::default());
     let r = s
@@ -428,6 +429,7 @@ fn own_reaction_echo_is_idempotent() {
             message_id: id,
             user_id: me,
             emoji: party.clone(),
+            burst: false,
         }),
         &Ctx::default(),
     );
@@ -510,7 +512,7 @@ fn member_list_update_is_converted_and_applied() {
     assert_eq!(alice.presence, Presence::Online);
 
     // Reduce all ops in order: after INVALIDATE nothing is loaded.
-    let mut l = ferrocord::app::members::MemberListState::new(u.guild_id);
+    let mut l = ferrocord::app::members::MemberListState::new(u.guild_id, sf("1"));
     let first_only = ferrocord::net::model::MemberListUpdate {
         ops: vec![u.ops[0].clone()],
         ..(*u).clone()
@@ -529,9 +531,10 @@ fn member_list_feeds_presence_and_users() {
     let mut s = ChatState::default();
     s.load_ready(&ready());
     let ev = parse("GUILD_MEMBER_LIST_UPDATE", "member_list_update.json");
-    s.member_list = Some(ferrocord::app::members::MemberListState::new(sf(
-        "2000000000000000001",
-    )));
+    s.member_list = Some(ferrocord::app::members::MemberListState::new(
+        sf("2000000000000000001"),
+        sf("1"),
+    ));
     s.apply_event(&ev, &Ctx::default());
     assert_eq!(s.presence_of(sf("1000000000000000003")), Presence::Idle);
     assert!(s.users.contains_key(&sf("1000000000000000004")));
@@ -927,9 +930,10 @@ fn message_authors_and_member_lists_carry_cosmetics() {
         .unwrap();
     let mut s = ChatState::default();
     s.load_ready(&ready());
-    s.member_list = Some(ferrocord::app::members::MemberListState::new(sf(
-        "2000000000000000001",
-    )));
+    s.member_list = Some(ferrocord::app::members::MemberListState::new(
+        sf("2000000000000000001"),
+        sf("1"),
+    ));
     s.apply_event(&ev, &Ctx::default());
     let alice = sf("1000000000000000002");
     assert_eq!(
@@ -944,4 +948,103 @@ fn guild_subscription_asks_for_activities() {
     let p = ferrocord::net::types::member_subscribe_payload(sf("1"), sf("2"), &[(0, 99)]);
     let s = serde_json::to_value(&p).unwrap();
     assert_eq!(s["d"]["activities"], json!(true));
+}
+
+#[test]
+fn an_unreadable_member_list_item_keeps_the_rest() {
+    // One odd user (null username) used to fail the whole update, so the
+    // sidebar lost every member of that SYNC.
+    let d = json!({"guild_id": "1", "id": "everyone", "member_count": 3, "online_count": 3,
+    "groups": [{"id": "online", "count": 3}],
+    "ops": [
+        {"op": "SYNC", "range": [0, 99], "items": [
+            {"group": {"id": "online", "count": 3}},
+            {"member": {"user": {"id": "10", "username": "a"}}},
+            {"member": {"user": {"id": "11", "username": null}}},
+            {"member": {"user": {"id": "12", "username": "c"}}}]},
+        {"op": "INSERT", "index": 1, "item": {"member": {"user": {"id": "13", "username": null}}}}
+    ]});
+    let Some(Event::MemberList(u)) = parse_dispatch("GUILD_MEMBER_LIST_UPDATE", d).unwrap() else {
+        panic!()
+    };
+    let MemberOp::Sync { items, .. } = &u.ops[0] else {
+        panic!()
+    };
+    assert_eq!(items.len(), 4);
+    assert!(matches!(&items[3], MemberItem::Member(m) if m.user.id == sf("12")));
+    // The unreadable inserted item still shifts the rows after it.
+    assert!(matches!(&u.ops[1], MemberOp::Insert { index: 1, .. }));
+}
+
+#[test]
+fn group_dm_recipients_follow_add_and_remove() {
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    let group = s
+        .channels
+        .values()
+        .find(|c| c.kind == ferrocord::net::model::ChannelKind::GroupDm)
+        .map(|c| c.id);
+    let group = match group {
+        Some(g) => g,
+        None => {
+            let d = json!({"id": "777", "type": 3, "recipients": [
+                {"id": "1000000000000000002", "username": "alice.dev"}]});
+            s.apply_event(
+                &parse_dispatch("CHANNEL_CREATE", d).unwrap().unwrap(),
+                &Ctx::default(),
+            );
+            sf("777")
+        }
+    };
+    let before = s.dm_participants(&s.channels[&group]).len();
+    let add = json!({"channel_id": group.to_string(),
+        "user": {"id": "1000000000000000099", "username": "newbie", "global_name": "New"}});
+    let ev = parse_dispatch("CHANNEL_RECIPIENT_ADD", add.clone())
+        .unwrap()
+        .unwrap();
+    s.apply_event(&ev, &Ctx::default());
+    // Twice is idempotent.
+    s.apply_event(&ev, &Ctx::default());
+    let people = s.dm_participants(&s.channels[&group]);
+    assert_eq!(people.len(), before + 1);
+    assert!(people.iter().any(|u| u.display_name() == "New"));
+    let ev = parse_dispatch("CHANNEL_RECIPIENT_REMOVE", add)
+        .unwrap()
+        .unwrap();
+    s.apply_event(&ev, &Ctx::default());
+    assert_eq!(s.dm_participants(&s.channels[&group]).len(), before);
+}
+
+#[test]
+fn group_dm_recipients_without_a_user_object_still_show() {
+    let mut s = ChatState::default();
+    s.load_ready(&ready());
+    // READY's deduplicated layout: only ids, and the user is not in `users`.
+    let d = json!({"id": "778", "type": 3, "recipient_ids": ["1000000000000000123"]});
+    s.apply_event(
+        &parse_dispatch("CHANNEL_CREATE", d).unwrap().unwrap(),
+        &Ctx::default(),
+    );
+    let people = s.dm_participants(&s.channels[&sf("778")]);
+    assert!(people.iter().any(|u| u.id == sf("1000000000000000123")));
+}
+
+#[test]
+fn burst_reaction_counts_are_read() {
+    let d = json!({"id": "5", "channel_id": "10", "content": "", "author": {"id": "2", "username": "a"},
+        "reactions": [{"emoji": {"name": "\u{1F525}"}, "count": 3, "me": false,
+            "count_details": {"burst": 1, "normal": 2}, "burst_colors": []}]});
+    let Some(Event::MessageCreate(m)) = parse_dispatch("MESSAGE_CREATE", d).unwrap() else {
+        panic!()
+    };
+    assert_eq!((m.reactions[0].count, m.reactions[0].burst_count), (3, 1));
+    let add = json!({"channel_id": "10", "message_id": "5", "user_id": "9",
+        "emoji": {"name": "\u{1F525}"}, "burst": true, "type": 1});
+    let Some(Event::Reaction(ReactionEvent::Add { burst, .. })) =
+        parse_dispatch("MESSAGE_REACTION_ADD", add).unwrap()
+    else {
+        panic!()
+    };
+    assert!(burst);
 }
