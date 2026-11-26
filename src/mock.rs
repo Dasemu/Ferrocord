@@ -38,6 +38,8 @@ pub const ROLE_MOD: RoleId = Snowflake(900);
 pub const ROLE_MEMBER: RoleId = Snowflake(901);
 pub const ROLE_CORE: RoleId = Snowflake(902);
 pub const ROLE_BOT: RoleId = Snowflake(903);
+pub const ROLE_GAMES_MODS: RoleId = Snowflake(4901);
+pub const ROLE_GAMES_PLAYERS: RoleId = Snowflake(4902);
 pub const MOD_COLOR: u32 = 0x2ecc71;
 
 const NAMES: [(&str, &str); 7] = [
@@ -208,6 +210,9 @@ pub fn mock_stickers() -> Vec<Sticker> {
     ]
 }
 
+/// Discord's default `@everyone` permissions.
+pub const EVERYONE_PERMISSIONS: u64 = 1_071_698_660_929;
+
 fn role(id: RoleId, name: &str, color: u32, position: i32) -> Role {
     Role {
         id,
@@ -357,7 +362,21 @@ pub fn ready() -> ReadyData {
             // actions (Server Settings, Invite People).
             Guild {
                 owner_id: Some(ME),
-                ..guild(GUILD_GAMES, "Game Night", vec![])
+                ..guild(
+                    GUILD_GAMES,
+                    "Game Night",
+                    vec![
+                        Role {
+                            permissions: EVERYONE_PERMISSIONS,
+                            ..role(GUILD_GAMES, "@everyone", 0, 0)
+                        },
+                        Role {
+                            permissions: 1 << 1 | 1 << 40 | 1 << 13,
+                            ..role(ROLE_GAMES_MODS, "Moderators", 0xe91e63, 2)
+                        },
+                        role(ROLE_GAMES_PLAYERS, "Players", 0x3498db, 1),
+                    ],
+                )
             },
             guild(GUILD_CAFE, "Open Source Café", vec![]),
         ],

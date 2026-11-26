@@ -174,6 +174,9 @@ impl SettingsForm {
 pub struct Admin {
     pub dialog: Option<AdminDialog>,
     pub settings: Option<SettingsForm>,
+    /// Page of the Server Settings screen.
+    pub page: super::role_admin::SettingsPage,
+    pub roles: super::role_admin::RolesPage,
 }
 
 /// Wording for a refused admin call.
@@ -207,7 +210,13 @@ impl App {
         self.chat.invite_channel(g, None).is_some()
     }
 
-    /// Whether the dropdown offers "Server Settings" for `g`.
+    /// Whether "Server Settings" is offered for `g`: Manage Server
+    /// (Overview) or Manage Roles (Roles).
+    pub fn can_open_server_settings(&self, g: GuildId) -> bool {
+        self.can_manage_guild(g) || self.can_manage_roles(g)
+    }
+
+    /// Whether the user may edit the Overview of `g`.
     pub fn can_manage_guild(&self, g: GuildId) -> bool {
         self.chat.can_in_guild(g, MANAGE_GUILD)
     }
@@ -248,16 +257,23 @@ impl App {
                 let Some(guild) = self.chat.guild(g) else {
                     return Task::none();
                 };
-                if !self.can_manage_guild(g) {
+                if !self.can_open_server_settings(g) {
                     return Task::none();
                 }
                 self.admin.settings = Some(SettingsForm::new(guild));
                 self.admin.dialog = None;
+                self.admin.roles = Default::default();
+                self.admin.page = if self.can_manage_guild(g) {
+                    super::role_admin::SettingsPage::Overview
+                } else {
+                    super::role_admin::SettingsPage::Roles
+                };
                 Task::none()
             }
             AdminUi::CloseSettings => {
                 self.admin.settings = None;
                 self.admin.dialog = None;
+                self.admin.roles = Default::default();
                 Task::none()
             }
             AdminUi::NameChanged(s) => {
