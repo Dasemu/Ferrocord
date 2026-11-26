@@ -40,7 +40,7 @@ states or remote auth.
 | 1 | HEARTBEAT | ↔ | Sent every `heartbeat_interval`; answered immediately when the server asks. |
 | 2 | IDENTIFY | → | Token, `capabilities`, `properties` (honest: `browser = "Ferrocord"`; same object as `X-Super-Properties`), presence. |
 | 3 | PRESENCE_UPDATE | → | Own status (`online`/`idle`/`dnd`/`invisible`) plus the custom status as an activity (`{type: 4, name: "Custom Status", state, emoji}`); also saved in the settings proto (§14). IDENTIFY carries the same presence. |
-| 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, channels: {id: [[0,99]]}}`, sent while the member sidebar is open. |
+| 14 | GUILD_SUBSCRIPTIONS | → | Member list ranges `{guild_id, typing, threads, activities, channels: {id: [[0,99], ...]}}` for the open channel, sent while the member sidebar is open (at most three 100-row ranges, see below). |
 | 6 | RESUME | → | `{ token, session_id, seq }` on the `resume_gateway_url`. |
 | 7 | RECONNECT | ← | Close with 4000 and resume. |
 | 9 | INVALID_SESSION | ← | `d = true` → resume; `false` → reset session, wait 1–5 s, identify. |
@@ -52,10 +52,55 @@ states or remote auth.
 The app records what it wants (own status, member list ranges) in a shared
 `GatewayHandle`; the runner sends op 3 / op 14 once the session is READY and
 again after every reconnect or resume. Identical requests are not re-sent.
-Member list ranges grow in steps of 100 rows up to 500 (`app/members.rs`);
-`GUILD_MEMBER_LIST_UPDATE` ops (SYNC, INSERT, UPDATE, DELETE, INVALIDATE) are
-applied by a bounded sparse list (at most 1500 rows). Presence comes from
-READY `presences` (friends), `PRESENCE_UPDATE`, and member list items.
+Presence comes from READY `presences` (friends), `PRESENCE_UPDATE`, and member
+list items.
+
+### Member list (`app/members.rs`, `ui/members.rs`)
+
+Like the official client:
+
+* **Ranges follow the scroll position.** The sidebar always subscribes to
+  `[0, 99]` plus the 100-row chunks at the visible window (with a 30-row
+  preload margin), three ranges at most: `[[0,99]]` at the top,
+  `[[0,99],[2500,2599]]` (and the next chunk near its end) deep in a big list.
+  A scroll that changes the chunks re-sends op 14 for the same channel.
+* **The list knows its length, not its rows.** Every
+  `GUILD_MEMBER_LIST_UPDATE` carries `groups` (`[{id, count}]`: hoisted
+  roles, `online`, `offline`); total rows = members + one header per group.
+  Rows are kept in a sparse map and only inside the subscribed ranges, so a
+  100 000-member server costs as much as a small one. Discord itself leaves the
+  offline group out for servers of about 1000 members or more (same as the
+  official client: only online members are listed there).
+* **Ops**: `SYNC {range, items}` fills a range; `INSERT {index, item}` /
+  `DELETE {index}` shift every later row by one (a moved member is a DELETE
+  plus an INSERT in one update); `UPDATE {index, item}` replaces a row;
+  `INVALIDATE {range}` forgets a range (it shows placeholders again). An item
+  we cannot read keeps its slot (an empty item), and an unreadable item never
+  drops the whole update: one odd member used to fail the event, so a whole
+  SYNC (every member of a range) was lost.
+* **List ids.** `id` is `everyone` or a hash of the channel's view
+  permissions; channels with different permissions have different lists.
+  After a channel switch in the same server the rows stay until the first
+  SYNC: a SYNC of another list replaces them, and later updates of the old
+  list are ignored. Ops for a list that never had a SYNC are ignored.
+* **Drawing** is virtualised (`ui::members::ROWS`): member rows are 44 px and
+  group headers 40 px, so the visible window is computed from the scroll
+  offset; rows not loaded yet are grey skeleton rows of the same height.
+
+Fixed after 0.20.0 (user report "not all members show up"): the old list asked
+for at most rows 0-499 (`ranges_for` capped at five ranges) and showed only
+loaded rows, so members past row 500 never appeared; it kept the previous
+channel's rows and applied the old list's updates after a channel switch
+(members of a private channel mixed with `everyone`); it dropped INSERTs once
+1500 rows existed (every later row one place off); and one unreadable member
+item failed the whole update.
+
+**Group DMs** have no member list subscription: the panel lists the channel's
+`recipients` (plus the current user), kept current by
+`CHANNEL_RECIPIENT_ADD` / `CHANNEL_RECIPIENT_REMOVE` (`{channel_id, user}`;
+previously ignored, so people added to a group only showed after a restart).
+A recipient id without a user object gets an "Unknown User" placeholder until
+a payload carries the user, instead of disappearing.
 
 ### Heartbeat, zombies, reconnect
 
@@ -80,7 +125,8 @@ shared `Decompress` context. The buffer is capped at 64 MiB.
 `READY`, `READY_SUPPLEMENTAL`, `RESUMED`, `MESSAGE_CREATE`, `MESSAGE_UPDATE`
 (partial), `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, `TYPING_START`,
 `MESSAGE_ACK`, `CHANNEL_CREATE/UPDATE/DELETE`, `THREAD_CREATE/UPDATE/DELETE`,
-`GUILD_CREATE/UPDATE/DELETE`, `MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI`,
+`CHANNEL_RECIPIENT_ADD/REMOVE`, `GUILD_CREATE/UPDATE/DELETE`,
+`MESSAGE_REACTION_ADD/REMOVE/REMOVE_ALL/REMOVE_EMOJI` (with `burst`),
 `PRESENCE_UPDATE`, `GUILD_MEMBER_LIST_UPDATE`, `GUILD_EMOJIS_UPDATE`, `GUILD_STICKERS_UPDATE`. Unknown events are ignored; a malformed known
 event is logged (without its payload) and the connection stays up.
 
@@ -137,6 +183,7 @@ client's retry. Ferrocord never solves a captcha and uses no solver service.
 | Edit / delete | `PATCH` / `DELETE /channels/{c}/messages/{m}` |
 | Reply | `POST .../messages` with `message_reference` and, if "@ OFF", `allowed_mentions {parse:[users,roles,everyone], replied_user:false}` |
 | Reactions | `PUT/DELETE /channels/{c}/messages/{m}/reactions/{emoji}/@me` (`%`-encoded Unicode, or `name:id`) |
+| Who reacted | `GET /channels/{c}/messages/{m}/reactions/{emoji}?limit=&type=0\|1[&after=]` (`type=1`: burst / super reactions; users in id order, `after` = last user id). Only on hover / dialog, see §8. |
 | Jump | `GET .../messages?around={m}` / `?after={m}` |
 | Search | `GET /guilds/{g}/messages/search?content=&offset=` or `/channels/{c}/...` (202 + `retry_after` while indexing is retried, max 4 tries) |
 | Upload | `POST .../messages` `multipart/form-data`: `payload_json` + `files[n]`, streamed from disk with an explicit `Content-Length` |
@@ -294,6 +341,19 @@ Fonts: Inter (OFL) and Twemoji (CC-BY 4.0, COLRv0 font) embedded. Icons: Lucide
 (ISC), plus our own `gif.svg` in the same style. No Discord logos, fonts or artwork are used.
 
 ## 8. Round 2 behaviour notes
+
+* **Who reacted** (`app/reactions.rs`, `ui/reactions.rs`): hovering a
+  reaction pill shows the official tooltip, "Alice, Bob, and 3 others reacted
+  with :thumbsup:" (word shortcodes, `:name:` for custom emoji), after a
+  300 ms rest. Only then are the first 3 reactors fetched (never for every
+  message on screen); leaving earlier fetches nothing (a generation counter
+  drops the timer). Right-click on a pill, or "Reactions" in the message menu,
+  opens the dialog: one tab per emoji (burst reactions get their own tab,
+  `count_details.burst`), 100 users per page with "Load more" (up to 1000).
+  Lists are cached in a 64-entry LRU; `MESSAGE_REACTION_ADD/REMOVE` patch a
+  complete list in place (known user) or mark it stale (refetched on next
+  hover), `REMOVE_EMOJI` / `REMOVE_ALL` / `MESSAGE_DELETE` drop it. All calls go
+  through the REST layer's buckets (reaction routes share one `:emoji` bucket).
 
 * **Replies**: header from `referenced_message` (null = "Original message was
   deleted"); refreshed from the loaded window when the original is there.

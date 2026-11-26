@@ -109,3 +109,12 @@ Things learned while building Ferrocord that are worth remembering.
   italic. Keep the UI family first in the fallback and bundle every style the views use. Reproduce with
   `FONTCONFIG_FILE` pointing at a conf with only DejaVu, `--mock --minimized` under `dbus-run-session` (no tray
   host, so the window opens later).
+- **"Not all members show up" (v0.20.0).** Four causes, each reproduced with a reducer test: the sidebar never
+  subscribed past row 499 (five fixed ranges) and only drew loaded rows; a channel switch in the same server kept the
+  previous channel's rows and applied that list's later INSERT/DELETEs (lists are per *list id*: `everyone` or a hash of
+  the channel's view overwrites); INSERTs were dropped once 1500 rows existed, shifting every later row; and one
+  unreadable member item failed the whole `GUILD_MEMBER_LIST_UPDATE`. Match the official client: `[0,99]` plus the chunks
+  at the scroll position (three ranges), the length from `groups`, a sparse map of the subscribed ranges, fixed row
+  heights so the visible window is plain arithmetic, and per-item lenient parsing that keeps every slot.
+- Group DMs change members through `CHANNEL_RECIPIENT_ADD/REMOVE`, not through the channel object: without them a
+  person added to a group appeared only after a restart.
