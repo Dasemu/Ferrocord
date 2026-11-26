@@ -13,6 +13,7 @@ pub mod features;
 pub mod folders;
 pub mod gif_anim;
 pub mod gifs;
+pub mod guild_admin;
 pub mod images;
 pub mod input;
 pub mod jump;
@@ -27,6 +28,7 @@ pub mod nitro;
 pub mod notify;
 mod opener;
 pub mod panels;
+pub mod permissions;
 pub mod plugins;
 pub mod profile;
 pub mod rail;
@@ -175,6 +177,8 @@ pub struct App {
     /// Channel-header popovers (bell, pins, inbox).
     pub panels: features::Panels,
     pub server_dialog: Option<servers::ServerDialog>,
+    /// Server administration dialogs and the Server Settings screen.
+    pub admin: guild_admin::Admin,
     pub discover: Option<servers::DiscoverState>,
     /// Server rail interaction (folders, drag and drop, menus).
     pub rail: rail::RailUi,
@@ -327,6 +331,7 @@ impl App {
             search: search::SearchState::default(),
             panels: features::Panels::default(),
             server_dialog: None,
+            admin: guild_admin::Admin::default(),
             discover: None,
             rail: rail::RailUi::default(),
             pending_select: None,
@@ -964,6 +969,40 @@ impl App {
                 let _ = self.update_ui(Ui::SearchChanged("from:alice has:link".into()));
                 let _ = self.update_ui(Ui::SubmitSearch);
             }
+            S::ServerMenu | S::ServerSettings | S::ServerInvite | S::DeleteServer => {
+                // Game Night is owned by the mock user.
+                let g = mock::GUILD_GAMES;
+                self.view = View::Guild {
+                    guild: g,
+                    channel: self.chat.default_channel(g),
+                };
+                use guild_admin::{AdminDone, AdminUi};
+                match s {
+                    S::ServerMenu => {
+                        let _ = self.update_admin(AdminUi::ToggleMenu(g));
+                    }
+                    S::ServerInvite => {
+                        let _ = self.update_admin(AdminUi::OpenInvite(g));
+                        let _ = self.on_admin_done(AdminDone::Invite {
+                            guild: g,
+                            result: Ok("ferro-mock".into()),
+                        });
+                    }
+                    _ => {
+                        let _ = self.update_admin(AdminUi::OpenSettings(g));
+                        if s == S::ServerSettings {
+                            let _ =
+                                self.update_admin(AdminUi::NameChanged("Game Night LAN".into()));
+                        } else {
+                            let _ = self.update_admin(AdminUi::AskDelete);
+                            let _ = self.update_admin(AdminUi::DeleteTyped("Game Night".into()));
+                        }
+                    }
+                }
+            }
+            S::LeaveServer => {
+                let _ = self.update_admin(guild_admin::AdminUi::AskLeave(mock::GUILD_RUST));
+            }
             _ => {}
         }
     }
@@ -1223,6 +1262,7 @@ impl App {
             Ui::Logout => self.logout(),
             Ui::Voice(v) => self.update_voice(v),
             Ui::Settings(s) => self.update_settings(s),
+            Ui::Admin(a) => self.update_admin(a),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -2090,6 +2130,7 @@ impl App {
             Done::Invite { generation, result } => self.on_invite(generation, result),
             Done::Joined { generation, result } => self.on_joined(generation, result),
             Done::Created(r) => self.on_created(r),
+            Done::Admin(d) => self.on_admin_done(d),
             Done::IconPicked(r) => self.on_icon_picked(r),
             Done::DiscoverCategories(r) => {
                 if let (Some(d), Ok(c)) = (self.discover.as_mut(), r) {

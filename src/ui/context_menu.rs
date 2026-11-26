@@ -9,6 +9,7 @@ use super::theme::{self, INTER_MEDIUM};
 
 use super::{El, ui};
 use crate::app::context::CtxTarget;
+use crate::app::guild_admin::AdminUi;
 use crate::app::{App, Ui, input};
 use crate::net::extras::MuteDuration;
 use crate::net::model::*;
@@ -104,6 +105,14 @@ pub fn view(app: &App) -> Option<(El<'_>, Point)> {
     let rows = match m.target {
         CtxTarget::User { user, guild } => user_rows(app, user, guild),
         CtxTarget::Channel(c) => channel_rows(app, c),
+        CtxTarget::Guild(g) => {
+            let mut rows = guild_rows(app, g);
+            // `guild_rows` ends with a separator for the rail's folder items.
+            if matches!(rows.last(), Some(Row::Separator)) {
+                rows.pop();
+            }
+            rows
+        }
     };
     if rows.is_empty() {
         return None;
@@ -215,6 +224,24 @@ fn channel_rows(app: &App, c: ChannelId) -> Vec<Row> {
 /// Server actions at the top of the rail menu.
 pub fn guild_rows(app: &App, g: GuildId) -> Vec<Row> {
     let mut rows = Vec::new();
+    let admin = |a: AdminUi| Ui::Admin(a);
+    if app.can_invite(g) {
+        rows.push(Row::item(
+            Icon::Users,
+            "Invite People",
+            admin(AdminUi::OpenInvite(g)),
+        ));
+    }
+    if app.can_manage_guild(g) {
+        rows.push(Row::item(
+            Icon::Settings,
+            "Server Settings",
+            admin(AdminUi::OpenSettings(g)),
+        ));
+    }
+    if !rows.is_empty() {
+        rows.push(Row::Separator);
+    }
     let b = app.chat.guild_badge(g);
     if b.unread || b.mentions > 0 {
         rows.push(Row::item(Icon::Check, "Mark As Read", Ui::MarkGuildRead(g)));
@@ -248,6 +275,15 @@ pub fn guild_rows(app: &App, g: GuildId) -> Vec<Row> {
             Icon::Copy,
             "Copy Server ID",
             Ui::CopyToClipboard(g.to_string()),
+        ));
+    }
+    // The owner cannot leave (only transfer or delete the server).
+    if app.chat.guild(g).is_some() && !app.chat.owns_guild(g) {
+        rows.push(Row::Separator);
+        rows.push(Row::danger(
+            Icon::LogOut,
+            "Leave Server",
+            admin(AdminUi::AskLeave(g)),
         ));
     }
     rows.push(Row::Separator);
