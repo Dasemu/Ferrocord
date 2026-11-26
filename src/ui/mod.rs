@@ -9,6 +9,7 @@ pub mod cosmetics;
 pub mod embeds;
 pub mod emoji_font;
 pub mod frame_stats;
+pub mod friends;
 pub mod icons;
 pub mod lightbox;
 pub mod login;
@@ -106,6 +107,7 @@ pub fn view(app: &App) -> El<'_> {
     layers.push(servers::add_server(app).unwrap_or_else(empty));
     layers.push(servers::folder_dialog(app).unwrap_or_else(empty));
     layers.push(reactions::dialog(app).unwrap_or_else(empty));
+    layers.push(friends::switcher(app).unwrap_or_else(empty));
     layers.push(if app.settings_open {
         settings::view(app)
     } else {
@@ -129,10 +131,11 @@ pub fn view(app: &App) -> El<'_> {
 }
 
 /// Base content + discover page + popup slots + voice user menu + incoming
-/// call + add-server dialog + folder dialog + reactions dialog + settings +
-/// server settings + admin dialog + channel dialog + role/member dialog +
-/// link dialog + image viewer + full-screen video.
-pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 9 + 1 + 1;
+/// call + add-server dialog + folder dialog + reactions dialog +
+/// conversation switcher + settings + server settings + admin dialog +
+/// channel dialog + role/member dialog + link dialog + image viewer +
+/// full-screen video.
+pub const LAYER_SLOTS: usize = 1 + 1 + popups::SLOTS + 2 + 10 + 1 + 1;
 
 /// Approximate advance width of `c` in Inter, in em.
 fn glyph_em(c: char) -> f32 {

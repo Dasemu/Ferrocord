@@ -124,6 +124,16 @@ pub enum ScreenshotScreen {
     Reactions,
     /// Member sidebar scrolled deep into a large list (skeleton rows).
     MembersLarge,
+    /// Friends page: Online tab.
+    Friends,
+    /// Friends page: Pending tab (incoming + outgoing requests).
+    FriendsPending,
+    /// Friends page: Add Friend tab after a request was sent.
+    FriendsAdd,
+    /// Message Requests page.
+    MessageRequests,
+    /// "Find or start a conversation" with a query.
+    Switcher,
 }
 
 impl ScreenshotScreen {
@@ -226,6 +236,11 @@ impl ScreenshotScreen {
             "update-banner" => Some(Self::UpdateBanner),
             "reactions" => Some(Self::Reactions),
             "members-large" => Some(Self::MembersLarge),
+            "friends" => Some(Self::Friends),
+            "friends-pending" => Some(Self::FriendsPending),
+            "friends-add" => Some(Self::FriendsAdd),
+            "message-requests" => Some(Self::MessageRequests),
+            "switcher" => Some(Self::Switcher),
             _ => None,
         }
     }

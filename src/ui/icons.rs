@@ -74,9 +74,11 @@ pub enum Icon {
     Star,
     StarFilled,
     Clock,
+    Mail,
+    UserPlus,
 }
 
-const ALL: [(Icon, &[u8]); 66] = [
+const ALL: [(Icon, &[u8]); 68] = [
     (
         Icon::AtSign,
         include_bytes!("../../assets/icons/at-sign.svg"),
@@ -275,6 +277,11 @@ const ALL: [(Icon, &[u8]); 66] = [
         include_bytes!("../../assets/icons/star-filled.svg"),
     ),
     (Icon::Clock, include_bytes!("../../assets/icons/clock.svg")),
+    (Icon::Mail, include_bytes!("../../assets/icons/mail.svg")),
+    (
+        Icon::UserPlus,
+        include_bytes!("../../assets/icons/user-plus.svg"),
+    ),
 ];
 
 /// Handles are created once so iced can cache the rasterised icons.
