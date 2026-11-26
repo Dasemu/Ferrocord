@@ -110,6 +110,17 @@ pub enum Ui {
     CopyLink(MessageId),
     // -- reactions and emoji
     ToggleReaction(MessageId, Emoji),
+    /// The pointer entered a reaction pill (its tooltip fetches the
+    /// reactors after a short delay).
+    ReactionHover(super::reactions::ReactionKey),
+    ReactionUnhover(super::reactions::ReactionKey),
+    /// The "Reactions" dialog of a message, on an emoji's tab (or the first).
+    OpenReactors(MessageId, Option<Emoji>),
+    /// A tab of the reactions dialog: emoji + burst.
+    ReactorsTab(Emoji, bool),
+    /// Next page of the open tab.
+    ReactorsMore,
+    CloseReactors,
     OpenEmojiPicker(PickerTarget),
     EmojiQuery(String),
     EmojiSection(Section),
@@ -355,6 +366,13 @@ pub enum Done {
     },
     /// The GIF search debounce timer of this generation fired.
     GifSearchDue(u64),
+    /// The pointer rested on a reaction pill (generation of that hover).
+    ReactionHoverDue(u64),
+    /// `GET .../reactions/{emoji}` finished.
+    Reactors {
+        fetch: Box<super::reactions::Fetch>,
+        result: Result<Vec<User>, String>,
+    },
     Gifs {
         generation: u64,
         result: Result<Vec<crate::net::model::Gif>, String>,

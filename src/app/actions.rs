@@ -439,17 +439,7 @@ impl App {
                 self.sync_members()
             }
             Ui::MembersScrolled(vp) => {
-                let remaining =
-                    vp.content_bounds().height - vp.bounds().height - vp.absolute_offset().y;
-                if remaining < 300.0
-                    && let Some(l) = &self.chat.member_list
-                    && l.has_more()
-                {
-                    self.member_rows_wanted = (l.loaded_end() + super::members::RANGE_SIZE)
-                        .min(super::members::MAX_RANGES * super::members::RANGE_SIZE);
-                    return self.sync_members();
-                }
-                Task::none()
+                self.members_scrolled(vp.absolute_offset().y, vp.bounds().height)
             }
             Ui::ToggleStatusMenu => {
                 self.status_menu = !self.status_menu;
@@ -679,7 +669,10 @@ impl App {
         {
             return Task::none();
         }
-        if self.pending_delete.take().is_some() || self.pending_link.take().is_some() {
+        if self.pending_delete.take().is_some()
+            || self.pending_link.take().is_some()
+            || self.reactions.dialog.take().is_some()
+        {
             return Task::none();
         }
         if self.settings_open {
@@ -1222,22 +1215,79 @@ impl App {
             }
             return Task::none();
         }
-        if self.chat.member_list.as_ref().map(|l| l.guild) != Some(guild) {
-            let mut list = MemberListState::new(guild);
-            if self.cfg.mock && guild == crate::mock::GUILD_RUST {
-                list.apply(&crate::mock::member_list());
+        let mut to_top = Task::none();
+        match self.chat.member_list.as_mut() {
+            Some(l) if l.guild == guild => l.switch_channel(channel),
+            _ => {
+                // Another server's list starts at its top.
+                to_top = iced::widget::operation::snap_to(
+                    crate::ui::members::scroll_id(),
+                    iced::widget::operation::RelativeOffset::START,
+                );
+                let mut list = MemberListState::new(guild, channel);
+                if self.cfg.mock && guild == crate::mock::GUILD_RUST {
+                    list.apply(&crate::mock::member_list());
+                }
+                self.chat.member_list = Some(list);
+                self.members_viewport.0 = 0.0;
             }
-            self.chat.member_list = Some(list);
-            self.member_rows_wanted = super::members::RANGE_SIZE;
         }
-        if !self.cfg.mock {
-            self.gateway.subscribe_members(MemberSubscription {
-                guild,
-                channel,
-                ranges: MemberListState::ranges_for(self.member_rows_wanted),
-            });
+        let ranges = self.member_ranges();
+        if let Some(l) = self.chat.member_list.as_mut() {
+            l.set_ranges(&ranges);
         }
-        Task::none()
+        // Only recorded in mock mode (no gateway runs).
+        self.gateway.subscribe_members(MemberSubscription {
+            guild,
+            channel,
+            ranges,
+        });
+        to_top
+    }
+
+    /// The member sidebar scrolled to `y` (its height is `height`): draw
+    /// and subscribe to the rows there.
+    pub(crate) fn members_scrolled(&mut self, y: f32, height: f32) -> Task<Message> {
+        let before = self.member_window();
+        self.members_viewport = (y, height);
+        let sync = self.sync_members();
+        if self.member_window() != before {
+            Task::batch([sync, self.request_images()])
+        } else {
+            sync
+        }
+    }
+
+    /// What the member list subscription (op 14) asks for now.
+    pub fn member_subscription(&self) -> Option<MemberSubscription> {
+        self.gateway.members()
+    }
+
+    /// Rows of the member list drawn now (from the sidebar's scroll
+    /// position), with a small overscan.
+    pub(crate) fn member_window(&self) -> std::ops::Range<usize> {
+        let Some(l) = &self.chat.member_list else {
+            return 0..0;
+        };
+        let (y, h) = self.members_viewport;
+        crate::ui::members::ROWS.window(
+            &l.header_rows(),
+            l.len(),
+            y,
+            h,
+            crate::ui::members::OVERSCAN,
+        )
+    }
+
+    /// Ranges to subscribe to for the visible rows (`[0, 99]` before the
+    /// list is known).
+    fn member_ranges(&self) -> Vec<(usize, usize)> {
+        let Some(l) = &self.chat.member_list else {
+            return MemberListState::ranges_for_window(0, 0);
+        };
+        let (y, h) = self.members_viewport;
+        let w = crate::ui::members::ROWS.window(&l.header_rows(), l.len(), y, h, 0);
+        MemberListState::ranges_for_window(w.start, w.end.saturating_sub(1))
     }
 
     /// Status menu, tray and settings: applied at once (op 3) and saved

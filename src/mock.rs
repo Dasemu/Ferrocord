@@ -379,6 +379,62 @@ pub fn ready() -> ReadyData {
     }
 }
 
+/// Who reacted (mock `GET .../reactions/{emoji}`): the mock users in
+/// id order, then made-up ones, `limit` after `after`.
+pub fn reactors(
+    key: &crate::app::reactions::ReactionKey,
+    limit: u32,
+    after: Option<UserId>,
+) -> Vec<User> {
+    let _ = key;
+    let start = after.map_or(1, |a| a.0 + 1);
+    (start..start + u64::from(limit))
+        .map(|n| match n {
+            1..=6 => user(n),
+            _ => User {
+                id: Snowflake(n),
+                username: format!("crab{n}"),
+                global_name: Some(format!("Crab {n}")),
+                ..Default::default()
+            },
+        })
+        .collect()
+}
+
+/// A large member list (3000 online members) of the mock Rust server:
+/// rows 1400-1499 are loaded, the rest are skeleton rows.
+pub fn large_member_list() -> MemberListUpdate {
+    let items = (1400..1500u64)
+        .map(|n| {
+            let id = 10_000 + n;
+            MemberItem::Member(Box::new(MemberEntry {
+                user: User {
+                    id: Snowflake(id),
+                    username: format!("crab{n}"),
+                    global_name: Some(format!("Crab {n}")),
+                    ..Default::default()
+                },
+                nick: None,
+                roles: vec![],
+                presence: match n % 3 {
+                    0 => Presence::Online,
+                    1 => Presence::Idle,
+                    _ => Presence::Dnd,
+                },
+                activities: vec![],
+            }))
+        })
+        .collect();
+    MemberListUpdate {
+        guild_id: GUILD_RUST,
+        list_id: "everyone".into(),
+        member_count: 3000,
+        online_count: 3000,
+        groups: vec![("online".into(), 3000)],
+        ops: vec![MemberOp::Sync { start: 1400, items }],
+    }
+}
+
 /// Member list of the mock Rust server, as the server would send it.
 pub fn member_list() -> MemberListUpdate {
     let member = |n: u64, roles: &[RoleId], presence: Presence| {
@@ -569,6 +625,7 @@ pub fn history(channel: ChannelId) -> Vec<Message> {
                         emoji: Emoji::unicode(e),
                         count,
                         me,
+                        burst_count: 0,
                     })
                     .collect();
                 m
@@ -714,7 +771,12 @@ fn general(channel: ChannelId) -> Vec<Message> {
     ];
     v[7].mentions = vec![ME];
     v[2].edited = true;
-    let react = |emoji: Emoji, count: u32, me: bool| Reaction { emoji, count, me };
+    let react = |emoji: Emoji, count: u32, me: bool| Reaction {
+        emoji,
+        count,
+        me,
+        burst_count: 0,
+    };
     v[3].reactions = vec![
         react(Emoji::unicode("👍"), 3, true),
         react(Emoji::unicode("🎉"), 2, false),

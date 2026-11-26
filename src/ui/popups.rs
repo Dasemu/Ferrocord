@@ -546,6 +546,14 @@ fn menu_items(app: &App, m: MessageId) -> Vec<Item> {
         }),
         danger: false,
     }];
+    if !msg.reactions.is_empty() {
+        v.push(Item {
+            icon: Icon::Smile,
+            label: "Reactions",
+            action: Ui::OpenReactors(m, None),
+            danger: false,
+        });
+    }
     if mine && matches!(msg.kind, 0 | 19) {
         v.push(Item {
             icon: Icon::Pencil,

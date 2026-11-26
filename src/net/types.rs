@@ -680,6 +680,15 @@ pub struct WireReaction {
     pub me: bool,
     #[serde(default)]
     pub emoji: WireEmoji,
+    /// `{ burst, normal }` (burst = super reactions).
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
+    pub count_details: Option<WireCountDetails>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireCountDetails {
+    #[serde(default)]
+    pub burst: u32,
 }
 
 /// Nonces can be strings or integers on the wire.
@@ -844,6 +853,7 @@ impl WireMessage {
                 emoji: r.emoji.into(),
                 count: r.count,
                 me: r.me,
+                burst_count: r.count_details.map_or(0, |d| d.burst),
             })
             .collect();
         Message {
@@ -1305,6 +1315,13 @@ pub struct WireReadySupplemental {
     pub guilds: Vec<WireIdOnly>,
 }
 
+/// CHANNEL_RECIPIENT_ADD / _REMOVE (`nick` is ignored).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WireRecipientEvent {
+    pub channel_id: Snowflake,
+    pub user: WireUser,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WireReactionEvent {
     pub channel_id: Snowflake,
@@ -1313,6 +1330,9 @@ pub struct WireReactionEvent {
     pub user_id: Option<Snowflake>,
     #[serde(default)]
     pub emoji: WireEmoji,
+    /// Burst ("super") reaction.
+    #[serde(default)]
+    pub burst: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1410,10 +1430,22 @@ pub struct WireListOp {
     pub range: Option<[usize; 2]>,
     #[serde(default)]
     pub index: Option<usize>,
-    #[serde(default)]
+    /// One unreadable item must not drop the whole update (every later
+    /// index would be lost): it becomes an empty slot.
+    #[serde(default, deserialize_with = "lenient_items")]
     pub items: Vec<WireListItem>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::cosmetics::lenient")]
     pub item: Option<WireListItem>,
+}
+
+fn lenient_items<'de, D>(d: D) -> Result<Vec<WireListItem>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Vec<Value>>::deserialize(d)?.unwrap_or_default();
+    Ok(v.into_iter()
+        .map(|i| serde_json::from_value(i).unwrap_or_default())
+        .collect())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1456,11 +1488,17 @@ impl WireMemberListUpdate {
                         })
                         .collect(),
                 }),
-                ("INSERT", _, Some(index)) => {
-                    if let Some(item) = op.item.and_then(WireListItem::into_domain) {
-                        ops.push(MemberOp::Insert { index, item });
-                    }
-                }
+                // An unreadable inserted item still takes its slot, or
+                // every row after it would be shown one place off.
+                ("INSERT", _, Some(index)) => ops.push(MemberOp::Insert {
+                    index,
+                    item: op.item.and_then(WireListItem::into_domain).unwrap_or(
+                        MemberItem::Group {
+                            id: String::new(),
+                            count: 0,
+                        },
+                    ),
+                }),
                 ("UPDATE", _, Some(index)) => {
                     if let Some(item) = op.item.and_then(WireListItem::into_domain) {
                         ops.push(MemberOp::Update { index, item });
@@ -1577,6 +1615,14 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             let (c, users) = c.into_domain(None);
             Event::ChannelUpsert(Box::new(c), users)
         }
+        "CHANNEL_RECIPIENT_ADD" | "CHANNEL_RECIPIENT_REMOVE" => {
+            let r: WireRecipientEvent = serde_json::from_value(d)?;
+            Event::ChannelRecipient {
+                channel_id: r.channel_id,
+                user: Box::new(r.user.into()),
+                added: t == "CHANNEL_RECIPIENT_ADD",
+            }
+        }
         "CHANNEL_DELETE" | "THREAD_DELETE" => {
             let c: WireIdOnly = serde_json::from_value(d)?;
             Event::ChannelDelete(c.id)
@@ -1605,13 +1651,15 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
             let Some(user_id) = r.user_id else {
                 return Ok(None);
             };
-            let (channel_id, message_id, emoji) = (r.channel_id, r.message_id, r.emoji.into());
+            let (channel_id, message_id, emoji, burst) =
+                (r.channel_id, r.message_id, r.emoji.into(), r.burst);
             Event::Reaction(if t == "MESSAGE_REACTION_ADD" {
                 ReactionEvent::Add {
                     channel_id,
                     message_id,
                     user_id,
                     emoji,
+                    burst,
                 }
             } else {
                 ReactionEvent::Remove {
@@ -1619,6 +1667,7 @@ pub fn parse_dispatch(t: &str, d: Value) -> Result<Option<Event>, serde_json::Er
                     message_id,
                     user_id,
                     emoji,
+                    burst,
                 }
             })
         }

@@ -402,6 +402,9 @@ pub struct Reaction {
     pub count: u32,
     /// The current user reacted with this emoji.
     pub me: bool,
+    /// How many of `count` are burst ("super") reactions.
+    #[serde(default)]
+    pub burst_count: u32,
 }
 
 /// The message a reply points at, as shown in the reply header.
@@ -951,12 +954,16 @@ pub enum ReactionEvent {
         message_id: MessageId,
         user_id: UserId,
         emoji: Emoji,
+        /// A burst ("super") reaction.
+        burst: bool,
     },
     Remove {
         channel_id: ChannelId,
         message_id: MessageId,
         user_id: UserId,
         emoji: Emoji,
+        /// A burst ("super") reaction.
+        burst: bool,
     },
     RemoveAll {
         channel_id: ChannelId,

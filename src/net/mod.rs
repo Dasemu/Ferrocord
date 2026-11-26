@@ -59,6 +59,12 @@ pub enum Event {
     },
     ChannelUpsert(Box<Channel>, Vec<User>),
     ChannelDelete(ChannelId),
+    /// CHANNEL_RECIPIENT_ADD / _REMOVE: someone joined or left a group DM.
+    ChannelRecipient {
+        channel_id: ChannelId,
+        user: Box<User>,
+        added: bool,
+    },
     GuildUpsert {
         guild: Box<Guild>,
         channels: Vec<Channel>,
