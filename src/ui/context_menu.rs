@@ -8,6 +8,7 @@ use super::icons::{Icon, icon};
 use super::theme::{self, INTER_MEDIUM};
 
 use super::{El, ui};
+use crate::app::channel_admin::{ChannelUi, reorder};
 use crate::app::context::CtxTarget;
 use crate::app::guild_admin::AdminUi;
 use crate::app::{App, Ui, input};
@@ -198,6 +199,10 @@ fn channel_rows(app: &App, c: ChannelId) -> Vec<Row> {
             ));
         }
     }
+    rows.extend(channel_admin_rows(app, ch));
+    if matches!(rows.first(), Some(Row::Separator)) {
+        rows.remove(0);
+    }
     if !app.developer_mode() {
         return rows;
     }
@@ -221,6 +226,57 @@ fn channel_rows(app: &App, c: ChannelId) -> Vec<Row> {
     rows
 }
 
+/// Edit / move / delete items of a server channel or category, for users
+/// with Manage Channels there.
+fn channel_admin_rows(app: &App, ch: &Channel) -> Vec<Row> {
+    let Some(g) = ch.guild_id else {
+        return vec![];
+    };
+    if !app.can_manage_channel(ch.id) {
+        return vec![];
+    }
+    let c = |u: ChannelUi| Ui::Channel(u);
+    let category = ch.kind == ChannelKind::Category;
+    let what = if category { "Category" } else { "Channel" };
+    let mut rows = vec![Row::Separator];
+    if category && app.can_manage_channels(g) {
+        rows.push(Row::item(
+            Icon::Plus,
+            "Create Channel",
+            c(ChannelUi::OpenCreate {
+                guild: g,
+                parent: Some(ch.id),
+                category: false,
+            }),
+        ));
+    }
+    rows.push(Row::item(
+        Icon::Pencil,
+        format!("Edit {what}"),
+        c(ChannelUi::OpenEdit(ch.id)),
+    ));
+    if reorder(&app.chat, ch.id, -1).is_some() {
+        rows.push(Row::item(
+            Icon::ArrowUp,
+            "Move Up",
+            c(ChannelUi::Move(ch.id, -1)),
+        ));
+    }
+    if reorder(&app.chat, ch.id, 1).is_some() {
+        rows.push(Row::item(
+            Icon::ArrowDown,
+            "Move Down",
+            c(ChannelUi::Move(ch.id, 1)),
+        ));
+    }
+    rows.push(Row::danger(
+        Icon::Trash,
+        format!("Delete {what}"),
+        c(ChannelUi::AskDelete(ch.id)),
+    ));
+    rows
+}
+
 /// Server actions at the top of the rail menu.
 pub fn guild_rows(app: &App, g: GuildId) -> Vec<Row> {
     let mut rows = Vec::new();
@@ -237,6 +293,26 @@ pub fn guild_rows(app: &App, g: GuildId) -> Vec<Row> {
             Icon::Settings,
             "Server Settings",
             admin(AdminUi::OpenSettings(g)),
+        ));
+    }
+    if app.can_manage_channels(g) {
+        rows.push(Row::item(
+            Icon::Plus,
+            "Create Channel",
+            Ui::Channel(ChannelUi::OpenCreate {
+                guild: g,
+                parent: None,
+                category: false,
+            }),
+        ));
+        rows.push(Row::item(
+            Icon::Folder,
+            "Create Category",
+            Ui::Channel(ChannelUi::OpenCreate {
+                guild: g,
+                parent: None,
+                category: true,
+            }),
         ));
     }
     if !rows.is_empty() {

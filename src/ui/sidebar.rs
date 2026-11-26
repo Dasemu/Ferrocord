@@ -212,6 +212,32 @@ fn guild_channels(app: &App, g: GuildId, open: Option<ChannelId>) -> El<'_> {
             .width(Length::Fill)
             .on_press(ui(Ui::ToggleCategory(cat.id)))
             .style(theme::link_button(p));
+            let header = iced::widget::mouse_area(header).on_right_press(ui(Ui::ContextOpen(
+                crate::app::context::CtxTarget::Channel(cat.id),
+            )));
+            // "+" (Create Channel in this category) for channel managers.
+            let header: El<'_> = if app.can_manage_channels(g) {
+                row![
+                    header,
+                    container(
+                        button(icon(Icon::Plus, 14.0, p.text_muted))
+                            .padding(2)
+                            .on_press(ui(Ui::Channel(
+                                crate::app::channel_admin::ChannelUi::OpenCreate {
+                                    guild: g,
+                                    parent: Some(cat.id),
+                                    category: false,
+                                }
+                            )))
+                            .style(theme::icon_button(p))
+                    )
+                    .padding(Padding::ZERO.top(14).right(8)),
+                ]
+                .align_y(Alignment::Center)
+                .into()
+            } else {
+                header.into()
+            };
             col = col.push(header);
             for c in kids {
                 let selected = open == Some(c.id);

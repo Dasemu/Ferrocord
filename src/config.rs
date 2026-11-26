@@ -69,6 +69,12 @@ pub enum ScreenshotScreen {
     LeaveServer,
     /// Delete Server confirmation.
     DeleteServer,
+    /// Right-click menu of a channel the mock user can manage.
+    ChannelMenu,
+    /// Create Channel dialog.
+    CreateChannel,
+    /// Edit Channel dialog.
+    EditChannel,
     /// Joined voice channel with users, speaking ring and the
     /// "Voice Connected" panel.
     Voice,
@@ -138,6 +144,9 @@ impl ScreenshotScreen {
                 | Self::ServerInvite
                 | Self::LeaveServer
                 | Self::DeleteServer
+                | Self::ChannelMenu
+                | Self::CreateChannel
+                | Self::EditChannel
         )
     }
 
@@ -177,6 +186,9 @@ impl ScreenshotScreen {
             "server-invite" => Some(Self::ServerInvite),
             "leave-server" => Some(Self::LeaveServer),
             "delete-server" => Some(Self::DeleteServer),
+            "channel-menu" => Some(Self::ChannelMenu),
+            "create-channel" => Some(Self::CreateChannel),
+            "edit-channel" => Some(Self::EditChannel),
             "search-filters" => Some(Self::SearchFilters),
             "voice" => Some(Self::Voice),
             "call" => Some(Self::Call),
