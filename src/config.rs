@@ -90,6 +90,8 @@ pub enum ScreenshotScreen {
     PluginDecorations,
     /// Emoji picker on another server's emoji, with the Nitro lock footer.
     EmojiLocked,
+    /// Reaction picker on the "Recently Used" section.
+    EmojiRecent,
     /// Sticker picker with a Nitro-locked sticker picked.
     StickersLocked,
     /// The "new version available" banner.
@@ -171,6 +173,7 @@ impl ScreenshotScreen {
             "plugin-prompt" => Some(Self::PluginPrompt),
             "plugin-decorations" => Some(Self::PluginDecorations),
             "emoji-locked" => Some(Self::EmojiLocked),
+            "emoji-recent" => Some(Self::EmojiRecent),
             "stickers-locked" => Some(Self::StickersLocked),
             "update-banner" => Some(Self::UpdateBanner),
             "reactions" => Some(Self::Reactions),

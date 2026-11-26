@@ -142,6 +142,8 @@ pub struct App {
     /// Right-click menu of a user or channel.
     pub ctx_menu: Option<context::CtxMenu>,
     pub emoji_picker: Option<OpenPicker>,
+    /// Recently used emoji (picker section, quick reactions).
+    pub recent_emoji: emoji::Recent,
     pub gif_picker: Option<gifs::GifPicker>,
     /// Decoded GIF picker stills, keyed by the GIF's page URL (own small
     /// LRU so they never push avatars and messages out).
@@ -262,6 +264,7 @@ impl App {
         });
 
         let prefs = Prefs::load(&store);
+        let recent_emoji = emoji::Recent::load(&store);
         let local_settings = settings::LocalSettings::load(&store);
         let voice = voice::Voice::with_prefs(App::load_voice_prefs(&store));
         let updater = updates::new_updater(&cfg, &store);
@@ -299,6 +302,7 @@ impl App {
             menu: None,
             ctx_menu: None,
             emoji_picker: None,
+            recent_emoji,
             gif_picker: None,
             gif_thumbs: images::ImageCache::new(gifs::THUMB_BUDGET),
             gif_favorites: gifs::Favorites::default(),
@@ -484,6 +488,7 @@ impl App {
                 .insert(mock::gif_page_url(i + 1), handle, size);
         }
         self.gif_favorites.list = Some(mock::gif_favorites());
+        self.recent_emoji = mock::recent_emoji();
         let (w, h, px) = mock::mock_image(400, 225);
         self.images.insert(
             "mock://image/1".into(),
@@ -685,7 +690,11 @@ impl App {
                     ));
                     let guild = self.chat.guild(mock::GUILD_RUST);
                     self.emoji_picker = Some(OpenPicker {
-                        picker: emoji::EmojiPicker::open(emoji::PickerTarget::Composer, guild),
+                        picker: emoji::EmojiPicker::open(
+                            emoji::PickerTarget::Composer,
+                            guild,
+                            false,
+                        ),
                         at: iced::Point::new(1000.0, 725.0),
                     });
                 }
@@ -803,6 +812,7 @@ impl App {
             let mut picker = emoji::EmojiPicker::open(
                 emoji::PickerTarget::Composer,
                 self.chat.guild(mock::GUILD_RUST),
+                false,
             );
             picker.section = emoji::Section::Server(mock::GUILD_ICED);
             picker.locked = emoji::find_custom(&self.chat.guilds, Snowflake(1003))
@@ -811,6 +821,28 @@ impl App {
                 picker,
                 at: iced::Point::new(1000.0, 752.0),
             });
+        }
+        if screen == Some(ScreenshotScreen::EmojiRecent) {
+            // The reaction picker opens on the recently used emoji.
+            let target = self
+                .chat
+                .messages
+                .get(&mock::CH_GENERAL)
+                .and_then(|w| w.messages.back())
+                .map(|m| emoji::PickerTarget::Reaction {
+                    channel: mock::CH_GENERAL,
+                    message: m.id,
+                });
+            if let Some(target) = target {
+                self.emoji_picker = Some(actions::OpenPicker {
+                    picker: emoji::EmojiPicker::open(
+                        target,
+                        self.chat.guild(mock::GUILD_RUST),
+                        !self.recent_emoji.is_empty(),
+                    ),
+                    at: iced::Point::new(640.0, 300.0),
+                });
+            }
         }
         if screen == Some(ScreenshotScreen::StickersLocked) {
             self.sticker_picker = Some(stickers::StickerPicker {
@@ -1436,6 +1468,8 @@ impl App {
             self.toast = Some("Messages can be at most 2000 characters.".into());
             return Task::none();
         }
+        // Emoji written in the message count as used (also in a caption).
+        self.note_emoji(emoji::used_in(&content));
         if !self.draft.is_empty() {
             // Files go as a multipart upload; the text is the caption.
             return self.start_upload(c, content);
@@ -2250,6 +2284,21 @@ impl App {
                         .filter_map(Clip::from_attachment)
                         .filter_map(|c| c.poster),
                 );
+            }
+        }
+        // Recent custom emoji: the picker's section and the quick reactions
+        // of the hover bar.
+        {
+            let access = self.nitro_access();
+            let recent = emoji::recent_shown(&self.recent_emoji, &self.chat.guilds, &access);
+            let n = match &self.emoji_picker {
+                Some(o) if o.picker.section == emoji::Section::Recent => recent.len(),
+                _ => emoji::QUICK_REACTIONS,
+            };
+            for item in recent.into_iter().take(n) {
+                if let emoji::RecentItem::Custom(_, e, _) = item {
+                    urls.push(emoji_url(&self.cfg.cdn_url, e.id));
+                }
             }
         }
         if let Some(open) = &self.emoji_picker {
