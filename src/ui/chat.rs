@@ -21,7 +21,7 @@ use crate::app::emoji::{self, PickerTarget};
 use crate::app::lightbox::{Lightbox, proxy_resized};
 use crate::app::panels::Popover;
 use crate::app::state::continues_group;
-use crate::app::{App, Message, Ui, View, jump, now_ms, preview_key};
+use crate::app::{App, Message, Ui, View, emoji_url, jump, now_ms, preview_key};
 use crate::media::clip::Clip;
 use crate::net::model::{self as model, Attachment, Channel, ChannelKind};
 use crate::ui::anim_image::message_anim;
