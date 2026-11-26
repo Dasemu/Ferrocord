@@ -9,6 +9,8 @@ use super::icons::{Icon, icon};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, avatar_with_presence, avatar_with_status, initials_circle, mention_badge, ui};
 use crate::app::anim::{Hover, Zone};
+use crate::app::context::{CtxMenu, CtxTarget};
+use crate::app::guild_admin::AdminUi;
 use crate::app::{App, Message, Ui, View};
 use crate::net::model::*;
 
@@ -51,13 +53,32 @@ fn guild_header(app: &App, g: GuildId) -> El<'_> {
         .guild(g)
         .map(|g| g.name.clone())
         .unwrap_or_default();
-    row![
-        container(emoji_text(name, 16.0, p.header_text, INTER_SEMIBOLD, false)).width(Length::Fill),
-        icon(Icon::ChevronDown, 18.0, p.text_normal),
-    ]
+    // The chevron turns into an X while the dropdown is open.
+    let open = matches!(
+        app.ctx_menu,
+        Some(CtxMenu {
+            target: CtxTarget::Guild(x),
+            ..
+        }) if x == g
+    );
+    button(
+        row![
+            container(emoji_text(name, 16.0, p.header_text, INTER_SEMIBOLD, false))
+                .width(Length::Fill),
+            icon(
+                if open { Icon::X } else { Icon::ChevronDown },
+                18.0,
+                p.text_normal
+            ),
+        ]
+        .height(Length::Fill)
+        .align_y(Alignment::Center),
+    )
     .padding(Padding::from([0, 16]))
+    .width(Length::Fill)
     .height(Length::Fill)
-    .align_y(Alignment::Center)
+    .on_press(ui(Ui::Admin(AdminUi::ToggleMenu(g))))
+    .style(theme::list_row(p, open))
     .into()
 }
 

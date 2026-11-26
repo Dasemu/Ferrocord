@@ -675,6 +675,12 @@ impl App {
         {
             return Task::none();
         }
+        if self.admin.dialog.is_some() {
+            return self.update_admin(super::guild_admin::AdminUi::CloseDialog);
+        }
+        if self.admin.settings.take().is_some() {
+            return Task::none();
+        }
         if self.settings_open {
             self.settings_open = false;
             return self.close_settings_screen();
