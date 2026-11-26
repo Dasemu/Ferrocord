@@ -91,6 +91,79 @@ impl RestClient {
         .map(|_| ())
     }
 
+    /// `POST /guilds/{g}/roles` — creates a role; returns it.
+    pub async fn create_role(&self, guild: GuildId, edit: &RoleEdit) -> Result<Role> {
+        let v = self
+            .request(
+                Method::POST,
+                &format!("/guilds/{guild}/roles"),
+                Some(edit.body()),
+            )
+            .await?;
+        let w: crate::net::types::WireRole = serde_json::from_value(v)
+            .map_err(|_| Error::Protocol("role answer without a role".into()))?;
+        Ok(w.into())
+    }
+
+    /// `PATCH /guilds/{g}/roles/{r}` with the changed fields.
+    pub async fn modify_role(&self, guild: GuildId, role: RoleId, edit: &RoleEdit) -> Result<()> {
+        self.request(
+            Method::PATCH,
+            &format!("/guilds/{guild}/roles/{role}"),
+            Some(edit.body()),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `DELETE /guilds/{g}/roles/{r}`.
+    pub async fn delete_role(&self, guild: GuildId, role: RoleId) -> Result<()> {
+        self.request(
+            Method::DELETE,
+            &format!("/guilds/{guild}/roles/{role}"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `PUT` / `DELETE /guilds/{g}/members/{u}/roles/{r}` — gives or takes
+    /// a role.
+    pub async fn set_member_role(
+        &self,
+        guild: GuildId,
+        user: UserId,
+        role: RoleId,
+        on: bool,
+    ) -> Result<()> {
+        let method = if on { Method::PUT } else { Method::DELETE };
+        self.request(
+            method,
+            &format!("/guilds/{guild}/members/{user}/roles/{role}"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Kick, ban or timeout, with the optional audit-log reason.
+    pub async fn moderate(&self, guild: GuildId, user: UserId, action: &ModAction) -> Result<()> {
+        let (method, path, body) = action.request(guild, user, crate::mock::now_ms());
+        let reason = action.reason().map(percent_encode);
+        self.send_with(method, &path, |req| {
+            let req = match &reason {
+                Some(r) => req.header("X-Audit-Log-Reason", r.as_str()),
+                None => req,
+            };
+            match &body {
+                Some(b) => req.json(b),
+                None => req,
+            }
+        })
+        .await
+        .map(|_| ())
+    }
+
     /// `DELETE /guilds/{g}` — deletes a server (owner only).
     pub async fn delete_guild(&self, guild: GuildId) -> Result<()> {
         self.request(Method::DELETE, &format!("/guilds/{guild}"), None)
@@ -278,6 +351,147 @@ pub fn channel_slug(name: &str) -> String {
     out
 }
 
+/// Changes to a role (or a new role). `None` = unchanged / default.
+#[derive(Clone, Default, PartialEq)]
+pub struct RoleEdit {
+    pub name: Option<String>,
+    pub color: Option<u32>,
+    pub permissions: Option<u64>,
+    pub hoist: Option<bool>,
+    pub mentionable: Option<bool>,
+}
+
+impl std::fmt::Debug for RoleEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoleEdit")
+            .field("name", &self.name.as_ref().map(|_| "<set>"))
+            .field("color", &self.color)
+            .field("permissions", &self.permissions)
+            .field("hoist", &self.hoist)
+            .field("mentionable", &self.mentionable)
+            .finish()
+    }
+}
+
+impl RoleEdit {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Permission bits go as a decimal string, like the official client.
+    pub fn body(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        if let Some(n) = &self.name {
+            m.insert("name".into(), json!(n.trim()));
+        }
+        if let Some(c) = self.color {
+            m.insert("color".into(), json!(c));
+        }
+        if let Some(p) = self.permissions {
+            m.insert("permissions".into(), json!(p.to_string()));
+        }
+        if let Some(h) = self.hoist {
+            m.insert("hoist".into(), json!(h));
+        }
+        if let Some(x) = self.mentionable {
+            m.insert("mentionable".into(), json!(x));
+        }
+        Value::Object(m)
+    }
+}
+
+/// Timeout lengths offered, in seconds (Discord allows up to 28 days).
+pub const TIMEOUTS: [(u64, &str); 6] = [
+    (60, "60 seconds"),
+    (5 * 60, "5 minutes"),
+    (10 * 60, "10 minutes"),
+    (60 * 60, "1 hour"),
+    (24 * 60 * 60, "1 day"),
+    (7 * 24 * 60 * 60, "1 week"),
+];
+
+/// How much message history a ban deletes, in seconds (7 days at most).
+pub const BAN_HISTORY: [(u32, &str); 4] = [
+    (0, "Don't delete any"),
+    (60 * 60, "Previous hour"),
+    (24 * 60 * 60, "Previous 24 hours"),
+    (7 * 24 * 60 * 60, "Previous 7 days"),
+];
+
+/// A moderation action on a member.
+#[derive(Clone, PartialEq)]
+pub enum ModAction {
+    Kick {
+        reason: String,
+    },
+    Ban {
+        delete_seconds: u32,
+        reason: String,
+    },
+    /// `None` removes the timeout.
+    Timeout {
+        seconds: Option<u64>,
+        reason: String,
+    },
+}
+
+impl std::fmt::Debug for ModAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kick { .. } => f.write_str("Kick"),
+            Self::Ban { delete_seconds, .. } => write!(f, "Ban({delete_seconds}s)"),
+            Self::Timeout { seconds, .. } => write!(f, "Timeout({seconds:?})"),
+        }
+    }
+}
+
+impl ModAction {
+    pub fn reason(&self) -> Option<&str> {
+        let r = match self {
+            Self::Kick { reason } | Self::Ban { reason, .. } | Self::Timeout { reason, .. } => {
+                reason.trim()
+            }
+        };
+        (!r.is_empty()).then_some(r)
+    }
+
+    /// Method, path and body; `now_ms` dates the end of a timeout.
+    pub fn request(
+        &self,
+        guild: GuildId,
+        user: UserId,
+        now_ms: u64,
+    ) -> (Method, String, Option<Value>) {
+        match self {
+            Self::Kick { .. } => (
+                Method::DELETE,
+                format!("/guilds/{guild}/members/{user}"),
+                None,
+            ),
+            Self::Ban { delete_seconds, .. } => (
+                Method::PUT,
+                format!("/guilds/{guild}/bans/{user}"),
+                Some(json!({ "delete_message_seconds": (*delete_seconds).min(604_800) })),
+            ),
+            Self::Timeout { seconds, .. } => (
+                Method::PATCH,
+                format!("/guilds/{guild}/members/{user}"),
+                Some(json!({
+                    "communication_disabled_until":
+                        seconds.map(|s| iso_utc(now_ms.saturating_add(s.saturating_mul(1000)))),
+                })),
+            ),
+        }
+    }
+}
+
+/// `2026-11-25T10:00:00Z` for a Unix time in milliseconds.
+pub fn iso_utc(ms: u64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms as i64)
+        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
 /// Public link of an invite code.
 pub fn invite_url(code: &str) -> String {
     format!("https://discord.gg/{code}")
@@ -300,6 +514,60 @@ mod tests {
         assert_eq!(parse_invite_code(&json!({"code": ""})), None);
         assert_eq!(parse_invite_code(&json!({})), None);
         assert_eq!(invite_url("abc"), "https://discord.gg/abc");
+    }
+
+    #[test]
+    fn role_and_moderation_requests() {
+        let e = RoleEdit {
+            name: Some(" Mods ".into()),
+            color: Some(0xe91e63),
+            permissions: Some(1 << 40 | 2),
+            hoist: None,
+            mentionable: Some(true),
+        };
+        assert_eq!(
+            e.body(),
+            json!({"name": "Mods", "color": 0xe91e63, "permissions": "1099511627778", "mentionable": true})
+        );
+        assert_eq!(RoleEdit::default().body(), json!({}));
+        assert!(!format!("{e:?}").contains("Mods"));
+        let (g, u) = (Snowflake(10), Snowflake(20));
+        let kick = ModAction::Kick {
+            reason: "  ".into(),
+        };
+        assert_eq!(kick.reason(), None);
+        let (m, p, b) = kick.request(g, u, 0);
+        assert_eq!(
+            (m, p.as_str(), b),
+            (Method::DELETE, "/guilds/10/members/20", None)
+        );
+        let ban = ModAction::Ban {
+            delete_seconds: 9_999_999,
+            reason: "spam".into(),
+        };
+        assert_eq!(ban.reason(), Some("spam"));
+        let (m, p, b) = ban.request(g, u, 0);
+        assert_eq!((m, p.as_str()), (Method::PUT, "/guilds/10/bans/20"));
+        assert_eq!(b, Some(json!({"delete_message_seconds": 604_800})));
+        let t = ModAction::Timeout {
+            seconds: Some(60),
+            reason: String::new(),
+        };
+        let (m, p, b) = t.request(g, u, 1_764_064_800_000);
+        assert_eq!((m, p.as_str()), (Method::PATCH, "/guilds/10/members/20"));
+        assert_eq!(
+            b,
+            Some(json!({"communication_disabled_until": "2025-11-25T10:01:00Z"}))
+        );
+        let t = ModAction::Timeout {
+            seconds: None,
+            reason: String::new(),
+        };
+        assert_eq!(
+            t.request(g, u, 0).2,
+            Some(json!({"communication_disabled_until": null}))
+        );
+        assert!(!format!("{ban:?}").contains("spam"));
     }
 
     #[test]

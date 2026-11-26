@@ -16,6 +16,7 @@ use super::settings::{note, rule, title};
 use super::theme::{self, INTER, INTER_MEDIUM, INTER_SEMIBOLD};
 use super::{El, ui};
 use crate::app::guild_admin::{AdminDialog, AdminUi, DeleteForm, IconChange, SettingsForm};
+use crate::app::role_admin::{RoleUi, SettingsPage};
 use crate::app::{App, Message, Ui};
 use crate::net::rest::guild::invite_url;
 
@@ -51,9 +52,12 @@ pub fn screen(app: &App) -> Option<El<'_>> {
     .style(theme::bg(p.bg_sidebar));
     let page = container(
         row![
-            container(overview(app, f))
-                .max_width(theme::SETTINGS_CONTENT_MAX_W)
-                .width(Length::Fill),
+            container(match app.admin.page {
+                SettingsPage::Overview => overview(app, f),
+                SettingsPage::Roles => super::roles::page(app, f.guild),
+            })
+            .max_width(theme::SETTINGS_CONTENT_MAX_W)
+            .width(Length::Fill),
             esc_button(app),
         ]
         .spacing(20),
@@ -65,8 +69,14 @@ pub fn screen(app: &App) -> Option<El<'_>> {
             .style(theme::thin_scrollbar(p, false))
             .height(Length::Fill),
     ];
-    if f.dirty() {
-        body = body.push(unsaved_bar(app, f));
+    match app.admin.page {
+        SettingsPage::Overview if f.dirty() => body = body.push(unsaved_bar(app, f)),
+        SettingsPage::Roles => {
+            if let Some(bar) = super::roles::unsaved_bar(app) {
+                body = body.push(bar);
+            }
+        }
+        _ => {}
     }
     let content = container(body)
         .width(Length::FillPortion(2))
@@ -101,14 +111,27 @@ fn sidebar<'a>(app: &'a App, f: &'a SettingsForm) -> El<'a> {
             .color(p.text_muted),
         )
         .padding(Padding::from([6, 10])),
-        button(text("Overview").size(t.metrics.font_m).color(p.header_text))
-            .width(Length::Fill)
-            .padding(Padding::from([6, 10]))
-            .on_press(au(AdminUi::Reset))
-            .style(theme::list_row(p, true)),
     ]
     .spacing(2)
     .width(theme::SETTINGS_SIDEBAR_W);
+    let entry = |label: &'a str, page: SettingsPage| {
+        let selected = app.admin.page == page;
+        button(text(label).size(t.metrics.font_m).color(if selected {
+            p.header_text
+        } else {
+            p.text_secondary
+        }))
+        .width(Length::Fill)
+        .padding(Padding::from([6, 10]))
+        .on_press(ui(Ui::Roles(RoleUi::Page(page))))
+        .style(theme::list_row(p, selected))
+    };
+    if app.can_manage_guild(f.guild) {
+        col = col.push(entry("Overview", SettingsPage::Overview));
+    }
+    if app.can_manage_roles(f.guild) {
+        col = col.push(entry("Roles", SettingsPage::Roles));
+    }
     if app.chat.owns_guild(f.guild) {
         col = col.push(Space::new().height(16));
         col = col.push(
@@ -242,8 +265,8 @@ fn overview<'a>(app: &'a App, f: &'a SettingsForm) -> El<'a> {
         rule(app),
         note(
             app,
-            "Roles, channels, members and the other server settings are not available in \
-             Ferrocord yet; manage them in the official client.",
+            "Channels are managed from the channel list (right-click or the + of a \
+             category) and members from the member list (right-click).",
         ),
     ]
     .spacing(20)

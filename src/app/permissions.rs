@@ -14,6 +14,180 @@ pub const VIEW_CHANNEL: u64 = 1 << 10;
 pub const SEND_MESSAGES: u64 = 1 << 11;
 pub const MANAGE_MESSAGES: u64 = 1 << 13;
 pub const MANAGE_ROLES: u64 = 1 << 28;
+pub const MODERATE_MEMBERS: u64 = 1 << 40;
+
+/// One editable permission: (bit, name, description).
+pub type PermissionInfo = (u64, &'static str, &'static str);
+
+/// The permissions the role editor offers, grouped like the official
+/// client: (section, permissions).
+pub const EDITABLE: [(&str, &[PermissionInfo]); 5] = [
+    (
+        "General Server Permissions",
+        &[
+            (
+                VIEW_CHANNEL,
+                "View Channels",
+                "Members can view channels by default (excluding private channels).",
+            ),
+            (
+                MANAGE_CHANNELS,
+                "Manage Channels",
+                "Create, edit and delete channels.",
+            ),
+            (
+                MANAGE_ROLES,
+                "Manage Roles",
+                "Create roles and edit or delete roles lower than their highest role.",
+            ),
+            (
+                1 << 30,
+                "Manage Expressions",
+                "Add, edit and remove custom emoji and stickers.",
+            ),
+            (
+                1 << 7,
+                "View Audit Log",
+                "View a record of who made which changes in this server.",
+            ),
+            (
+                MANAGE_GUILD,
+                "Manage Server",
+                "Change the server's name and icon, and view all invites.",
+            ),
+        ],
+    ),
+    (
+        "Membership Permissions",
+        &[
+            (
+                CREATE_INSTANT_INVITE,
+                "Create Invite",
+                "Invite new people to this server.",
+            ),
+            (1 << 26, "Change Nickname", "Change their own nickname."),
+            (
+                1 << 27,
+                "Manage Nicknames",
+                "Change the nicknames of other members.",
+            ),
+            (
+                KICK_MEMBERS,
+                "Kick Members",
+                "Remove other members from this server.",
+            ),
+            (
+                BAN_MEMBERS,
+                "Ban Members",
+                "Permanently ban and delete the message history of other members.",
+            ),
+            (
+                MODERATE_MEMBERS,
+                "Timeout Members",
+                "Stop users from chatting, reacting or speaking for a while.",
+            ),
+        ],
+    ),
+    (
+        "Text Channel Permissions",
+        &[
+            (
+                SEND_MESSAGES,
+                "Send Messages",
+                "Send messages in text channels.",
+            ),
+            (
+                1 << 14,
+                "Embed Links",
+                "Links shared show embedded content.",
+            ),
+            (1 << 15, "Attach Files", "Upload files and media."),
+            (
+                1 << 6,
+                "Add Reactions",
+                "Add new emoji reactions to messages.",
+            ),
+            (
+                1 << 18,
+                "Use External Emoji",
+                "Use emoji from other servers (with Nitro).",
+            ),
+            (
+                1 << 17,
+                "Mention @everyone, @here, and All Roles",
+                "Notify everyone in a channel or any role.",
+            ),
+            (
+                MANAGE_MESSAGES,
+                "Manage Messages",
+                "Delete and pin messages from other members.",
+            ),
+            (
+                1 << 16,
+                "Read Message History",
+                "Read messages sent before they joined.",
+            ),
+        ],
+    ),
+    (
+        "Voice Channel Permissions",
+        &[
+            (1 << 20, "Connect", "Join voice channels."),
+            (1 << 21, "Speak", "Talk in voice channels."),
+            (1 << 9, "Video", "Share their camera or screen."),
+            (
+                1 << 22,
+                "Mute Members",
+                "Mute other members in voice channels.",
+            ),
+            (
+                1 << 23,
+                "Deafen Members",
+                "Deafen other members in voice channels.",
+            ),
+            (
+                1 << 24,
+                "Move Members",
+                "Move or disconnect members between voice channels.",
+            ),
+        ],
+    ),
+    (
+        "Advanced Permissions",
+        &[(
+            ADMINISTRATOR,
+            "Administrator",
+            "Every permission and bypasses channel overwrites. Dangerous to grant.",
+        )],
+    ),
+];
+
+/// Highest role position of a member: `None` for the owner (above every
+/// role), else the top position among `roles` (0 without any).
+pub fn top_position(guild: &Guild, user: UserId, roles: &[RoleId]) -> Option<i32> {
+    if guild.owner_id == Some(user) {
+        return None;
+    }
+    Some(
+        guild
+            .roles
+            .iter()
+            .filter(|r| r.id != guild.id && roles.contains(&r.id))
+            .map(|r| r.position)
+            .max()
+            .unwrap_or(0),
+    )
+}
+
+/// Whether a member at `actor` (from [`top_position`]) outranks one at
+/// `target`: the owner outranks everyone, nobody outranks the owner.
+pub fn outranks(actor: Option<i32>, target: Option<i32>) -> bool {
+    match (actor, target) {
+        (None, Some(_)) => true,
+        (_, None) => false,
+        (Some(a), Some(t)) => a > t,
+    }
+}
 pub const ALL: u64 = u64::MAX;
 
 /// Server-wide permissions of `me` (with `my_roles`) in `guild`: the
@@ -167,6 +341,30 @@ mod tests {
         // Overwrites of other roles do not apply.
         let o = [ow(MUTED, false, 0, SEND_MESSAGES)];
         assert_eq!(in_channel(b, G, Some(ME), &[MOD], &o), b);
+    }
+
+    #[test]
+    fn hierarchy() {
+        let mut lo = role(MOD, 0);
+        lo.position = 1;
+        let mut hi = role(MUTED, 0);
+        hi.position = 5;
+        let g = guild(Some(Snowflake(99)), vec![role(G, 0), lo, hi]);
+        assert_eq!(top_position(&g, Snowflake(99), &[]), None);
+        assert_eq!(top_position(&g, ME, &[]), Some(0));
+        assert_eq!(top_position(&g, ME, &[MOD, MUTED]), Some(5));
+        assert!(outranks(None, Some(100)));
+        assert!(!outranks(Some(100), None));
+        assert!(outranks(Some(5), Some(1)));
+        assert!(!outranks(Some(1), Some(1)));
+        // Every editable bit is listed once.
+        let mut seen = 0u64;
+        for (_, list) in EDITABLE {
+            for (bit, _, _) in list {
+                assert_eq!(seen & bit, 0);
+                seen |= bit;
+            }
+        }
     }
 
     #[test]

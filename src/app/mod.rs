@@ -34,6 +34,7 @@ pub mod plugins;
 pub mod profile;
 pub mod rail;
 pub mod reactions;
+pub mod role_admin;
 pub mod search;
 pub mod servers;
 pub mod settings;
@@ -182,6 +183,8 @@ pub struct App {
     pub admin: guild_admin::Admin,
     /// Create / edit / delete channel dialog.
     pub channel_dialog: Option<channel_admin::ChannelDialog>,
+    /// Member roles / moderation dialog.
+    pub member_dialog: Option<role_admin::MemberDialog>,
     pub discover: Option<servers::DiscoverState>,
     /// Server rail interaction (folders, drag and drop, menus).
     pub rail: rail::RailUi,
@@ -336,6 +339,7 @@ impl App {
             server_dialog: None,
             admin: guild_admin::Admin::default(),
             channel_dialog: None,
+            member_dialog: None,
             discover: None,
             rail: rail::RailUi::default(),
             pending_select: None,
@@ -465,6 +469,11 @@ impl App {
     fn boot_mock(&mut self) {
         let ready = mock::ready();
         self.chat.load_ready(&ready);
+        // Game Night members (the mock user owns it): Alice plays.
+        self.chat.member_roles.insert(
+            (mock::GUILD_GAMES, Snowflake(2)),
+            vec![mock::ROLE_GAMES_PLAYERS],
+        );
         let me = ready.me.as_ref().map(|u| u.id);
         let _ = self.voice.apply(&Event::Ready(Box::new(ready.clone())), me);
         for c in ready.channels.iter().filter(|c| c.kind.is_textual()) {
@@ -1036,6 +1045,47 @@ impl App {
                     }
                 }
             }
+            S::ServerRoles | S::MemberMenu | S::MemberRoles | S::BanMember => {
+                let g = mock::GUILD_GAMES;
+                let alice = Snowflake(2);
+                self.view = View::Guild {
+                    guild: g,
+                    channel: self.chat.default_channel(g),
+                };
+                use role_admin::{ModKind, RoleUi};
+                match s {
+                    S::ServerRoles => {
+                        let _ = self.update_admin(guild_admin::AdminUi::OpenSettings(g));
+                        let _ = self.update_roles(RoleUi::Page(role_admin::SettingsPage::Roles));
+                        let _ = self.update_roles(RoleUi::Select(mock::ROLE_GAMES_MODS));
+                        let _ =
+                            self.update_roles(RoleUi::Permission(permissions::BAN_MEMBERS, true));
+                    }
+                    S::MemberMenu => {
+                        self.ctx_menu = Some(context::CtxMenu {
+                            target: context::CtxTarget::User {
+                                user: alice,
+                                guild: Some(g),
+                            },
+                            at: iced::Point::new(700.0, 150.0),
+                        });
+                    }
+                    S::MemberRoles => {
+                        let _ = self.update_roles(RoleUi::OpenMemberRoles {
+                            guild: g,
+                            user: alice,
+                        });
+                    }
+                    _ => {
+                        let _ = self.update_roles(RoleUi::OpenModeration {
+                            guild: g,
+                            user: alice,
+                            kind: ModKind::Ban,
+                        });
+                        let _ = self.update_roles(RoleUi::Reason("Spamming invites".into()));
+                    }
+                }
+            }
             S::LeaveServer => {
                 let _ = self.update_admin(guild_admin::AdminUi::AskLeave(mock::GUILD_RUST));
             }
@@ -1300,6 +1350,7 @@ impl App {
             Ui::Settings(s) => self.update_settings(s),
             Ui::Admin(a) => self.update_admin(a),
             Ui::Channel(c) => self.update_channel_admin(c),
+            Ui::Roles(r) => self.update_roles(r),
             Ui::WindowFocus(f) => {
                 self.window_focused = f;
                 if f && let Some(c) = self.open_channel() {
@@ -2169,6 +2220,7 @@ impl App {
             Done::Created(r) => self.on_created(r),
             Done::Admin(d) => self.on_admin_done(d),
             Done::Channel(d) => self.on_channel_done(d),
+            Done::Roles(d) => self.on_roles_done(d),
             Done::IconPicked(r) => self.on_icon_picked(r),
             Done::DiscoverCategories(r) => {
                 if let (Some(d), Ok(c)) = (self.discover.as_mut(), r) {

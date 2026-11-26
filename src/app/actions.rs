@@ -675,6 +675,9 @@ impl App {
         {
             return Task::none();
         }
+        if self.member_dialog.is_some() || self.admin.roles.confirm_delete {
+            return self.update_roles(super::role_admin::RoleUi::CloseDialog);
+        }
         if self.channel_dialog.is_some() {
             return self.update_channel_admin(super::channel_admin::ChannelUi::Close);
         }
