@@ -773,3 +773,54 @@ async fn picker_media_needs_https() {
         assert!(rest.fetch_picker_media(bad).await.is_err(), "{bad}");
     }
 }
+
+#[tokio::test]
+async fn reactors_are_fetched_with_type_and_paging() {
+    let server = http(Arc::new(|req, _| {
+        if req.path.starts_with("/channels/10/messages/20/reactions/") {
+            Response::json(
+                200,
+                json!([
+                    {"id": "3", "username": "carol"},
+                    {"id": "4", "username": null},
+                    {"id": "5", "username": "eve", "global_name": "Eve"}
+                ]),
+            )
+        } else {
+            Response::json(404, json!({"message": "Unknown"}))
+        }
+    }))
+    .await;
+    let rest = RestClient::new(&server.base(), "http://cdn", Some(Secret::new(TOKEN))).unwrap();
+    let thumbs = Emoji::unicode("\u{1F44D}");
+    let users = rest
+        .reactions(Snowflake(10), Snowflake(20), &thumbs, false, 3, None)
+        .await
+        .unwrap();
+    // An unreadable user is skipped, not the page.
+    assert_eq!(users.iter().map(|u| u.id.0).collect::<Vec<_>>(), vec![3, 5]);
+    let custom = Emoji {
+        id: Some(Snowflake(99)),
+        name: "ferris".into(),
+        animated: false,
+    };
+    rest.reactions(
+        Snowflake(10),
+        Snowflake(20),
+        &custom,
+        true,
+        100,
+        Some(Snowflake(5)),
+    )
+    .await
+    .unwrap();
+    let r = server.recorded();
+    assert_eq!(
+        r[0].path,
+        "/channels/10/messages/20/reactions/%F0%9F%91%8D?limit=3&type=0"
+    );
+    assert_eq!(
+        r[1].path,
+        "/channels/10/messages/20/reactions/ferris:99?limit=100&type=1&after=5"
+    );
+}

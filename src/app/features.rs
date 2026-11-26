@@ -34,6 +34,9 @@ impl App {
         if let Some(t) = self.update_context(u.clone()) {
             return t;
         }
+        if let Some(t) = self.update_reactions(u.clone()) {
+            return t;
+        }
         match u {
             // -- header
             Ui::TogglePopover(k) => self.toggle_popover(k),

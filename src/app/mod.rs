@@ -17,6 +17,8 @@ pub mod images;
 pub mod input;
 pub mod jump;
 pub mod lightbox;
+#[cfg(test)]
+mod list_flows;
 pub mod markdown;
 pub mod media_anim;
 pub mod members;
@@ -27,6 +29,7 @@ pub mod panels;
 pub mod plugins;
 pub mod profile;
 pub mod rail;
+pub mod reactions;
 pub mod search;
 pub mod servers;
 pub mod settings;
@@ -159,7 +162,11 @@ pub struct App {
     upload_handles: HashMap<u64, iced::task::Handle>,
     next_upload_id: u64,
     pub members_open: bool,
-    member_rows_wanted: usize,
+    /// Member sidebar scroll position and height (y, height): picks the
+    /// rows drawn and the ranges subscribed.
+    pub members_viewport: (f32, f32),
+    /// Who reacted: hover tooltips and the reactions dialog.
+    pub reactions: reactions::ReactionsUi,
     pub status_menu: bool,
     pub search: search::SearchState,
     /// Channel-header popovers (bell, pins, inbox).
@@ -309,7 +316,8 @@ impl App {
             upload_handles: HashMap::new(),
             next_upload_id: 0,
             members_open: true,
-            member_rows_wanted: members::RANGE_SIZE,
+            members_viewport: (0.0, 800.0),
+            reactions: reactions::ReactionsUi::default(),
             status_menu: false,
             search: search::SearchState::default(),
             panels: features::Panels::default(),
@@ -763,6 +771,7 @@ impl App {
         let ctx = self.ctx();
         self.chat
             .apply_event(&Event::MemberList(Box::new(mock::member_list())), &ctx);
+        self.mock_list_screens(screen);
         if screen == Some(ScreenshotScreen::Profile) {
             let _ = self.update_ui(Ui::OpenProfile {
                 user: Snowflake(2),
@@ -816,6 +825,41 @@ impl App {
     }
 
     /// Opens the popover / dialog / page a round-3 screenshot shows.
+    /// `reactions` (the dialog) and `members-large` (a 3000-member list
+    /// scrolled to the middle, partly loaded).
+    fn mock_list_screens(&mut self, screen: Option<ScreenshotScreen>) {
+        match screen {
+            Some(ScreenshotScreen::Reactions) => {
+                let m = self
+                    .chat
+                    .messages
+                    .get(&mock::CH_GENERAL)
+                    .and_then(|w| w.messages.iter().find(|m| m.reactions.len() >= 2))
+                    .map(|m| m.id);
+                if let Some(m) = m {
+                    let _ = self.update_ui(Ui::OpenReactors(m, None));
+                }
+            }
+            Some(ScreenshotScreen::MembersLarge) => {
+                // Once to learn the length, then (subscribed there) the rows.
+                let ctx = self.ctx();
+                self.chat.apply_event(
+                    &Event::MemberList(Box::new(mock::large_member_list())),
+                    &ctx,
+                );
+                let y = self.chat.member_list.as_ref().map_or(0.0, |l| {
+                    crate::ui::members::ROWS.offset(&l.header_rows(), 1488)
+                });
+                let _ = self.members_scrolled(y, 760.0);
+                self.chat.apply_event(
+                    &Event::MemberList(Box::new(mock::large_member_list())),
+                    &ctx,
+                );
+            }
+            _ => {}
+        }
+    }
+
     fn mock_round3_screen(&mut self, s: ScreenshotScreen) {
         use ScreenshotScreen as S;
         use panels::Popover;
@@ -1217,6 +1261,8 @@ impl App {
         }
         self.view = view;
         self.composer.clear();
+        self.reactions.dialog = None;
+        self.reactions.hovered = None;
         let next = match view {
             View::Home(c) => c,
             View::Guild { channel, .. } => channel,
@@ -1601,6 +1647,20 @@ impl App {
         }
         let ctx = self.ctx();
         let effects = self.chat.apply_event(&ev, &ctx);
+        match &ev {
+            Event::Reaction(r) => self.reactions_event(r),
+            Event::MessageDelete { id, .. } => self.reactions.cache.forget(*id, None),
+            Event::ChannelRecipient { channel_id, .. } if !self.cfg.mock => {
+                if let Some(c) = self.chat.channels.get(channel_id).cloned() {
+                    let store = self.store.clone();
+                    tasks.push(Task::perform(
+                        async move { store.blocking(move |s| s.upsert_channel(&c)).await },
+                        |_| Message::Done(Done::Ignored),
+                    ));
+                }
+            }
+            _ => {}
+        }
         self.plugin_observe(&ev);
         tasks.push(self.voice_on_gateway(&ev));
         if matches!(ev, Event::Ready(_) | Event::GuildFolders(_)) {
@@ -1684,10 +1744,24 @@ impl App {
                             "Dinner at 8? 🍕\nI booked the table by the window.\nShift+Enter breaks the line,\nEnter sends it 🦀",
                         );
                     }
-                    return Task::perform(
-                        async { tokio::time::sleep(Duration::from_millis(600)).await },
-                        |_| Message::Done(Done::ScreenshotReady),
-                    );
+                    let scroll = if *screen == ScreenshotScreen::MembersLarge {
+                        iced::widget::operation::scroll_to(
+                            crate::ui::members::scroll_id(),
+                            iced::widget::scrollable::AbsoluteOffset {
+                                x: None,
+                                y: Some(self.members_viewport.0),
+                            },
+                        )
+                    } else {
+                        Task::none()
+                    };
+                    return Task::batch([
+                        scroll,
+                        Task::perform(
+                            async { tokio::time::sleep(Duration::from_millis(600)).await },
+                            |_| Message::Done(Done::ScreenshotReady),
+                        ),
+                    ]);
                 }
                 if matches!(self.auth, AuthState::LoggedOut { .. })
                     && self.qr.is_none()
@@ -1907,6 +1981,8 @@ impl App {
             Done::Newer { channel, result } => self.on_newer(channel, result),
             Done::Search { generation, result } => self.on_search_done(generation, result),
             Done::GifSearchDue(generation) => self.gif_search_due(generation),
+            Done::ReactionHoverDue(generation) => self.reaction_hover_due(generation),
+            Done::Reactors { fetch, result } => self.reactors_done(&fetch, result),
             Done::Gifs { generation, result } => {
                 if let Some(p) = self.gif_picker.as_mut() {
                     p.finish(generation, result);
@@ -2183,7 +2259,7 @@ impl App {
             }
         }
         if let Some(l) = &self.chat.member_list {
-            for item in l.loaded().take(120) {
+            for item in l.loaded_in(self.member_window()) {
                 if let MemberItem::Member(m) = item
                     && let Some(u) = self.rest.avatar_url(&m.user, 80)
                 {

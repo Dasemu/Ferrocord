@@ -94,6 +94,10 @@ pub enum ScreenshotScreen {
     StickersLocked,
     /// The "new version available" banner.
     UpdateBanner,
+    /// The Reactions dialog (who reacted, a tab per emoji).
+    Reactions,
+    /// Member sidebar scrolled deep into a large list (skeleton rows).
+    MembersLarge,
 }
 
 impl ScreenshotScreen {
@@ -169,6 +173,8 @@ impl ScreenshotScreen {
             "emoji-locked" => Some(Self::EmojiLocked),
             "stickers-locked" => Some(Self::StickersLocked),
             "update-banner" => Some(Self::UpdateBanner),
+            "reactions" => Some(Self::Reactions),
+            "members-large" => Some(Self::MembersLarge),
             _ => None,
         }
     }

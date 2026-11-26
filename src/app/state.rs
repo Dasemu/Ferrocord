@@ -219,6 +219,30 @@ impl ChatState {
     /// People shown in a DM's side panel: the other recipients, plus the
     /// current user in a group DM (as the official client does), sorted by
     /// display name. Recipients we have no user object for are skipped.
+    /// Every DM recipient gets a user entry: one missing from READY's
+    /// deduplicated `users` (or from an old cache) would otherwise vanish
+    /// from the group DM member list. The placeholder is replaced by the
+    /// first payload that carries the user.
+    fn ensure_recipient_users(&mut self) {
+        let missing: Vec<UserId> = self
+            .channels
+            .values()
+            .filter(|c| c.kind.is_private())
+            .flat_map(|c| c.recipients.iter().copied())
+            .filter(|id| !self.users.contains_key(id))
+            .collect();
+        for id in missing {
+            self.users.insert(
+                id,
+                User {
+                    id,
+                    username: "Unknown User".into(),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
     pub fn dm_participants(&self, c: &Channel) -> Vec<&User> {
         let mut out: Vec<&User> = c
             .recipients
@@ -247,6 +271,7 @@ impl ChatState {
         for u in r.users.iter().chain(r.me.iter()) {
             self.users.insert(u.id, u.clone());
         }
+        self.ensure_recipient_users();
         self.read_states = r.read_states.iter().copied().collect();
         self.my_roles = r.my_roles.iter().cloned().collect();
         self.muted_guilds = r.muted_guilds.iter().copied().collect();
@@ -402,6 +427,25 @@ impl ChatState {
                     self.users.insert(u.id, u.clone());
                 }
                 self.channels.insert(c.id, (**c).clone());
+                self.ensure_recipient_users();
+            }
+            Event::ChannelRecipient {
+                channel_id,
+                user,
+                added,
+            } => {
+                if let Some(c) = self.channels.get_mut(channel_id) {
+                    if *added {
+                        if !c.recipients.contains(&user.id) {
+                            c.recipients.push(user.id);
+                        }
+                    } else {
+                        c.recipients.retain(|u| *u != user.id);
+                    }
+                }
+                if *added || !self.users.contains_key(&user.id) {
+                    self.users.insert(user.id, (**user).clone());
+                }
             }
             Event::ChannelDelete(id) => {
                 self.channels.remove(id);
@@ -642,6 +686,7 @@ impl ChatState {
                     emoji: emoji.clone(),
                     count: 1,
                     me: true,
+                    burst_count: 0,
                 });
                 Some(ReactionChange::Added)
             }
@@ -681,6 +726,7 @@ impl ChatState {
                 emoji: emoji.clone(),
                 count: 1,
                 me: true,
+                burst_count: 0,
             }),
             (Some(i), false) => {
                 let r = &mut m.reactions[i];
@@ -706,6 +752,7 @@ impl ChatState {
                 message_id,
                 user_id,
                 emoji,
+                burst,
             } => {
                 let Some(m) = self
                     .messages
@@ -714,9 +761,13 @@ impl ChatState {
                 else {
                     return;
                 };
-                let is_me = Some(*user_id) == me;
+                // `me` tracks normal reactions only.
+                let is_me = Some(*user_id) == me && !burst;
                 match m.reactions.iter_mut().find(|r| r.emoji == *emoji) {
                     Some(r) => {
+                        if *burst {
+                            r.burst_count += 1;
+                        }
                         if is_me {
                             if !r.me {
                                 r.me = true;
@@ -730,6 +781,7 @@ impl ChatState {
                         emoji: emoji.clone(),
                         count: 1,
                         me: is_me,
+                        burst_count: u32::from(*burst),
                     }),
                 }
             }
@@ -738,8 +790,9 @@ impl ChatState {
                 message_id,
                 user_id,
                 emoji,
+                burst,
             } => {
-                let is_me = Some(*user_id) == me;
+                let is_me = Some(*user_id) == me && !burst;
                 let Some(m) = self
                     .messages
                     .get_mut(channel_id)
@@ -751,6 +804,9 @@ impl ChatState {
                     return;
                 };
                 let r = &mut m.reactions[i];
+                if *burst {
+                    r.burst_count = r.burst_count.saturating_sub(1);
+                }
                 if is_me {
                     // Already removed locally: nothing to do.
                     if r.me {

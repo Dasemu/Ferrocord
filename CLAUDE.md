@@ -9,7 +9,7 @@ Video (camera / Go Live) is not implemented yet: see `docs/voice.md` §6.
 
 ## Commands
 - `cargo run -- --mock` — run with mock data (no network, in-memory stores).
-- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced|updates>|plugins|plugin-prompt|plugin-decorations|update-banner> out.png` — render a screen to PNG
+- `cargo run -- --mock --screenshot <login|login-captcha|login-web|login-web-failed|guild|dms|embeds|voice|call|incoming-call|gifs|gif-trending|gif-favorites|emoji-locked|stickers-locked|settings|settings-<profiles|privacy|status|appearance|accessibility|voice|chat|notifications|keybinds|language|advanced|updates>|plugins|plugin-prompt|plugin-decorations|update-banner|reactions|members-large> out.png` — render a screen to PNG
   (headless: `ICED_BACKEND=tiny-skia xvfb-run -a -s "-screen 0 1280x800x24" ...`).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo build --release`. `ferrocord --version` / `-V` (also `ferrocord-player`, `ferrocord-login`).
@@ -111,3 +111,10 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on ubuntu-latest.
   `install.sh` layout and a writable Windows zip folder; cargo installs get the `cargo install` command, everything
   else the release page. Reuse `install.sh`'s paths and file list (`update::install::SHIPPED`); stage next to the
   target and rename, roll back on failure. Restart runs the installed path, never `current_exe()` ("(deleted)").
+- Member sidebar (`app/members.rs`, `ui/members.rs`, docs/protocol.md §2 "Member list"): op 14 asks for `[0,99]` plus the
+  chunks at the scroll position (max 3 ranges, like the official client); rows live in a sparse map only inside the
+  subscribed ranges, the length comes from `groups`. Rows have FIXED heights (`ui::members::ROWS`): the visible window
+  is computed from the scroll offset, so keep every row exactly that tall. A list belongs to a list id: after a channel
+  switch only a SYNC adopts another list. Group DMs: `recipients` + `CHANNEL_RECIPIENT_ADD/REMOVE`.
+- Who reacted (`app/reactions.rs`, `ui/reactions.rs`): reactors are fetched ONLY after a 300 ms hover on a pill or
+  when the Reactions dialog opens a tab, never per message on screen; bounded LRU patched/invalidated by reaction events.
